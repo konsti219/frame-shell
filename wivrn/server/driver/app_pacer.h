@@ -33,6 +33,7 @@ class pacing_app_factory : public u_pacing_app_factory
 {
 	friend class app_pacer;
 	std::mutex mutex;
+	int64_t next_session_id = 0;
 	std::vector<app_pacer *> app_pacers;
 	void remove_app(app_pacer *);
 

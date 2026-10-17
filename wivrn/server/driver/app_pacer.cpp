@@ -19,10 +19,12 @@
 #include "app_pacer.h"
 
 #include "util/u_debug.h"
+#include "util/u_metrics.h"
 #include "util/u_time.h"
 #include "util/u_var.h"
 #include "utils/method.h"
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <cmath>
 #include <ranges>
@@ -36,6 +38,7 @@ namespace wivrn
 class app_pacer : public u_pacing_app
 {
 	pacing_app_factory & parent;
+	int64_t session_id;
 	int64_t frame_id = 0;
 	int64_t compositor_display_time = 0;
 	int64_t last_display_time = 0;
@@ -50,9 +53,19 @@ class app_pacer : public u_pacing_app
 
 	struct frame
 	{
-		int64_t frame_id;
-		int64_t wake_up;
-		int64_t delivered;
+		int64_t frame_id = 0;
+		int64_t predicted_wake_up = 0;
+		int64_t wake_up = 0;
+		int64_t predicted = 0;
+		int64_t begin = 0;
+		int64_t submit_begin = 0;
+		int64_t submit_end = 0;
+		int64_t delivered = 0;
+		int64_t gpu_done = 0;
+		int64_t predicted_display_time = 0;
+		int64_t predicted_display_period = 0;
+		int64_t display_time = 0;
+		bool discarded = false;
 	};
 	std::array<frame, 16> frames{};
 
@@ -62,10 +75,37 @@ class app_pacer : public u_pacing_app
 		return frames[id % frames.size()];
 	}
 
+	void write_metrics(const frame & frame)
+	{
+		if (!u_metrics_is_active())
+			return;
+
+		struct u_metrics_session_frame umsf = {
+		        .session_id = session_id,
+		        .frame_id = frame.frame_id,
+		        .predicted_frame_time_ns = cpu_time + gpu_time,
+		        .predicted_wake_up_time_ns = frame.predicted_wake_up,
+		        .predicted_gpu_done_time_ns = frame.predicted_display_time - compositor_time,
+		        .predicted_display_time_ns = frame.predicted_display_time,
+		        .predicted_display_period_ns = frame.predicted_display_period,
+		        .display_time_ns = frame.display_time,
+		        .when_predicted_ns = frame.predicted,
+		        .when_wait_woke_ns = frame.wake_up,
+		        .when_begin_ns = frame.begin,
+		        .when_delivered_ns = frame.delivered,
+		        .when_gpu_done_ns = frame.gpu_done,
+		        .discarded = frame.discarded,
+		        .when_submit_begin_ns = frame.submit_begin,
+		        .when_submit_end_ns = frame.submit_end,
+		};
+
+		u_metrics_write_session_frame(&umsf);
+	}
+
 public:
 	using base_t = u_pacing_app;
 
-	app_pacer(pacing_app_factory & parent) :
+	app_pacer(pacing_app_factory & parent, int64_t session_id) :
 	        u_pacing_app{
 	                .predict = method_pointer<&app_pacer::predict>,
 	                .mark_point = method_pointer<&app_pacer::mark_point>,
@@ -78,6 +118,7 @@ public:
 	                .destroy = method_pointer<&app_pacer::destroy>,
 	        },
 	        parent(parent),
+	        session_id(session_id),
 	        min_margin_ms{
 	                .val = debug_get_float_option_min_margin_ms(),
 	                .step = 0.1,
@@ -130,7 +171,6 @@ void app_pacer::predict(int64_t now_ns,
                         int64_t * out_predicted_display_period)
 {
 	*out_frame_id = ++frame_id;
-	get_frame(frame_id) = {.frame_id = frame_id};
 
 	// no need to lock, called in same thread as writes
 	auto min_ready = now_ns + cpu_time + gpu_time + compositor_time;
@@ -158,6 +198,19 @@ void app_pacer::predict(int64_t now_ns,
 		*out_predicted_display_period = period;
 		*out_wake_up_time = last_display_time - (cpu_time + gpu_time + compositor_time + int64_t(U_TIME_1MS_IN_NS * min_margin_ms.val));
 	}
+
+	// wake_up is deliberately left at 0: it is filled in by mark_point() when
+	// xrWaitFrame actually returns, and mark_gpu_done() relies on it staying 0
+	// to tell "app never woke" apart from a real frame.
+	get_frame(frame_id) = {
+	        .frame_id = frame_id,
+	        .predicted_wake_up = *out_wake_up_time,
+	        .predicted = now_ns,
+	        .predicted_display_time = *out_predicted_display_time,
+	        .predicted_display_period = *out_predicted_display_period,
+	        .display_time = *out_predicted_display_time,
+	        .discarded = false,
+	};
 }
 
 void app_pacer::mark_point(int64_t frame_id, enum u_timing_point point, int64_t when_ns)
@@ -171,8 +224,13 @@ void app_pacer::mark_point(int64_t frame_id, enum u_timing_point point, int64_t 
 			frame.wake_up = when_ns;
 			break;
 		case U_TIMING_POINT_BEGIN:
+			frame.begin = when_ns;
+			break;
 		case U_TIMING_POINT_SUBMIT_BEGIN:
+			frame.submit_begin = when_ns;
+			break;
 		case U_TIMING_POINT_SUBMIT_END:
+			frame.submit_end = when_ns;
 			break;
 	}
 }
@@ -183,6 +241,7 @@ void app_pacer::mark_delivered(int64_t frame_id, int64_t when_ns, int64_t displa
 	if (frame.frame_id != frame_id)
 		return;
 	frame.delivered = when_ns;
+	frame.display_time = display_time_ns;
 }
 
 void app_pacer::mark_discarded(int64_t frame_id, int64_t when_ns)
@@ -191,6 +250,9 @@ void app_pacer::mark_discarded(int64_t frame_id, int64_t when_ns)
 	if (frame.frame_id != frame_id)
 		return;
 	frame.delivered = when_ns;
+	frame.gpu_done = when_ns;
+	frame.discarded = true;
+	write_metrics(frame);
 }
 
 void app_pacer::info(int64_t predicted_display_time_ns,
@@ -215,9 +277,12 @@ void app_pacer::mark_gpu_done(int64_t frame_id, int64_t when_ns)
 	if (frame.frame_id != frame_id or not(frame.wake_up and frame.delivered))
 		return;
 
+	frame.gpu_done = when_ns;
+
 	std::lock_guard lock(mutex);
 	cpu_time = lerp0(cpu_time, std::min(3 * period, frame.delivered - frame.wake_up), 0.1);
 	gpu_time = lerp0(gpu_time, std::min(3 * period, when_ns - frame.delivered), 0.1);
+	write_metrics(frame);
 }
 
 pacing_app_factory::pacing_app_factory() :
@@ -237,7 +302,7 @@ void pacing_app_factory::remove_app(app_pacer * app)
 xrt_result_t pacing_app_factory::create(struct u_pacing_app ** out_upa)
 {
 	std::lock_guard lock(mutex);
-	*out_upa = app_pacers.emplace_back(new app_pacer(*this));
+	*out_upa = app_pacers.emplace_back(new app_pacer(*this, next_session_id++));
 	return XRT_SUCCESS;
 }
 

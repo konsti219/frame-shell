@@ -1,3 +1,6 @@
+#ifndef __ANDROID__
+#include "linux/frame_shell.h"
+#endif
 /*
  * WiVRn VR streaming
  * Copyright (C) 2022  Guillaume Meunier <guillaume.meunier@centraliens.net>
@@ -26,6 +29,8 @@
 #include "xr/face_tracker.h"
 #include "xr/fb_body_tracker.h"
 #include "xr/to_string.h"
+#include <cstring>
+#include <glm/gtc/quaternion.hpp>
 #include <magic_enum.hpp>
 #include <magic_enum_containers.hpp>
 #include <ranges>
@@ -182,6 +187,12 @@ static from_headset::hand_tracking locate_hands(
 		for (int i = 0; i < XR_HAND_JOINT_COUNT_EXT; i++)
 		{
 			const auto & joint = joints[i];
+			constexpr auto valid = XR_SPACE_LOCATION_POSITION_VALID_BIT | XR_SPACE_LOCATION_ORIENTATION_VALID_BIT;
+			if ((joint.first.locationFlags & valid) != valid)
+			{
+				res.joints.reset();
+				break;
+			}
 			poses[i] = {
 			        .position = joint.first.pose.position,
 			        .orientation = pack(joint.first.pose.orientation),
@@ -289,16 +300,37 @@ void scenes::stream::tracking()
 	// and body. It shares xr::spaces::world's STAGE origin, translated by -offset: locating a
 	// pose in it therefore reports that pose offset up by +offset, i.e. increases perceived
 	// height.
-	auto make_height_offset_space = [&](float offset) {
-		return session.create_reference_space(XR_REFERENCE_SPACE_TYPE_STAGE, {{0, 0, 0, 1}, {0, -offset, 0}});
+	// Frame shell: the shell's temporary space drag is taken out here (poses stay in the calibrated space with floor
+	// and recenter) and sent along, so the server applies it as its tracking origin offset like a PC-side drag
+	auto shell_drag = [&]() -> XrPosef {
+		XrPosef drag{{0, 0, 0, 1}, {0, 0, 0}};
+#ifndef __ANDROID__
+		if (frame_shell::enabled())
+		{
+			float t[7];
+			frame_shell::drag_offset(t);
+			drag = {{t[0], t[1], t[2], t[3]}, {t[4], t[5], t[6]}};
+		}
+#endif
+		return drag;
+	};
+	auto make_height_offset_space = [&](float offset, const XrPosef & drag) {
+		// Space pose = drag⁻¹ · T(0, -offset, 0), so located poses are T(0, offset, 0) · drag · stage pose
+		glm::quat q(drag.orientation.w, drag.orientation.x, drag.orientation.y, drag.orientation.z);
+		glm::quat qi = glm::conjugate(q);
+		glm::vec3 p = qi * (-glm::vec3(drag.position.x, drag.position.y, drag.position.z)) + qi * glm::vec3(0, -offset, 0);
+		return session.create_reference_space(XR_REFERENCE_SPACE_TYPE_STAGE, {{qi.x, qi.y, qi.z, qi.w}, {p.x, p.y, p.z}});
 	};
 	float applied_height_offset = config.get_height_offset();
-	xr::space height_offset_space = make_height_offset_space(applied_height_offset);
+	XrPosef applied_drag = shell_drag();
+	xr::space height_offset_space = make_height_offset_space(applied_height_offset, applied_drag);
 
 	from_headset::tracking tracking;
 	std::vector<from_headset::hand_tracking> hands;
 	std::vector<std::variant<from_headset::meta_body, from_headset::bd_body, from_headset::htc_body>> body;
 	std::vector<XrView> views;
+	XrViewStateFlags views_flags = 0;
+	XrTime views_refresh = 0;
 
 	std::vector<serialization_packet> packets;
 
@@ -326,10 +358,13 @@ void scenes::stream::tracking()
 	{
 		try
 		{
-			if (float offset = config.get_height_offset(); offset != applied_height_offset)
+			const float offset = config.get_height_offset();
+			const XrPosef drag = shell_drag();
+			if (offset != applied_height_offset or std::memcmp(&drag, &applied_drag, sizeof(drag)) != 0)
 			{
 				applied_height_offset = offset;
-				height_offset_space = make_height_offset_space(applied_height_offset);
+				applied_drag = drag;
+				height_offset_space = make_height_offset_space(applied_height_offset, applied_drag);
 				locate_spaces = locate_spaces_functor{instance, height_offset_space};
 			}
 
@@ -457,7 +492,14 @@ void scenes::stream::tracking()
 					switch (item.device)
 					{
 						case device_id::HEAD:
-							tracking.view_flags = session.locate_views(XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, tracking.timestamp, view_space, views);
+							// Views relative to the head only change with the IPD: locating them costs an IPC round trip per
+							// sample, so refresh them once a second
+							if (views.empty() or at_time >= views_refresh)
+							{
+								views_flags = session.locate_views(XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, tracking.timestamp, view_space, views);
+								views_refresh = at_time + 1'000'000'000;
+							}
+							tracking.view_flags = views_flags;
 							assert(views.size() == tracking.views.size());
 							for (auto [i, j]: std::views::zip(views, tracking.views))
 							{
@@ -556,6 +598,9 @@ void scenes::stream::tracking()
 				    e.code().value() != XR_ERROR_TIME_INVALID)
 					throw;
 			}
+
+
+			tracking.drag_offset = applied_drag;
 
 			// FIXME: switch to event based
 			if (next_battery_check < now)

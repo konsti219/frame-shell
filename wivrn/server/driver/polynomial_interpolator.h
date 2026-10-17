@@ -73,11 +73,12 @@ public:
 		for (auto & i: data)
 		{
 			// Avoid samples too close to each other
-			if (std::abs(i.timestamp - s.timestamp) < 2'000'000)
+			if (i.timestamp != std::numeric_limits<XrTime>::lowest() and std::abs(i.timestamp - s.timestamp) < 2'000'000)
 			{
-				if (i.production_timestamp < s.production_timestamp)
-					i = s;
-				return;
+				if (i.production_timestamp >= s.production_timestamp)
+					return;
+				oldest = &i;
+				break;
 			}
 			if ((not oldest) or oldest->production_timestamp > i.production_timestamp)
 				oldest = &i;
@@ -98,7 +99,10 @@ public:
 						closest = &i;
 				}
 				if (closest and closest->y->dot(*s.y) < 0)
+				{
 					*oldest->y *= -1;
+					if (oldest->dy) *oldest->dy *= -1;
+				}
 			}
 		}
 	}
@@ -136,13 +140,16 @@ public:
 		int row = 0;
 		for (const auto && [i, sample]: std::ranges::enumerate_view(data))
 		{
-			if (std::abs(closest->timestamp - timestamp) > std::abs(sample.timestamp - timestamp))
+			if (sample.timestamp == std::numeric_limits<XrTime>::lowest())
+				continue;
+			if (closest->timestamp == std::numeric_limits<XrTime>::lowest() or
+			    std::abs(closest->timestamp - timestamp) > std::abs(sample.timestamp - timestamp))
 				closest = &sample;
 
 			if (not sample.y)
 				continue;
 
-			int abs_Δt = std::abs(sample.timestamp - timestamp);
+			XrDuration abs_Δt = std::abs(sample.timestamp - timestamp);
 
 			float weight = 1. / (1. + std::pow(abs_Δt / float(window), 3.));
 
