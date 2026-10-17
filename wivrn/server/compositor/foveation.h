@@ -38,17 +38,19 @@ class foveation
 {
 	std::mutex mutex;
 
-	const vk::Extent3D foveated_size; // per eye
+	vk::Extent3D foveated_size; // per eye
 
 	// Natural vertical gaze angle
 	const float angle_offset;
 	// Optionally defined from environment variables
 	const float convergence_distance;
 
-	float eye_x[2] = {}; // eye x position
+	// Eye poses relative to the head (view space); the views may be rotated (cant, tilt, panel roll)
+	xrt_pose eye[2] = {XRT_POSE_IDENTITY, XRT_POSE_IDENTITY};
 	xrt_quat gaze = {};
 	from_headset::override_foveation_center manual_foveation = {};
-	std::array<to_headset::foveation_parameter, 2> params;
+	std::array<foveation_parameter, 2> params;
+	std::array<foveation_description, 2> description;
 
 	buffer_allocation gpu_buffer;
 	vk::raii::Sampler sampler;
@@ -66,7 +68,7 @@ class foveation
 		bool flip_y = false;
 		xrt_rect src[2] = {};
 		xrt_fov fovs[2] = {};
-		float eye_x[2] = {};
+		xrt_pose eye[2] = {XRT_POSE_IDENTITY, XRT_POSE_IDENTITY};
 
 		from_headset::override_foveation_center manual_foveation = {};
 	};
@@ -79,16 +81,18 @@ class foveation
 	        vk::raii::CommandBuffer & cmd,
 	        bool flip_y,
 	        std::array<xrt_rect, 2> src_rect,
-	        std::array<xrt_fov, 2> src_fov);
+	        std::array<xrt_fov, 2> src_fov,
+	        std::array<xrt_pose, 2> src_pose);
 
 public:
 	foveation(wivrn::vk_bundle &,
 	          vk::Extent3D foveated_size);
 
+	void resize(wivrn::vk_bundle &, vk::Extent3D foveated_size);
 	void update_tracking(const from_headset::tracking &);
 	void update_foveation_center_override(const from_headset::override_foveation_center &);
 
-	std::array<to_headset::foveation_parameter, 2> foveate(
+	std::array<foveation_description, 2> foveate(
 	        vk::raii::Device &,
 	        vk::raii::CommandBuffer & cmd,
 	        vk::ImageView y,
@@ -97,6 +101,7 @@ public:
 	        std::array<vk::ImageView, 2> src,
 	        std::array<xrt_rect, 2> src_rect,
 	        std::array<xrt_fov, 2> src_fov,
+	        std::array<xrt_pose, 2> src_pose,
 	        bool alpha);
 };
 } // namespace wivrn

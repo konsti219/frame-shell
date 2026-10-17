@@ -68,6 +68,8 @@ public:
 	wivrn_hmd(wivrn::wivrn_session * cnx,
 	          const from_headset::headset_info_packet & info);
 
+	void set_render_size(uint32_t width, uint32_t height);
+
 	void set_foveated_size(uint32_t width, uint32_t height);
 
 	xrt_result_t update_inputs();

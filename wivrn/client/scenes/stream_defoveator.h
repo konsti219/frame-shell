@@ -53,6 +53,10 @@ class stream_defoveator
 	std::vector<vk::raii::ImageView> output_image_views;
 	std::vector<vk::raii::Framebuffer> framebuffers;
 	vk::Extent2D output_extent;
+	// Whether the output view converts linear colours to sRGB
+	bool srgb_output;
+	std::array<std::optional<wivrn::foveation_description>, view_count> foveation_cache;
+	std::array<wivrn::foveation_parameter, view_count> foveation_tables;
 
 	void ensure_vertices(size_t num_vertices);
 	vertex * get_vertices(size_t view);
@@ -85,11 +89,11 @@ public:
 
 	void defoveate(
 	        vk::raii::CommandBuffer & command_buffer,
-	        const std::array<wivrn::to_headset::foveation_parameter, 2> & foveation,
+	        const std::array<wivrn::foveation_description, 2> & foveation,
 	        const std::array<input, 2> & inputs,
 	        std::array<float, 4> scale,
 	        std::array<float, 4> bias,
 	        int destination);
 
-	static XrExtent2Di defoveated_size(const wivrn::to_headset::foveation_parameter &);
+	static XrExtent2Di defoveated_size(const wivrn::foveation_description &);
 };

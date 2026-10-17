@@ -40,6 +40,7 @@ private:
 	int32_t height_;
 	int sample_count_;
 	vk::Format format_;
+	vk::Format view_format_;
 
 	std::vector<vk::Image> images_;
 
@@ -53,7 +54,8 @@ public:
 	        int32_t width,
 	        int32_t height,
 	        int sample_count = 1,
-	        uint32_t array_size = 1);
+	        uint32_t array_size = 1,
+	        vk::Format view_format = vk::Format::eUndefined);
 
 	int32_t width() const
 	{
@@ -82,6 +84,11 @@ public:
 	vk::Format format() const
 	{
 		return format_;
+	}
+	// The other format the images can be viewed as, or format() if the runtime can't make them mutable
+	vk::Format view_format() const
+	{
+		return view_format_;
 	}
 
 	int acquire();

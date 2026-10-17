@@ -20,6 +20,7 @@ add_library(wivrn-common STATIC EXCLUDE_FROM_ALL
     smp.cpp
     secrets.cpp
     wivrn_sockets.cpp
+    wivrn_foveation.cpp
     utils/strings.cpp
     vk/allocation.cpp
     vk/error_category.cpp

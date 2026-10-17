@@ -24,6 +24,7 @@ layout(push_constant) uniform pc
 	ivec4 a_rect;
 	vec4 scale;
 	vec4 bias;
+	int debug_foveation;
 };
 
 #ifdef VERT_SHADER
@@ -46,6 +47,8 @@ void main()
 
 layout(constant_id = 0) const int alpha = 1;
 layout(constant_id = 1) const bool do_srgb = false;
+// The output view stores the sRGB encoded colours as they are
+layout(constant_id = 2) const bool srgb_passthrough = false;
 
 layout(set = 0, binding = 0) uniform sampler2D rgb[alpha + 1];
 
@@ -69,6 +72,13 @@ vec4 sRGB_to_linear_rgba(vec4 x)
 	        x.a);
 }
 
+float linear_to_sRGB(float x)
+{
+	if (x <= 0.0031308)
+		return x * 12.92;
+	return 1.055 * pow(x, 1 / 2.4) - 0.055;
+}
+
 void main()
 {
 	if (alpha == 1)
@@ -83,7 +93,9 @@ void main()
 	else
 		outColor = texture(rgb[0], inUV.xy).rgba;
 
-	if (do_srgb)
+	// Scale and bias are linear: only convert while they change the colours (dimming)
+	bool convert = srgb_passthrough && (scale != vec4(1) || bias != vec4(0));
+	if (do_srgb || convert)
 	{
 		outColor = sRGB_to_linear_rgba(outColor);
 	}
@@ -101,6 +113,24 @@ void main()
 		outColor.rgb /= outColor.a;
 		outColor = outColor * scale + bias;
 		outColor.rgb *= outColor.a;
+	}
+
+	if (convert)
+	{
+		outColor.rgb = vec3(linear_to_sRGB(outColor.r), linear_to_sRGB(outColor.g), linear_to_sRGB(outColor.b));
+	}
+
+	if (debug_foveation != 0)
+	{
+		// Streamed pixels per output pixel: 1 where the stream keeps full resolution, less where foveation squeezes
+		vec2 streamed = fwidth(inUV.xy * vec2(rgb_rect.zw));
+		float d = min(streamed.x, streamed.y);
+		vec3 tint = d > 0.9 ? vec3(0, 1, 0) : d > 0.45 ? vec3(1, 1, 0) : vec3(1, 0, 0);
+		// A faint colour cast keeps the image's own detail; the borders between resolutions are drawn solid
+		outColor.rgb *= mix(vec3(1), 0.5 + 0.5 * tint, 0.6);
+		float level = d > 0.9 ? 2.0 : d > 0.45 ? 1.0 : 0.0;
+		if (fwidth(level) > 0.0)
+			outColor.rgb = tint * max(outColor.a, 0.5);
 	}
 }
 

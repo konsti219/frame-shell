@@ -221,6 +221,15 @@ xrt_result_t wivrn_hmd::get_battery_status(bool * out_present,
 	return XRT_SUCCESS;
 }
 
+void wivrn_hmd::set_render_size(uint32_t width, uint32_t height)
+{
+	for (auto & view: hmd->views)
+	{
+		view.display.w_pixels = (width + 3) / 4 * 4;
+		view.display.h_pixels = (height + 3) / 4 * 4;
+	}
+}
+
 void wivrn_hmd::set_foveated_size(uint32_t width, uint32_t height)
 {
 	hmd->screens[0].w_pixels = width;

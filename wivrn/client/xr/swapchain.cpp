@@ -30,11 +30,13 @@ xr::swapchain::swapchain(
         int32_t width,
         int32_t height,
         int sample_count,
-        uint32_t array_size) :
+        uint32_t array_size,
+        vk::Format view_format) :
         width_(width),
         height_(height),
         sample_count_(sample_count),
-        format_(format)
+        format_(format),
+        view_format_(format)
 {
 	assert(sample_count == 1);
 
@@ -67,6 +69,19 @@ xr::swapchain::swapchain(
 	        .arraySize = array_size,
 	        .mipCount = 1,
 	};
+
+	std::array<VkFormat, 2> view_formats{static_cast<VkFormat>(format), static_cast<VkFormat>(view_format)};
+	XrVulkanSwapchainFormatListCreateInfoKHR format_list{
+	        .type = XR_TYPE_VULKAN_SWAPCHAIN_FORMAT_LIST_CREATE_INFO_KHR,
+	        .viewFormatCount = view_formats.size(),
+	        .viewFormats = view_formats.data(),
+	};
+	if (view_format != vk::Format::eUndefined and inst.has_extension(XR_KHR_VULKAN_SWAPCHAIN_FORMAT_LIST_EXTENSION_NAME))
+	{
+		create_info.usageFlags |= XR_SWAPCHAIN_USAGE_MUTABLE_FORMAT_BIT;
+		create_info.next = &format_list;
+		view_format_ = view_format;
+	}
 
 	CHECK_XR(xrCreateSwapchain(s, &create_info, &id));
 
