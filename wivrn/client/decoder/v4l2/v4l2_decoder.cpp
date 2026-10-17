@@ -32,6 +32,8 @@ namespace wivrn::v4l2
 {
 namespace
 {
+std::atomic<uint64_t> next_capture_buffer_id{1};
+
 constexpr auto output_type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
 constexpr auto capture_type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
 constexpr unsigned int output_buffer_count = 8;
@@ -211,7 +213,8 @@ void u64_to_timestamp(uint64_t value, timeval & ts)
 struct decoder::v4l2_blit_handle : public wivrn::decoder::blit_handle
 {
 	unsigned int capture_index;
-	decoder * self;
+	std::shared_ptr<capture_set> set;
+	std::shared_ptr<recycler> recycle;
 
 	v4l2_blit_handle(const wivrn::from_headset::feedback & feedback,
 	                 const wivrn::to_headset::video_stream_data_shard::view_info_t & view_info,
@@ -223,14 +226,21 @@ struct decoder::v4l2_blit_handle : public wivrn::decoder::blit_handle
 	                 decoder * self) :
 	        wivrn::decoder::blit_handle{feedback, view_info, image_view, image, extent, current_layout},
 	        capture_index(capture_index),
-	        self(self)
+	        set(self->capture),
+	        recycle(self->recycle)
 	{
 		foreign_queue_family = VK_QUEUE_FAMILY_FOREIGN_EXT;
+		const auto & capture = set->buffers[capture_index];
+		dmabuf_fd = capture.dmabuf.get_fd();
+		dmabuf_stride = self->capture_bytesperline;
+		dmabuf_chroma_offset = uint64_t(self->capture_bytesperline) * self->capture_height;
+		dmabuf_id = capture.id;
+		visible_extent = self->capture_visible;
 	}
 
 	~v4l2_blit_handle()
 	{
-		self->release_capture_buffer(capture_index);
+		recycle->release(set.get(), capture_index);
 	}
 };
 
@@ -255,7 +265,7 @@ decoder::decoder(vk::raii::Device & device,
 	int raw_wake_fd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
 	if (raw_wake_fd < 0)
 		throw std::runtime_error("eventfd failed for iris decoder: " + std::string(std::strerror(errno)));
-	wake_fd = wivrn::fd_base(raw_wake_fd);
+	recycle->wake_fd = wivrn::fd_base(raw_wake_fd);
 	worker = std::jthread([this](std::stop_token stop_token) { worker_loop(stop_token); });
 }
 
@@ -282,7 +292,7 @@ decoder::~decoder()
 		v4l2_buf_type type = output_type;
 		xioctl(fd.get_fd(), VIDIOC_STREAMOFF, &type);
 	}
-	capture_buffers.clear();
+	capture.reset();
 }
 
 void decoder::setup_device(wivrn::fd_base device_fd)
@@ -293,16 +303,9 @@ void decoder::setup_device(wivrn::fd_base device_fd)
 	ioctl_or_throw(fd.get_fd(), VIDIOC_SUBSCRIBE_EVENT, &sub, "VIDIOC_SUBSCRIBE_EVENT(SOURCE_CHANGE)");
 	setup_output_queue();
 
-	// H265 needs an initial header-parsing phase with only the coded OUTPUT queue active.
-	// setting up and streaming he placeholder queue can prevent iris from completing
-	// sequence initialization
-	if (codec_type != wivrn::video_codec::h265)
-	{
-		setup_capture_queue();
-		v4l2_buf_type capture = capture_type;
-		ioctl_or_throw(fd.get_fd(), VIDIOC_STREAMON, &capture, "VIDIOC_STREAMON(CAPTURE)");
-		capture_streaming = true;
-	}
+	// Only the coded OUTPUT queue streams until iris has parsed the headers: a streaming placeholder CAPTURE queue
+	// turns the first source change into a resolution change, which iris can leave paused (H.264 desktop streams
+	// stalled after 8 frames) and which keeps H.265 from completing sequence initialization
 
 	v4l2_buf_type output = output_type;
 	ioctl_or_throw(fd.get_fd(), VIDIOC_STREAMON, &output, "VIDIOC_STREAMON(OUTPUT)");
@@ -366,6 +369,8 @@ void decoder::import_capture_buffer(unsigned int index, const std::vector<size_t
 	};
 	ioctl_or_throw(fd.get_fd(), VIDIOC_EXPBUF, &exp, "VIDIOC_EXPBUF(CAPTURE)");
 	int dma_fd = exp.fd;
+	// Vulkan takes ownership of dma_fd on import; keep a duplicate for consumers on other devices.
+	wivrn::fd_base kept_dmabuf(fcntl(dma_fd, F_DUPFD_CLOEXEC, 0));
 
 	const vk::DeviceSize chroma_offset = vk::DeviceSize(capture_bytesperline) * capture_height;
 	if (chroma_offset >= plane_lengths[0])
@@ -463,23 +468,25 @@ void decoder::import_capture_buffer(unsigned int index, const std::vector<size_t
 	                },
 	        },
 	        vk::SamplerYcbcrConversionInfo{
-	                .conversion = *ycbcr_conversion,
+	                .conversion = *capture->ycbcr_conversion,
 	        },
 	};
 	auto image_view = vk::raii::ImageView(device, view_info.get());
 
-	auto & capture = capture_buffers[index];
+	auto & capture = this->capture->buffers[index];
+	capture.id = next_capture_buffer_id.fetch_add(1, std::memory_order_relaxed);
 	capture.plane_lengths = plane_lengths;
 	capture.memory = std::move(memory);
 	capture.image = std::move(image);
 	capture.image_view = std::move(image_view);
+	capture.dmabuf = std::move(kept_dmabuf);
 	capture.current_layout = vk::ImageLayout::eUndefined;
 	capture.held_by_vulkan = false;
 }
 
 void decoder::initialize_capture_ownership()
 {
-	if (capture_buffers.empty())
+	if (capture->buffers.empty())
 		return;
 
 	vk::raii::CommandPool command_pool{
@@ -497,8 +504,8 @@ void decoder::initialize_capture_ownership()
 
 	command_buffer.begin(vk::CommandBufferBeginInfo{.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
 	std::vector<vk::ImageMemoryBarrier> barriers;
-	barriers.reserve(capture_buffers.size());
-	for (auto & capture: capture_buffers)
+	barriers.reserve(capture->buffers.size());
+	for (auto & capture: this->capture->buffers)
 	{
 		barriers.push_back({
 		        .srcAccessMask = vk::AccessFlagBits::eNone,
@@ -540,9 +547,9 @@ void decoder::initialize_capture_ownership()
 
 void decoder::queue_capture_buffer(unsigned int index)
 {
-	if (index >= capture_buffers.size())
+	if (index >= capture->buffers.size())
 		throw std::runtime_error("Invalid iris CAPTURE buffer index");
-	auto & capture = capture_buffers[index];
+	auto & capture = this->capture->buffers[index];
 
 	std::array<v4l2_plane, VIDEO_MAX_PLANES> planes{};
 	v4l2_buffer buf = make_v4l2_buffer(capture_type, index, planes);
@@ -561,10 +568,10 @@ void decoder::setup_ycbcr_sampler()
 	if (capture_vk_format == vk::Format::eUndefined)
 		throw std::runtime_error("Cannot create YCbCr sampler for unsupported iris CAPTURE format");
 
-	ycbcr_sampler = nullptr;
-	ycbcr_conversion = nullptr;
+	capture->ycbcr_sampler = nullptr;
+	capture->ycbcr_conversion = nullptr;
 
-	ycbcr_conversion = vk::raii::SamplerYcbcrConversion(device, {
+	capture->ycbcr_conversion = vk::raii::SamplerYcbcrConversion(device, {
 	                                                                    .format = capture_vk_format,
 	                                                                    .ycbcrModel = vk::SamplerYcbcrModelConversion::eYcbcr709,
 	                                                                    .ycbcrRange = vk::SamplerYcbcrRange::eItuFull,
@@ -582,10 +589,10 @@ void decoder::setup_ycbcr_sampler()
 	                .maxAnisotropy = 1,
 	        },
 	        vk::SamplerYcbcrConversionInfo{
-	                .conversion = *ycbcr_conversion,
+	                .conversion = *capture->ycbcr_conversion,
 	        },
 	};
-	ycbcr_sampler = vk::raii::Sampler(device, sampler_info.get());
+	capture->ycbcr_sampler = vk::raii::Sampler(device, sampler_info.get());
 }
 
 void decoder::setup_capture_queue()
@@ -605,6 +612,10 @@ void decoder::setup_capture_queue()
 		throw std::runtime_error("iris DMA-buf decoder requires single-memory-plane NV12 or P010 CAPTURE output");
 	if (!capture_bytesperline)
 		throw std::runtime_error("iris CAPTURE format reported zero bytesperline");
+	capture_visible = vk::Extent2D{capture_width, capture_height};
+	v4l2_selection selection{.type = V4L2_BUF_TYPE_VIDEO_CAPTURE, .target = V4L2_SEL_TGT_COMPOSE};
+	if (xioctl(fd.get_fd(), VIDIOC_G_SELECTION, &selection) == 0 && selection.r.width && selection.r.height)
+		capture_visible = vk::Extent2D{selection.r.width, selection.r.height};
 
 	setup_ycbcr_sampler();
 
@@ -613,7 +624,7 @@ void decoder::setup_capture_queue()
 	if (!req.count)
 		throw std::runtime_error("iris decoder allocated no CAPTURE buffers");
 
-	capture_buffers.resize(req.count);
+	capture->buffers.resize(req.count);
 	for (uint32_t i = 0; i < req.count; ++i)
 	{
 		std::array<v4l2_plane, VIDEO_MAX_PLANES> planes{};
@@ -626,7 +637,7 @@ void decoder::setup_capture_queue()
 	}
 
 	initialize_capture_ownership();
-	for (uint32_t i = 0; i < capture_buffers.size(); ++i)
+	for (uint32_t i = 0; i < capture->buffers.size(); ++i)
 		queue_capture_buffer(i);
 
 	spdlog::info("V4L2 iris DMA-buf capture: {}x{}, {}, stride {}, size {}, {} buffers",
@@ -635,12 +646,12 @@ void decoder::setup_capture_queue()
 	             capture_format_name(capture_pixelformat),
 	             capture_bytesperline,
 	             capture_sizeimage,
-	             capture_buffers.size());
+	             capture->buffers.size());
 }
 
 void decoder::teardown_capture_queue()
 {
-	if (std::ranges::any_of(capture_buffers, &capture_buffer::held_by_vulkan))
+	if (std::ranges::any_of(capture->buffers, &capture_buffer::held_by_vulkan))
 		throw std::runtime_error("iris source change while a DMA-buf CAPTURE image is still in use by Vulkan");
 
 	if (capture_streaming)
@@ -651,35 +662,35 @@ void decoder::teardown_capture_queue()
 	}
 
 	// first destroy Vulkan imports so image views don't reference the YCbCr conversion
-	capture_buffers.clear();
-	ycbcr_sampler = nullptr;
-	ycbcr_conversion = nullptr;
+	// Blit handles still holding the old set keep it alive; image views go before the conversion
+	capture = std::make_shared<capture_set>();
 	capture_vk_format = vk::Format::eUndefined;
 	v4l2_requestbuffers req{.count = 0, .type = capture_type, .memory = V4L2_MEMORY_MMAP};
 	ioctl_or_throw(fd.get_fd(), VIDIOC_REQBUFS, &req, "VIDIOC_REQBUFS(CAPTURE free)");
 }
 
-void decoder::release_capture_buffer(unsigned int index)
+void decoder::recycler::release(const capture_set * set, unsigned int index)
 {
 	{
-		std::scoped_lock lock(recycle_mutex);
-		recycle_capture_queue.push_back(index);
+		std::scoped_lock lock(mutex);
+		queue.emplace_back(set, index);
 	}
-	wake_worker();
+	wake();
 }
 
 void decoder::recycle_capture_buffers()
 {
 	{
-		std::scoped_lock lock(recycle_mutex);
-		recycle_capture_local.swap(recycle_capture_queue);
+		std::scoped_lock lock(recycle->mutex);
+		recycle_capture_local.swap(recycle->queue);
 	}
 
-	for (unsigned int index: recycle_capture_local)
+	for (auto [set, index]: recycle_capture_local)
 	{
-		if (index >= capture_buffers.size())
+		// Released from a capture queue that has since been rebuilt
+		if (set != capture.get() or index >= capture->buffers.size())
 			continue;
-		if (!capture_buffers[index].held_by_vulkan)
+		if (!capture->buffers[index].held_by_vulkan)
 			continue;
 		queue_capture_buffer(index);
 	}
@@ -699,7 +710,7 @@ void decoder::handle_events()
 		}
 		if (event.type == V4L2_EVENT_SOURCE_CHANGE && (event.u.src_change.changes & V4L2_EVENT_SRC_CH_RESOLUTION))
 		{
-			if (capture_buffers.empty())
+			if (capture->buffers.empty())
 			{
 				// iris has now parsed enough VPS/SPS/PPS data for G_FMT(CAPTURE) to describe the real stream
 				spdlog::info("V4L2 iris decoder source change; configuring DMA-buf CAPTURE queue");
@@ -737,6 +748,7 @@ void decoder::reclaim_output_buffers()
 		{
 			std::scoped_lock lock(output_mutex);
 			free_output_buffers.push_back(buf.index);
+			output_starved_since.reset();
 		}
 	}
 }
@@ -775,6 +787,11 @@ void decoder::queue_ready_frames()
 }
 
 void decoder::wake_worker()
+{
+	recycle->wake();
+}
+
+void decoder::recycler::wake()
 {
 	if (!wake_fd)
 		return;
@@ -817,7 +834,7 @@ void decoder::worker_loop(std::stop_token stop_token)
 
 			std::array<pollfd, 2> pfds{{
 			        {.fd = fd.get_fd(), .events = static_cast<short>(POLLIN | POLLPRI | (queued_output_count ? POLLOUT : 0))},
-			        {.fd = wake_fd.get_fd(), .events = POLLIN},
+			        {.fd = recycle->wake_fd.get_fd(), .events = POLLIN},
 			}};
 
 			int result;
@@ -830,7 +847,7 @@ void decoder::worker_loop(std::stop_token stop_token)
 			if (pfds[1].revents & POLLIN)
 			{
 				uint64_t value;
-				while (read(wake_fd.get_fd(), &value, sizeof(value)) < 0 && errno == EINTR)
+				while (read(recycle->wake_fd.get_fd(), &value, sizeof(value)) < 0 && errno == EINTR)
 				{
 				}
 			}
@@ -881,7 +898,7 @@ decoder::pending_frame decoder::take_pending(uint64_t timestamp)
 
 void decoder::submit_capture(unsigned int capture_index, uint64_t timestamp)
 {
-	if (capture_index >= capture_buffers.size())
+	if (capture_index >= capture->buffers.size())
 		throw std::runtime_error("Invalid iris CAPTURE buffer index");
 	if (!timestamp)
 	{
@@ -890,7 +907,7 @@ void decoder::submit_capture(unsigned int capture_index, uint64_t timestamp)
 	}
 
 	pending_frame pending = take_pending(timestamp);
-	auto & capture = capture_buffers[capture_index];
+	auto & capture = this->capture->buffers[capture_index];
 	capture.held_by_vulkan = true;
 
 	auto handle = std::make_shared<v4l2_blit_handle>(
@@ -947,7 +964,11 @@ void decoder::push_data(std::span<std::span<const uint8_t>> data, uint64_t frame
 		std::scoped_lock lock(output_mutex);
 		if (free_output_buffers.empty())
 		{
-			spdlog::warn("No free OUTPUT buffer for frame {}; dropping", frame_index);
+			if (not output_starved_since)
+			{
+				output_starved_since = std::chrono::steady_clock::now();
+				spdlog::warn("No free OUTPUT buffer for frame {}; dropping until one comes back", frame_index);
+			}
 			dropped_frame_index = frame_index;
 			return;
 		}
@@ -966,6 +987,12 @@ void decoder::push_data(std::span<std::span<const uint8_t>> data, uint64_t frame
 		assembling->bytes_used += shard.size();
 	}
 	(void)partial;
+}
+
+bool decoder::stalled(std::chrono::steady_clock::duration limit)
+{
+	std::scoped_lock lock(output_mutex);
+	return output_starved_since and std::chrono::steady_clock::now() - *output_starved_since > limit;
 }
 
 void decoder::abandon_assembling_frame()

@@ -124,7 +124,7 @@ std::array<wivrn::compositor::image, 2> make_images(wivrn::vk_bundle & vk, vk::C
 	                .mipLevels = 1,
 	                .arrayLayers = 3, // left, right then alpha
 	                .samples = vk::SampleCountFlagBits::e1,
-	                .usage = vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eTransferSrc,
+	                .usage = vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eSampled,
 	        },
 	        vk::ImageFormatListCreateInfo{
 	                .viewFormatCount = formats.size(),
@@ -276,11 +276,10 @@ xrt_result_t compositor::mark_frame(int64_t frame_id,
 xrt_result_t compositor::layer_commit(xrt_graphics_sync_handle_t sync_handle)
 {
 	u_graphics_sync_unref(&sync_handle);
+	std::lock_guard reconfigure_lock{reconfigure_mutex};
 
 	// Move waited frame to rendering frame, clear waited.
 	comp_frame_move_and_clear_locked(&frame.rendering, &frame.waited);
-
-	U_LOG_IFL_D(log_level, "frame %ld commit %d layers", frame.rendering.id, layer_accum.layer_count);
 
 	if (encode_request >= 0 // encoders have not picked up the previous frame
 	    or not session.connected() or not session.get_offset())
@@ -418,6 +417,7 @@ xrt_result_t compositor::layer_commit(xrt_graphics_sync_handle_t sync_handle)
 	        src,
 	        src_rect,
 	        src_fov,
+	        {xrt_cast(view_info.pose[0]), xrt_cast(view_info.pose[1])},
 	        view_info.alpha);
 
 	for (auto & encoder: encoders)
@@ -631,17 +631,10 @@ void compositor::encoder_work(std::stop_token tok)
 
 		wivrn::trace::scope trace_iter(wivrn::trace::cpu_track::compositor, 0, image.frame_index, "encoder_work iter");
 
-		try
+		for (auto & encoder: encoders)
 		{
-			for (auto & encoder: encoders)
-			{
-				if (encoder->stream_idx < 2 or image.view_info.alpha)
-					encoder->encode(session, image.view_info, image.frame_index);
-			}
-		}
-		catch (std::exception & e)
-		{
-			U_LOG_W("encode error: %s", e.what());
+			if (encoder->stream_idx < 2 or image.view_info.alpha)
+				encoder->encode(session, image.view_info, image.frame_index);
 		}
 		image.busy = false;
 	}
@@ -651,6 +644,7 @@ void compositor::send_video_stream_description()
 
 {
 	to_headset::video_stream_description desc{
+	        .generation = stream_generation,
 	        .width = uint16_t(images[0].image.info().extent.width),
 	        .height = uint16_t(images[0].image.info().extent.height),
 	        .frame_rate = settings[0].fps,
@@ -695,7 +689,8 @@ compositor::compositor(wivrn_session & session) :
         sem{make_semaphore(vk)},
         frame_rate(settings[0].fps),
         pacer(U_TIME_1S_IN_NS / frame_rate),
-        squasher(vk, render_extent(session.get_info())),
+        squasher_extent(render_extent(session.get_info())),
+        squasher(vk, squasher_extent),
         foveation(vk, images[0].image.info().extent)
 {
 	comp_base * c_base = this;
@@ -750,8 +745,10 @@ compositor::compositor(wivrn_session & session) :
 		throw std::runtime_error("comp_swapchain_shared_init failed");
 
 	print_encoders(settings);
-	for (auto [i, settings]: std::ranges::enumerate_view(settings))
+	for (auto [i, settings]: std::ranges::enumerate_view(settings)) {
 		encoders[i] = video_encoder::create(vk, settings, i);
+		encoders[i]->generation = stream_generation;
+	}
 	send_video_stream_description();
 
 	u_var_add_root(this, "Compositor", false);
@@ -768,6 +765,10 @@ compositor::~compositor()
 	encoder_thread.request_stop();
 	encode_request = -2;
 	encode_request.notify_all();
+	encoder_thread.join();
+	for (auto & encoder: encoders)
+		encoder->wait_idle();
+	vk.device.waitIdle();
 	comp_base * c_base = this;
 	comp_swapchain_shared_garbage_collect(&cscs);
 	comp_swapchain_shared_destroy(&cscs, &c_base->vk);
@@ -801,6 +802,7 @@ xrt_system_compositor_info compositor::sys_info() const
 
 void compositor::set_bitrate(uint32_t bitrate)
 {
+	std::lock_guard lock{encoders_mutex};
 	for (auto & encoder: encoders)
 		encoder->set_bitrate(bitrate);
 }
@@ -811,6 +813,7 @@ void compositor::set_framerate(float hz)
 		return;
 	U_LOG_IFL_D(log_level, "Framerate change from %.0f to %.0f", frame_rate.load(), hz);
 	pacer.set_frame_duration(U_TIME_1S_IN_NS / hz);
+	std::lock_guard lock{encoders_mutex};
 	for (auto & encoder: encoders)
 		encoder->set_framerate(hz);
 }
@@ -827,9 +830,63 @@ void compositor::update_foveation_center_override(const from_headset::override_f
 
 void compositor::resume()
 {
-	for (auto & encoder: encoders)
-		encoder->reset();
+	pacer.reset();
+	{
+		std::lock_guard lock{encoders_mutex};
+		for (auto & encoder: encoders)
+			encoder->reset();
+	}
 	send_video_stream_description();
+}
+
+void compositor::reconfigure() noexcept
+{
+	std::lock_guard reconfigure_lock{reconfigure_mutex};
+
+	// layer_commit is blocked; wait for the encoder thread to finish the last frame
+	while (encode_request >= 0 or std::ranges::any_of(images, [](const image & i) { return i.busy.load(); }))
+		std::this_thread::yield();
+
+	auto new_settings = get_encoder_settings(vk, session);
+	print_encoders(new_settings);
+
+	std::unique_lock lock{encoders_mutex};
+	for (auto & encoder: encoders)
+		encoder->wait_idle();
+	vk.device.waitIdle();
+	for (auto & encoder: encoders)
+		encoder.reset();
+
+	settings = new_settings;
+	++stream_generation;
+	// image holds an atomic and cannot be assigned
+	std::destroy_at(&images);
+	::new (&images) std::array<image, 2>{make_images(vk, cmd_pool, settings)};
+
+	foveation.resize(vk, images[0].image.info().extent);
+
+	auto extent = render_extent(session.get_info());
+	if (squasher_extent != extent)
+	{
+		std::destroy_at(&squasher);
+		::new (&squasher) layer_squasher(vk, extent);
+		squasher_extent = extent;
+	}
+
+	for (auto [i, settings]: std::ranges::enumerate_view(settings)) {
+		encoders[i] = video_encoder::create(vk, settings, i);
+		encoders[i]->generation = stream_generation;
+	}
+	lock.unlock();
+	pacer.reset();
+	send_video_stream_description();
+}
+
+void compositor::on_nack(const from_headset::video_nack & nack)
+{
+	std::lock_guard lock{encoders_mutex};
+	if (nack.generation == stream_generation and nack.stream_item_idx < encoders.size() and encoders[nack.stream_item_idx])
+		encoders[nack.stream_item_idx]->resend(nack);
 }
 
 void compositor::on_feedback(const from_headset::feedback & feedback, const clock_offset & o)
@@ -837,7 +894,11 @@ void compositor::on_feedback(const from_headset::feedback & feedback, const cloc
 	uint8_t stream = feedback.stream_index;
 	if (stream >= encoders.size())
 		return;
-	encoders[stream]->on_feedback(feedback);
+	{
+		std::lock_guard lock{encoders_mutex};
+		if (feedback.generation != stream_generation) return;
+		encoders[stream]->on_feedback(feedback);
+	}
 	if (not o)
 		return;
 	pacer.on_feedback(feedback, o);

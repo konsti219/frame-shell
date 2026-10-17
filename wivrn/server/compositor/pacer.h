@@ -69,6 +69,8 @@ private:
 
 	std::mutex compute_mutex;
 	std::condition_variable compute_cv;
+	bool compute_pending = false;
+	uint64_t timing_generation = 0;
 	std::vector<frame_time> frame_times_compute;
 	std::jthread worker;
 

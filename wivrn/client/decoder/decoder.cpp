@@ -26,8 +26,18 @@
 #include "decoder/ffmpeg/ffmpeg_decoder.h"
 #endif
 #include "decoder/raw_decoder.h"
+#include <algorithm>
 
 wivrn::decoder::~decoder() = default;
+
+bool wivrn::decoder::has_sps(std::span<const uint8_t> data, video_codec codec)
+{
+	for (size_t i = 0; i + 3 < data.size(); ++i)
+		if (data[i] == 0 and data[i + 1] == 0 and data[i + 2] == 1 and
+		    (codec == video_codec::h265 ? ((data[i + 3] >> 1) & 0x3f) == 33 : (data[i + 3] & 0x1f) == 7))
+			return true;
+	return false;
+}
 
 std::shared_ptr<wivrn::decoder> wivrn::decoder::make(
         vk::raii::Device & device,
@@ -94,6 +104,11 @@ const std::vector<wivrn::video_codec_capability> & wivrn::decoder::supported_cod
 {
 	static std::vector<wivrn::video_codec_capability> res = supported_codecs_();
 	return res;
+}
+
+bool wivrn::decoder::supports_codec(wivrn::video_codec codec)
+{
+	return std::ranges::any_of(supported_codecs(), [codec](const auto & capability) { return capability.codec == codec; });
 }
 
 bool wivrn::decoder::supports_10bit(wivrn::video_codec codec)

@@ -21,7 +21,9 @@
 
 #include "decoder.h"
 #include "wivrn_packets.h"
+#include <openxr/openxr.h>
 
+#include <atomic>
 #include <memory>
 #include <optional>
 #include <vector>
@@ -40,6 +42,10 @@ class stream;
 namespace wivrn
 {
 
+// Frames completed thanks to shards sent again, and frames given up (left eye), for the stream's statistics
+inline std::atomic<uint32_t> resend_completed = 0;
+inline std::atomic<uint32_t> frames_lost = 0;
+
 class shard_accumulator
 {
 	std::shared_ptr<decoder> decoder_;
@@ -48,8 +54,18 @@ public:
 	using data_shard = wivrn::to_headset::video_stream_data_shard;
 	struct shard_set
 	{
-		size_t min_for_reconstruction = -1;
+		size_t submitted = 0;
 		std::vector<std::optional<data_shard>> data;
+		// Parity blocks (fec.h), empty when missing, and the frame's data shard count they announce
+		std::vector<std::vector<uint8_t>> parity;
+		uint16_t data_count = 0;
+		// How often each data shard was asked to be sent again (from_headset::video_nack), and when last
+		std::vector<uint8_t> requested;
+		XrTime last_request = 0;
+		// How often everything after the received shards was asked for (the frame's end didn't arrive)
+		uint8_t tail_requests = 0;
+		// Rebuilds missing data shards once there is enough parity: the first one rebuilt
+		std::optional<uint16_t> recover();
 		void reset(uint64_t frame_index);
 		bool empty() const;
 
@@ -94,6 +110,7 @@ public:
 	}
 
 	void push_shard(wivrn::to_headset::video_stream_data_shard &&);
+	void push_parity(wivrn::to_headset::video_stream_parity_shard &&);
 
 	vk::Sampler sampler()
 	{
@@ -103,6 +120,7 @@ public:
 	using blit_handle = decoder::blit_handle;
 
 private:
+	void request_missing(shard_set &, size_t limit, uint8_t max_requests = 1, bool tail = false);
 	void try_submit_frame(std::optional<uint16_t> shard_idx);
 	void try_submit_frame(uint16_t shard_idx);
 	void send_feedback(wivrn::from_headset::feedback & feedback);

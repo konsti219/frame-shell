@@ -89,6 +89,8 @@ Default value: unset
 
 Json object of additional options to pass directly to ffmpeg `avcodec_open2`'s `option` parameter.
 
+For vulkan, `buffer_ms` (a string, 10 to 1000, default `"1000"`) sets the rate control window: a shorter one keeps single frames closer to the average size, so large frames don't arrive as bursts the network drops.
+
 ## `application`
 Default value: unset
 

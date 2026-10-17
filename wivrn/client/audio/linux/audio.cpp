@@ -60,6 +60,7 @@ namespace
 {
 constexpr uint32_t default_sample_rate = 48'000;
 constexpr uint32_t target_latency_ms = 5;
+constexpr uint32_t speaker_jitter_ms = 20;
 
 void init_pipewire()
 {
@@ -412,10 +413,15 @@ void audio::operator()(wivrn::audio_data && data)
 	if (not desc.speaker)
 		return;
 
-	const auto size = data.payload.size_bytes();
-	speaker_buffer_size_bytes.fetch_add(size, std::memory_order_relaxed);
-	if (not speaker_samples.write(std::move(data)))
-		speaker_buffer_size_bytes.fetch_sub(size, std::memory_order_relaxed);
+	speaker_link.receive(std::move(data), [&](wivrn::audio_data && chunk) {
+		const auto size = chunk.payload.size_bytes();
+		speaker_buffer_size_bytes.fetch_add(size, std::memory_order_relaxed);
+		if (not speaker_samples.write(std::move(chunk)))
+			speaker_buffer_size_bytes.fetch_sub(size, std::memory_order_relaxed);
+	});
+	speaker_lost_chunks.store(speaker_link.skipped, std::memory_order_relaxed);
+	speaker_received.store(speaker_link.received, std::memory_order_relaxed);
+	speaker_duplicates.store(speaker_link.duplicates, std::memory_order_relaxed);
 }
 
 void audio::set_mic_state(bool running)
@@ -437,6 +443,16 @@ void audio::set_mic_state(bool running)
 		spdlog::warn("Failed to {} PipeWire microphone: {}", running ? "start" : "stop", spa_strerror(result));
 	}
 	microphone_cv.notify_one();
+}
+
+std::string audio::statistics_json() const
+{
+    if (!desc.speaker) return "null";
+    auto bytes_per_ms = desc.speaker->num_channels * sizeof(int16_t) * desc.speaker->sample_rate / 1000.0;
+    return std::format(R"({{"buffer_ms":{:.1f},"target_ms":{},"underruns":{},"dropped_ms":{:.1f},"lost_chunks":{},"received":{},"duplicates":{}}})",
+        speaker_buffer_size_bytes.load(std::memory_order_relaxed) / bytes_per_ms, speaker_jitter_ms,
+        speaker_underruns.load(std::memory_order_relaxed), speaker_dropped_bytes.load(std::memory_order_relaxed) / bytes_per_ms,
+        speaker_lost_chunks.load(std::memory_order_relaxed), speaker_received.load(std::memory_order_relaxed), speaker_duplicates.load(std::memory_order_relaxed));
 }
 
 void audio::speaker_process(void * userdata)
@@ -476,8 +492,13 @@ void audio::speaker_process(void * userdata)
 	const size_t requested_bytes = num_frames * frame_size;
 	auto * output = static_cast<uint8_t *>(data.data);
 	size_t written = 0;
+    bool starting = false;
+    if (!self->speaker_primed && self->speaker_buffer_size_bytes.load(std::memory_order_relaxed) >= frame_size * self->desc.speaker->sample_rate * speaker_jitter_ms / 1000) {
+        self->speaker_primed = true;
+        starting = true;
+    }
 
-	while (written < requested_bytes)
+	while (self->speaker_primed && written < requested_bytes)
 	{
 		if (self->speaker_current.payload.empty())
 		{
@@ -494,8 +515,22 @@ void audio::speaker_process(void * userdata)
 		self->speaker_buffer_size_bytes.fetch_sub(count, std::memory_order_relaxed);
 	}
 
-	if (written < requested_bytes)
-		std::memset(output + written, 0, requested_bytes - written);
+	if (written < requested_bytes) {
+        if (self->speaker_primed) {
+            self->speaker_underruns.fetch_add(1, std::memory_order_relaxed);
+            self->speaker_primed = false;
+        }
+        std::memset(output + written, 0, requested_bytes - written);
+    }
+    const size_t ramp_frames = std::min<size_t>(written / frame_size, self->desc.speaker->sample_rate / 500);
+    auto samples = reinterpret_cast<int16_t *>(output);
+    for (size_t frame = 0; frame < ramp_frames; ++frame) {
+        float gain = float(frame) / ramp_frames;
+        for (size_t channel = 0; channel < self->desc.speaker->num_channels; ++channel) {
+            if (starting) samples[frame * self->desc.speaker->num_channels + channel] *= gain;
+            if (written < requested_bytes) samples[(written / frame_size - 1 - frame) * self->desc.speaker->num_channels + channel] *= gain;
+        }
+    }
 
 	data.chunk->offset = 0;
 	data.chunk->stride = frame_size;
@@ -513,6 +548,7 @@ void audio::speaker_process(void * userdata)
 			if (not dropped)
 				break;
 			self->speaker_buffer_size_bytes.fetch_sub(dropped->payload.size_bytes(), std::memory_order_relaxed);
+            self->speaker_dropped_bytes.fetch_add(dropped->payload.size_bytes(), std::memory_order_relaxed);
 		}
 	}
 }
@@ -594,7 +630,8 @@ void audio::microphone_sender()
 
 			try
 			{
-				session.send_control(std::move(*packet));
+				microphone_link.send(packet->timestamp, packet->payload, frame_size, 1e9 / desc.microphone->sample_rate,
+				                     [&](wivrn::audio_data && chunk) { session.send_stream(std::move(chunk)); });
 			}
 			catch (const std::exception & e)
 			{

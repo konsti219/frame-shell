@@ -13,6 +13,7 @@
 #include "decoder/decoder.h"
 #include "wivrn_sockets.h"
 
+#include <chrono>
 #include <cstdint>
 #include <deque>
 #include <exception>
@@ -64,9 +65,11 @@ private:
 	struct capture_buffer
 	{
 		std::vector<size_t> plane_lengths;
+		uint64_t id = 0;
 		vk::raii::DeviceMemory memory = nullptr;
 		vk::raii::Image image = nullptr;
 		vk::raii::ImageView image_view = nullptr;
+		wivrn::fd_base dmabuf;
 		vk::ImageLayout current_layout = vk::ImageLayout::eUndefined;
 		bool held_by_vulkan = false;
 	};
@@ -94,13 +97,30 @@ private:
 
 	vk::raii::Device & device;
 	vk::raii::PhysicalDevice & physical_device;
-	vk::raii::SamplerYcbcrConversion ycbcr_conversion = nullptr;
-	vk::raii::Sampler ycbcr_sampler = nullptr;
+	// Shared with blit handles, which may outlive this decoder or a capture queue rebuild
+	struct capture_set
+	{
+		vk::raii::SamplerYcbcrConversion ycbcr_conversion = nullptr;
+		vk::raii::Sampler ycbcr_sampler = nullptr;
+		std::vector<capture_buffer> buffers;
+	};
+
+	// Capture buffers released by blit handles, tagged with their capture set
+	struct recycler
+	{
+		std::mutex mutex;
+		std::deque<std::pair<const capture_set *, unsigned int>> queue;
+		wivrn::fd_base wake_fd;
+
+		void release(const capture_set * set, unsigned int index);
+		void wake();
+	};
+
 	vk::Format capture_vk_format = vk::Format::eUndefined;
 
 	wivrn::fd_base fd;
 	std::vector<output_buffer> output_buffers;
-	std::vector<capture_buffer> capture_buffers;
+	std::shared_ptr<capture_set> capture = std::make_shared<capture_set>();
 	std::vector<unsigned int> free_output_buffers;
 	std::deque<pending_frame> pending_frames;
 
@@ -108,11 +128,11 @@ private:
 	std::mutex input_mutex;
 	std::optional<assembling_frame> assembling;
 	std::optional<uint64_t> dropped_frame_index;
+	// Since when every OUTPUT buffer is queued in iris without one coming back; under output_mutex
+	std::optional<std::chrono::steady_clock::time_point> output_starved_since;
 	std::mutex output_mutex;
-	std::deque<unsigned int> recycle_capture_queue;
-	std::deque<unsigned int> recycle_capture_local;
-	std::mutex recycle_mutex;
-	wivrn::fd_base wake_fd;
+	std::deque<std::pair<const capture_set *, unsigned int>> recycle_capture_local;
+	std::shared_ptr<recycler> recycle = std::make_shared<recycler>();
 	std::jthread worker;
 	std::exception_ptr worker_exception;
 	std::mutex worker_exception_mutex;
@@ -122,6 +142,7 @@ private:
 	uint32_t capture_width = 0;
 	uint32_t capture_height = 0;
 	uint32_t capture_bytesperline = 0;
+	vk::Extent2D capture_visible{};
 	uint32_t capture_sizeimage = 0;
 	uint32_t capture_pixelformat = 0;
 	uint32_t capture_num_planes = 0;
@@ -142,7 +163,6 @@ private:
 	void import_capture_buffer(unsigned int index, const std::vector<size_t> & plane_lengths);
 	void initialize_capture_ownership();
 	void queue_capture_buffer(unsigned int index);
-	void release_capture_buffer(unsigned int index);
 	void recycle_capture_buffers();
 	void handle_events();
 	void reclaim_output_buffers();
@@ -171,9 +191,12 @@ public:
 	        const wivrn::from_headset::feedback & feedback,
 	        const wivrn::to_headset::video_stream_data_shard::view_info_t & view_info) override;
 
+	// Whether iris has taken no input for this long while all OUTPUT buffers are queued
+	bool stalled(std::chrono::steady_clock::duration limit);
+
 	vk::Sampler sampler() override
 	{
-		return *ycbcr_sampler;
+		return *capture->ycbcr_sampler;
 	}
 
 	static bool available_for(wivrn::video_codec codec);

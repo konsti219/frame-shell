@@ -51,9 +51,13 @@ pacer::pacer(uint64_t frame_duration) :
 	        while (not t.stop_requested())
 	        {
 		        samples.clear();
+		        uint64_t generation;
 		        {
 			        std::unique_lock lock(compute_mutex);
-			        compute_cv.wait(lock);
+			        compute_cv.wait(lock, [&] { return t.stop_requested() or compute_pending; });
+			        if (t.stop_requested()) return;
+			        compute_pending = false;
+			        generation = timing_generation;
 			        for (const auto & time: frame_times_compute)
 			        {
 				        if (time.decoded > time.present)
@@ -66,6 +70,7 @@ pacer::pacer(uint64_t frame_duration) :
 		        std::ranges::nth_element(samples, it);
 
 		        std::unique_lock lock(mutex);
+		        if (generation != timing_generation) continue;
 		        safe_present_to_decoded_ns = *it + client_margin_ms.val * U_TIME_1MS_IN_NS;
 	        }
         })
@@ -127,7 +132,8 @@ void pacer::predict(
 
 void pacer::on_feedback(const wivrn::from_headset::feedback & feedback, const clock_offset & offset)
 {
-	if (feedback.times_displayed > 1 or not feedback.blitted)
+	// Frames completed by a resend are late by a round trip: counting them would delay every frame
+	if (feedback.times_displayed > 1 or not feedback.blitted or feedback.resent)
 		return;
 
 	std::lock_guard lock(mutex);
@@ -150,6 +156,7 @@ void pacer::on_feedback(const wivrn::from_headset::feedback & feedback, const cl
 		{
 			std::unique_lock lock(compute_mutex);
 			std::swap(frame_times, frame_times_compute);
+			compute_pending = true;
 			compute_cv.notify_all();
 		}
 		// adjust phase
@@ -206,7 +213,11 @@ pacer::frame_info pacer::present_to_info(int64_t present)
 
 void pacer::reset()
 {
-	std::lock_guard lock(mutex);
+	std::scoped_lock lock(mutex, compute_mutex);
+	++timing_generation;
+	compute_pending = false;
 	std::ranges::fill(frame_times, frame_time{});
+	std::ranges::fill(frame_times_compute, frame_time{});
+	safe_present_to_decoded_ns = 0;
 }
 } // namespace wivrn

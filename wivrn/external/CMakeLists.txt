@@ -1,4 +1,11 @@
 add_library(wivrn-external INTERFACE)
+# Erasure coding for the stream's parity shards (common/fec.h)
+add_library(leopard STATIC leopard/leopard.cpp leopard/LeopardCommon.cpp leopard/LeopardFF8.cpp leopard/LeopardFF16.cpp)
+target_include_directories(leopard SYSTEM PUBLIC leopard)
+set_target_properties(leopard PROPERTIES POSITION_INDEPENDENT_CODE ON)
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
+    target_compile_options(leopard PRIVATE -mssse3)
+endif()
 target_include_directories(wivrn-external SYSTEM INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
 
 # add_library(imspinner OBJECT EXCLUDE_FROM_ALL imspinner/cimspinner.cpp)

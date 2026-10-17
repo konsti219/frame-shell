@@ -33,6 +33,12 @@
 #include "wivrn_client.h"
 #include "wivrn_packets.h"
 #include "xr/space.h"
+#ifndef __ANDROID__
+#include "linux/frame_shell.h"
+#endif
+#include <chrono>
+#include <deque>
+#include <map>
 #include <mutex>
 #include <optional>
 #include <queue>
@@ -87,10 +93,61 @@ private:
 	std::atomic<XrDuration> display_time_phase = 0;
 	std::atomic<XrDuration> display_time_period = 0;
 	XrTime last_display_time = 0;
+	// Per eye, logged every 5 s: how long the picture went without a new frame (hitches)
+	struct display_gaps
+	{
+		XrTime window_start = 0;
+		std::array<uint64_t, 2> frame{};
+		std::array<XrTime, 2> since{}, longest{};
+		std::array<int, 2> over_50ms{};
+	} gaps;
 	std::atomic<XrDuration> real_display_period = 0;
 	std::optional<std::thread> tracking_thread;
 
 	std::shared_mutex decoder_mutex;
+
+	// Frame shell: each PC monitor's H.264, decoded by its own V4L2 decoder sized for it, whose frames go to
+	// WayVR. A stream's address is the accumulator tag push_blit_handle recognises.
+	struct desktop_stream
+	{
+		uint32_t surface;
+		uint16_t width, height;
+		video_codec codec = video_codec::h264;
+		std::shared_ptr<wivrn::decoder> decoder;
+		uint64_t frame_index = 0;
+		std::string name;
+		// Until a frame with SPS (a keyframe) arrives, after a loss or a decoder failure
+		bool wait_keyframe = true;
+		std::chrono::steady_clock::time_point keyframe_requested{};
+		// Frames after the last one decoded, still arriving or waiting for an earlier one (desktop_video)
+		struct pending_frame
+		{
+			std::vector<std::vector<uint8_t>> shards;
+			std::vector<std::vector<uint8_t>> parity;
+			size_t received = 0;
+			uint32_t size = 0;
+			bool complete = false;
+			// Asked to be sent again (from_headset::desktop_nack): how often, when first
+			int requests = 0;
+			std::chrono::steady_clock::time_point requested{};
+		};
+		std::map<uint32_t, pending_frame> pending;
+		std::optional<uint32_t> last_frame;
+		int resent_frames = 0;
+		// Recent decoder failures, to stop recreating a decoder that keeps failing
+		std::deque<std::chrono::steady_clock::time_point> failures;
+		// The last five seconds, for the log and the WiVRn tab: frames decoded, dropped, waits for a keyframe
+		std::chrono::steady_clock::time_point last_decoded{};
+		int decoded = 0, dropped = 0, keyframe_waits = 0;
+		std::chrono::steady_clock::duration longest_gap{};
+	};
+	void desktop_frame_lost(desktop_stream &);
+	void deliver_desktop_frames(std::map<uint32_t, std::unique_ptr<desktop_stream>>::iterator);
+	bool decode_desktop_frame(std::map<uint32_t, std::unique_ptr<desktop_stream>>::iterator, desktop_stream::pending_frame &);
+	// Written only by the network thread
+	std::shared_mutex desktop_mutex;
+	std::map<uint32_t, std::unique_ptr<desktop_stream>> desktop_streams;
+	std::unique_ptr<desktop_stream> make_desktop_stream(uint32_t surface, uint16_t width, uint16_t height, const std::string & name, video_codec codec) noexcept;
 	std::optional<to_headset::video_stream_description> video_stream_description;
 	std::array<accumulator_images, decoder_count> decoders; // Locked by decoder_mutex
 
@@ -246,11 +303,16 @@ public:
 	void operator()(to_headset::application_list &&);
 	void operator()(to_headset::application_icon &&);
 	void operator()(to_headset::running_applications &&);
+	void operator()(to_headset::desktop_surface &&);
+	void operator()(to_headset::desktop_video &&);
+	void operator()(to_headset::video_stream_parity_shard &&);
+	void operator()(to_headset::shell_message &&);
 	void operator()(audio_data &&);
 
 	void push_blit_handle(wivrn::shard_accumulator * decoder, std::shared_ptr<wivrn::shard_accumulator::blit_handle> handle);
 
 	void send_feedback(const wivrn::from_headset::feedback & feedback);
+	void send_nack(wivrn::from_headset::video_nack &&);
 
 	state current_state() const
 	{
@@ -267,18 +329,44 @@ public:
 	void exit();
 	void start_application(std::string appid);
 
+#ifndef __ANDROID__
+	// Frame shell: commands from and state for the shell's UI, on the network thread
+	void poll_shell();
+	// Render size, stream size and codecs from the current configuration
+	from_headset::stream_settings stream_settings();
+	std::string shell_state;
+	std::string shell_video_debug = "null";
+	std::string shell_audio_debug = "null";
+	std::chrono::steady_clock::time_point shell_next_audio_log{};
+	std::string shell_desktop_debug = "[]";
+	// The last five seconds of the VR stream (render thread), for the WiVRn tab
+	std::mutex shell_vr_debug_mutex;
+	std::string shell_vr_debug = "null";
+	std::chrono::steady_clock::time_point desktop_stats_start{};
+	void update_desktop_stats();
+	std::chrono::steady_clock::time_point shell_next_debug{};
+	uint16_t shell_encoded_width = 0, shell_encoded_height = 0;
+	std::chrono::steady_clock::time_point shell_next_running_query{};
+	// The Wi-Fi link to the PC (signal, rates) as JSON for the shell
+	std::mutex network_status_mutex;
+	std::string network_status = "null";
+	std::jthread network_status_thread;
+#endif
+
 	static meta & get_meta_scene();
 	std::optional<std::string> pop_stream_error();
 
 private:
 	void process_packets();
+	void send_link_settings();
 	void tracking();
 	void read_actions();
 
 	void on_interaction_profile_changed(const XrEventDataInteractionProfileChanged &);
 	void send_derived_pose();
 
-	void setup(const to_headset::video_stream_description &);
+	void wait_for_frame();
+	void setup(const to_headset::video_stream_description &) noexcept;
 	void setup_reprojection_swapchain(uint32_t width, uint32_t height);
 
 	vk::raii::QueryPool query_pool = nullptr;

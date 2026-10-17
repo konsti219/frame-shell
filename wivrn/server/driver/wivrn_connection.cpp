@@ -274,6 +274,7 @@ void wivrn::wivrn_connection::init(std::stop_token stop_token, std::function<voi
 
 	info_packet = std::get<from_headset::headset_info_packet>(receive(10s).first);
 
+	last_received = std::chrono::steady_clock::now();
 	active = true;
 
 	if (state == encryption_state::pairing and not is_public_key_known)
@@ -296,6 +297,7 @@ void wivrn::wivrn_connection::reset(std::stop_token stop, TCP && tcp, std::funct
 
 void wivrn::wivrn_connection::shutdown()
 {
+	active = false;
 	if (stream)
 		::shutdown(stream.get_fd(), SHUT_RDWR);
 	if (control)

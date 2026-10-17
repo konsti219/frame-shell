@@ -35,6 +35,7 @@
 #include <array>
 #include <atomic>
 #include <memory>
+#include <mutex>
 #include <thread>
 
 namespace wivrn
@@ -83,6 +84,11 @@ private:
 	vk::raii::CommandPool cmd_pool;
 	vk::raii::QueryPool query_pool;
 
+	// Held by layer_commit and while the stream is rebuilt for new settings
+	std::mutex reconfigure_mutex;
+	// Guards the encoder pointers against calls from the network threads
+	std::mutex encoders_mutex;
+
 	std::array<encoder_settings, 3> settings;
 
 	std::array<image, 2> images;
@@ -94,10 +100,12 @@ private:
 	std::atomic<float> frame_rate;
 	wivrn::pacer pacer;
 
+	vk::Extent3D squasher_extent;
 	layer_squasher squasher;
 	wivrn::foveation foveation;
 
 	std::array<std::unique_ptr<video_encoder>, 3> encoders;
+	uint32_t stream_generation = 1;
 
 #ifdef __cpp_lib_atomic_lock_free_type_aliases
 	using status_type = std::atomic_signed_lock_free;
@@ -192,8 +200,11 @@ public:
 	void update_foveation_center_override(const from_headset::override_foveation_center &);
 
 	void resume();
+	// Rebuild images, foveation and encoders after the stream size or codec changed
+	void reconfigure() noexcept;
 
 	void on_feedback(const from_headset::feedback &, const clock_offset &);
+	void on_nack(const from_headset::video_nack &);
 };
 
 } // namespace wivrn

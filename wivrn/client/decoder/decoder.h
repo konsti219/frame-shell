@@ -52,6 +52,13 @@ public:
 		// DMA-buf images from V4L2 require queue-family ownership
 		// transfers between Vulkan and external engine
 		uint32_t foreign_queue_family = vk::QueueFamilyIgnored;
+		// The same frame as a DMA-buf (one memory plane: NV12 luma, then chroma at dmabuf_chroma_offset), for
+		// consumers outside this Vulkan device; dmabuf_id identifies the buffer while it stays allocated.
+		int dmabuf_fd = -1;
+		uint32_t dmabuf_stride = 0;
+		uint64_t dmabuf_chroma_offset = 0;
+		uint64_t dmabuf_id = 0;
+		vk::Extent2D visible_extent{};
 #endif
 	};
 
@@ -65,6 +72,8 @@ public:
 	        std::weak_ptr<scenes::stream>,
 	        shard_accumulator *);
 	virtual ~decoder();
+	// Whether a chunk holds an SPS NAL unit (H.264 type 7, HEVC type 33), which starts every keyframe
+	static bool has_sps(std::span<const uint8_t> data, video_codec codec);
 	virtual void push_data(std::span<std::span<const uint8_t>> data, uint64_t frame_index, bool partial) = 0;
 
 	virtual void frame_completed(
@@ -74,6 +83,7 @@ public:
 	virtual vk::Sampler sampler() = 0;
 
 	static const std::vector<wivrn::video_codec_capability> & supported_codecs();
+	static bool supports_codec(wivrn::video_codec codec);
 	static bool supports_10bit(wivrn::video_codec codec);
 };
 } // namespace wivrn

@@ -1,0 +1,2 @@
+Leopard-RS 6e5725e (https://github.com/catid/leopard) and its sse2neon submodule cad518a (MIT,
+https://github.com/DLTcollab/sse2neon), unmodified: erasure coding for the stream (FEC).

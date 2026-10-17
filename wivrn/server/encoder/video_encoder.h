@@ -46,6 +46,18 @@ inline const char * encoder_x264 = "x264";
 inline const char * encoder_vulkan = "vulkan";
 inline const char * encoder_raw = "raw";
 
+// Per stream, for the session's transport log (which resets them): what loss does to the encoded stream
+struct encoder_statistics
+{
+	std::atomic<uint64_t> frames, keyframes, skipped, bytes, max_bytes, ref_distance, max_ref_distance, resent;
+	static void raise(std::atomic<uint64_t> & max, uint64_t value)
+	{
+		for (auto current = max.load(); value > current and not max.compare_exchange_weak(current, value);)
+			;
+	}
+};
+inline std::array<encoder_statistics, 3> encoder_stats;
+
 class video_encoder
 {
 protected:
@@ -76,6 +88,7 @@ private:
 
 public:
 	const uint8_t stream_idx;
+	uint32_t generation = 0;
 	const uint32_t target_queue;
 	const bool need_transfer;
 	// Layout the encoder needs y_cbcr to arrive in. Set during construction
@@ -95,12 +108,23 @@ private:
 	uint8_t encode_slot = 0;
 
 	std::mutex mutex;
+	size_t frame_bytes = 0;
+	// The last frames' data shards as fec::block, to send again what the headset reports missing
+	struct sent_frame
+	{
+		uint64_t frame_idx = -1;
+		std::vector<std::vector<uint8_t>> shards;
+	};
+	std::array<sent_frame, 8> sent;
 
 	// temporary data
-	wivrn_session * cnx;
+	wivrn_session * cnx = nullptr;
 
 	// shard to send
 	to_headset::video_stream_data_shard shard;
+	// The frame's data shards as erasure code blocks, for its parity shards (fec.h); parity in percent, 0: none
+	std::vector<std::vector<uint8_t>> fec_blocks;
+	uint8_t fec_percent = 0;
 
 	to_headset::video_stream_data_shard::timing_info_t timing_info;
 	clock_offset clock;
@@ -129,7 +153,9 @@ public:
 	                   uint64_t frame_index);
 
 	void on_feedback(const from_headset::feedback &);
+	void resend(const from_headset::video_nack &);
 	void reset();
+	void wait_idle();
 
 	// bitrate_bps is the bitrate for the whole stream
 	// the encoder bitrate will be scaled accordingly

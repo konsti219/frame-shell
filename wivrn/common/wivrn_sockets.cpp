@@ -18,6 +18,7 @@
  */
 
 #include "wivrn_sockets.h"
+#include <poll.h>
 
 #include "crypto.h"
 #include <algorithm>
@@ -137,8 +138,13 @@ void wivrn::UDP::set_send_buffer_size(int size)
 
 void wivrn::UDP::set_tos(int tos)
 {
+	// The socket is IPv6 with IPv4-mapped peers: both families
 	int err = setsockopt(fd, IPPROTO_IP, IP_TOS, &tos, sizeof(tos));
 	if (err == -1)
+	{
+		throw std::system_error{errno, std::generic_category()};
+	}
+	if (setsockopt(fd, IPPROTO_IPV6, IPV6_TCLASS, &tos, sizeof(tos)) == -1)
 	{
 		throw std::system_error{errno, std::generic_category()};
 	}
@@ -146,6 +152,10 @@ void wivrn::UDP::set_tos(int tos)
 
 void wivrn::TCP::init()
 {
+	int timeout_ms = 1000;
+	setsockopt(fd, IPPROTO_TCP, TCP_USER_TIMEOUT, &timeout_ms, sizeof(timeout_ms));
+	timeval send_timeout{.tv_sec = 1};
+	setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &send_timeout, sizeof(send_timeout));
 	int nodelay = 1;
 	if (setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay)) < 0)
 	{
@@ -163,6 +173,33 @@ wivrn::TCP::TCP(int fd)
 	init();
 }
 
+namespace
+{
+void connect_tcp(int fd, const sockaddr * address, socklen_t size)
+{
+	int flags = fcntl(fd, F_GETFL);
+	fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+	int error = 0;
+	if (connect(fd, address, size) < 0) {
+		error = errno;
+		if (error == EINPROGRESS) {
+			pollfd wait{.fd = fd, .events = POLLOUT};
+			int ready;
+			do { ready = ::poll(&wait, 1, 1000); } while (ready < 0 and errno == EINTR);
+			if (ready > 0) {
+				socklen_t length = sizeof(error);
+				if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &error, &length) < 0) error = errno;
+			} else error = ready == 0 ? ETIMEDOUT : errno;
+		}
+	}
+	fcntl(fd, F_SETFL, flags);
+	if (error) {
+		::close(fd);
+		throw std::system_error(error, std::generic_category());
+	}
+}
+}
+
 wivrn::TCP::TCP(sockaddr_in6 sa)
 {
 	fd = socket(AF_INET6, SOCK_STREAM, 0);
@@ -170,11 +207,7 @@ wivrn::TCP::TCP(sockaddr_in6 sa)
 		throw std::system_error{errno, std::generic_category()};
 	fcntl(fd, F_SETFD, FD_CLOEXEC);
 
-	if (connect(fd, (sockaddr *)&sa, sizeof(sa)) < 0)
-	{
-		::close(fd);
-		throw std::system_error{errno, std::generic_category()};
-	}
+	connect_tcp(fd, (const sockaddr *)&sa, sizeof(sa));
 
 	init();
 }
@@ -186,11 +219,7 @@ wivrn::TCP::TCP(sockaddr_in sa)
 		throw std::system_error{errno, std::generic_category()};
 	fcntl(fd, F_SETFD, FD_CLOEXEC);
 
-	if (connect(fd, (sockaddr *)&sa, sizeof(sa)) < 0)
-	{
-		::close(fd);
-		throw std::system_error{errno, std::generic_category()};
-	}
+	connect_tcp(fd, (const sockaddr *)&sa, sizeof(sa));
 
 	init();
 }
@@ -309,6 +338,9 @@ wivrn::deserialization_packet wivrn::UDP::receive_raw()
 
 	int received = recvmmsg(fd, mmsgs.data(), num_messages, MSG_DONTWAIT, nullptr);
 
+	// An ICMP error instead of a datagram: nothing to read
+	if (received < 0 and (errno == ECONNREFUSED or errno == EAGAIN))
+		return {};
 	if (received < 0)
 		throw std::system_error{errno, std::generic_category()};
 	if (received == 0)
@@ -373,6 +405,9 @@ size_t wivrn::UDP::send_raw(serialization_packet && packet)
 
 	if (ssize_t sent = ::writev(fd, iovecs.data(), iovecs.size()); sent >= 0)
 		return sent;
+	// An ICMP error about an earlier datagram: this one is lost, the socket is fine
+	if (errno == ECONNREFUSED)
+		return 0;
 	throw std::system_error{errno, std::generic_category()};
 }
 
@@ -429,7 +464,7 @@ size_t wivrn::UDP::send_many_raw(std::span<serialization_packet> packets)
 	}
 
 	// sendmmsg may not send all messages, just consider them as lost for UDP
-	if (sendmmsg(fd, mmsgs.data(), mmsgs.size(), 0) < 0)
+	if (sendmmsg(fd, mmsgs.data(), mmsgs.size(), 0) < 0 and errno != ECONNREFUSED)
 		throw std::system_error{errno, std::generic_category()};
 	return sent;
 }

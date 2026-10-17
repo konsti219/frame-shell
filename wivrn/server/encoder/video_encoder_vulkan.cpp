@@ -80,12 +80,29 @@ public:
 	{
 		std::unique_lock lock(mutex);
 		bool pending = false; // has any data been sent?
+		uint64_t first_pending = -1;
 		for (auto & i: items)
 		{
 			if (i.acked)
 				return false;
 			if (i.info.slotIndex != -1)
+			{
 				pending = true;
+				first_pending = std::min(first_pending, i.frame_index);
+			}
+		}
+		// A keyframe that never reached the decoder would otherwise stop this stream for good: start over
+		if (pending and frame_id > first_pending + 36)
+		{
+			U_LOG_W("Keyframe %lu not acknowledged by the headset, sending another", first_pending);
+			for (auto & item: items)
+			{
+				item.frame_index = -1;
+				item.info.pPictureResource = nullptr;
+				item.info.slotIndex = -1;
+				item.acked = false;
+			}
+			return false;
 		}
 		return pending;
 	}
@@ -203,11 +220,15 @@ wivrn::video_encoder_vulkan::video_encoder_vulkan(
 	        .frameRateNumerator = uint32_t(settings.fps * 1'000'000),
 	        .frameRateDenominator = 1'000'000,
 	};
+	// Rate control window (encoder option buffer_ms): shorter keeps single frames closer to the average size
+	uint32_t buffer_ms = 1'000;
+	if (auto it = settings.options.find("buffer_ms"); it != settings.options.end())
+		buffer_ms = std::clamp(std::stoul(it->second), 10ul, 1'000ul);
 	rate_control = vk::VideoEncodeRateControlInfoKHR{
 	        .layerCount = 1,
 	        .pLayers = &rate_control_layer,
-	        .virtualBufferSizeInMs = 1'000,
-	        .initialVirtualBufferSizeInMs = 500,
+	        .virtualBufferSizeInMs = buffer_ms,
+	        .initialVirtualBufferSizeInMs = buffer_ms / 2,
 	};
 
 	if (encode_caps.rateControlModes & vk::VideoEncodeRateControlModeFlagBitsKHR::eCbr)
@@ -807,6 +828,13 @@ void wivrn::video_encoder_vulkan::present_image(vk::Image y_cbcr, vk::SemaphoreS
 	std::unique_lock lock(dpb.mutex);
 	auto [ref_slot, slot] = dpb.get_ref(frame_index);
 	slot_item.idr = ref_slot == nullptr;
+	if (ref_slot)
+	{
+		encoder_stats[stream_idx].ref_distance += frame_index - ref_slot->frame_index;
+		encoder_statistics::raise(encoder_stats[stream_idx].max_ref_distance, frame_index - ref_slot->frame_index);
+	}
+	else
+		++encoder_stats[stream_idx].keyframes;
 
 	vk::VideoReferenceSlotInfoKHR init_refs[2] = {};
 	init_refs[0] = slot->info;

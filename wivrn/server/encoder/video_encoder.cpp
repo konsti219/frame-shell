@@ -21,6 +21,7 @@
 #include "driver/wivrn_session.h"
 
 #include "video_encoder.h"
+#include "fec.h"
 
 #include "encoder_settings.h"
 #include "os/os_time.h"
@@ -59,9 +60,10 @@ video_encoder::sender::sender() :
 			        else
 				        d = &pending.front();
 		        }
-		        if (d and not d->span.empty())
+		        if (d)
 		        {
-			        d->encoder->SendData(d->span, true, d->prefer_control);
+			        if (not d->span.empty())
+				        d->encoder->SendData(d->span, true, d->prefer_control);
 			        std::unique_lock lock(mutex);
 			        pending.pop_front();
 			        cv.notify_all();
@@ -208,6 +210,11 @@ video_encoder::video_encoder(vk_bundle & vk,
 
 video_encoder::~video_encoder()
 {
+	wait_idle();
+}
+
+void video_encoder::wait_idle()
+{
 	if (shared_sender)
 		shared_sender->wait_idle(this);
 }
@@ -241,6 +248,7 @@ void video_encoder::present_image(vk::Image y_cbcr, vk::SemaphoreSubmitInfo info
 	state[present_slot].wait(busy);
 	if (idr->should_skip(frame_index, stream_idx))
 	{
+		++encoder_stats[stream_idx].skipped;
 		state[present_slot] = skip;
 		return;
 	}
@@ -281,10 +289,13 @@ void video_encoder::encode(wivrn_session & cnx,
 
 	// Prepare the video shard template
 	shard.stream_item_idx = stream_idx;
+	shard.generation = generation;
 	shard.frame_idx = frame_index;
 	shard.shard_idx = 0;
 	shard.view_info = view_info;
 	shard.timing_info.reset();
+	fec_blocks.clear();
+	fec_percent = cnx.has_stream() ? cnx.fec_percent.load() : 0;
 
 	auto data = encode(encode_slot, frame_index);
 	if (data)
@@ -292,6 +303,38 @@ void video_encoder::encode(wivrn_session & cnx,
 		timing_info.encode_end = clock.to_headset(os_monotonic_get_ns());
 		assert(shared_sender);
 		shared_sender->push(std::move(*data));
+	}
+}
+
+void video_encoder::resend(const from_headset::video_nack & nack)
+{
+	std::vector<to_headset::video_stream_data_shard> shards;
+	{
+		std::lock_guard lock(mutex);
+		const auto & frame = sent[nack.frame_idx % sent.size()];
+		if (frame.frame_idx != nack.frame_idx or not cnx)
+			return;
+		auto add = [&](size_t index) {
+			if (index < frame.shards.size() and not frame.shards[index].empty())
+				if (auto shard = fec::shard(frame.shards[index]))
+					shards.push_back(std::move(*shard));
+		};
+		for (auto index: nack.shards)
+			add(index);
+		if (nack.tail_from)
+			for (size_t index = *nack.tail_from; index < frame.shards.size(); ++index)
+				add(index);
+	}
+	encoder_stats[stream_idx].resent += shards.size();
+	for (auto & shard: shards)
+	{
+		try
+		{
+			cnx->send_stream(std::move(shard));
+		}
+		catch (...)
+		{
+		}
 	}
 }
 
@@ -312,8 +355,21 @@ void video_encoder::SendData(std::span<uint8_t> data, bool end_of_frame, bool co
 	}
 	if (video_dump)
 		video_dump.write((char *)data.data(), data.size());
+	frame_bytes += data.size();
+	if (end_of_frame)
+	{
+		auto & stats = encoder_stats[stream_idx];
+		++stats.frames;
+		stats.bytes += frame_bytes;
+		encoder_statistics::raise(stats.max_bytes, frame_bytes);
+		frame_bytes = 0;
+	}
 
 	ssize_t max_payload_size = (cnx->has_stream() and not control) ? to_headset::video_stream_data_shard::max_payload_size : std::numeric_limits<uint32_t>::max();
+	if (control)
+		fec_percent = 0;
+	if (fec_percent)
+		max_payload_size = fec::max_payload_size;
 
 	auto begin = data.begin();
 	auto end = data.end();
@@ -332,6 +388,29 @@ void video_encoder::SendData(std::span<uint8_t> data, bool end_of_frame, bool co
 			}
 		}
 		shard.payload = {begin, next};
+		// Before sending: encryption scrambles the payload in place
+		if (not control)
+		{
+			auto & frame = sent[shard.frame_idx % sent.size()];
+			if (frame.frame_idx != shard.frame_idx)
+			{
+				frame.frame_idx = shard.frame_idx;
+				frame.shards.clear();
+			}
+			std::vector<uint8_t> block;
+			try
+			{
+				block = fec::block(shard);
+			}
+			catch (std::logic_error &)
+			{
+			}
+			if (fec_percent and block.empty())
+				fec_percent = 0;
+			if (fec_percent)
+				fec_blocks.push_back(block);
+			frame.shards.push_back(std::move(block));
+		}
 		try
 		{
 			if (control)
@@ -346,6 +425,31 @@ void video_encoder::SendData(std::span<uint8_t> data, bool end_of_frame, bool co
 		++shard.shard_idx;
 		shard.view_info.reset();
 		begin = next;
+	}
+	if (end_of_frame and fec_percent)
+	{
+		auto count = fec::parity_count(fec_blocks.size(), fec_percent);
+		auto parity = fec::encode(fec_blocks, count);
+		for (uint16_t i = 0; i < parity.size(); ++i)
+		{
+			try
+			{
+				cnx->send_stream(to_headset::video_stream_parity_shard{
+				        .generation = generation,
+				        .stream_item_idx = shard.stream_item_idx,
+				        .frame_idx = shard.frame_idx,
+				        .data_count = uint16_t(fec_blocks.size()),
+				        .parity_idx = i,
+				        .parity_count = uint16_t(parity.size()),
+				        .payload = parity[i],
+				});
+			}
+			catch (...)
+			{
+				// Ignore network errors
+			}
+		}
+		fec_blocks.clear();
 	}
 	if (end_of_frame)
 		wivrn::trace::cpu_end(wivrn::trace::cpu_track::network, stream_idx, shard.frame_idx, "SendData");

@@ -17,6 +17,7 @@
  */
 
 #include "audio_pipewire.h"
+#include "audio_link.h"
 
 #include "driver/wivrn_session.h"
 #include "os/os_time.h"
@@ -50,6 +51,7 @@ struct pipewire_device : public audio_device
 {
 	to_headset::audio_stream_description desc;
 	wivrn_session & session;
+	audio_link::sender speaker_link;
 
 	std::unique_ptr<pw_main_loop, deleter> pw_loop;
 
@@ -391,12 +393,13 @@ void pipewire_device::speaker_process(void * self_v)
 
 	try
 	{
-		self->session.send_control(audio_data{
-		        .timestamp = self->session.get_offset().to_headset(os_monotonic_get_ns()),
-		        .payload = std::span(
-		                (uint8_t *)data.data + data.chunk->offset,
-		                data.chunk->size),
-		});
+		const auto & speaker = *self->desc.speaker;
+		self->speaker_link.send(
+		        self->session.get_offset().to_headset(os_monotonic_get_ns()),
+		        std::span((const uint8_t *)data.data + data.chunk->offset, data.chunk->size),
+		        speaker.num_channels * sizeof(int16_t),
+		        1e9 / speaker.sample_rate,
+		        [&](audio_data && chunk) { self->session.send_stream(std::move(chunk)); });
 	}
 	catch (std::exception & e)
 	{
