@@ -1,0 +1,17 @@
+{
+  "application": [],
+  "hid-forwarding": true,
+  "hostname": "Frame shell development",
+  "encoder": [
+    {
+      "options": {
+        "buffer_ms": "50"
+      }
+    },
+    {
+      "options": {
+        "buffer_ms": "50"
+      }
+    }
+  ]
+}

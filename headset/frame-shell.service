@@ -1,0 +1,19 @@
+[Unit]
+Description=Frame shell (WiVRn client with WayVR) on Monado
+PartOf=monado-session.target
+Requires=monado.service
+After=monado.service
+# Chosen over monado-wivrn and monado-wayvr by this flag (frame-shell/headset enable|disable)
+ConditionPathExists=%h/.config/steamframe-enable-shell
+# A shell that keeps crashing leaves no UI to leave the session from: go back to SteamVR
+StartLimitIntervalSec=60
+StartLimitBurst=5
+OnFailure=monado-session-fallback.service
+
+[Service]
+ExecStartPre=/bin/sh -c 'for i in $(seq 150); do [ -S "$XDG_RUNTIME_DIR/monado_comp_ipc" ] && exit 0; sleep 0.2; done; exit 1'
+ExecStart=%h/.local/bin/frame-shell
+Restart=always
+RestartSec=2
+# Restart without passing through "failed", so OnFailure= (back to SteamVR) only follows the start limit
+RestartMode=direct

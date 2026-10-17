@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+export XR_RUNTIME_JSON="$HOME/.local/opt/monado/share/openxr/1/openxr_monado.json"
+export LD_LIBRARY_PATH="$HOME/.local/lib/frame-shell:$HOME/.local/lib/wivrn${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export FRAME_SHELL_OPENXR_LOADER="$HOME/.local/lib/frame-shell/libopenxr-shell.so"
+export FRAME_SHELL_LIBRARY="$HOME/.local/lib/frame-shell/libwayvr.so"
+export DISABLE_VULKAN_FDM_INJECTION_LAYER=1
+export WIVRN_AUTOCONNECT=1
+# Monado clears the previous projection when WiVRn discards a repeated frame.
+export WIVRN_DISCARD_FRAME=false
+exec "$HOME/.local/bin/frame-shell-client"

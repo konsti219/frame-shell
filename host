@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+set -euo pipefail
+root=$(cd -- "$(dirname -- "$0")" && pwd)
+build="$root/out/host"
+case ${1:-} in
+    stop)
+        # Cleans up after a run whose script was killed: its server, the runtime override, the installed WiVRn
+        pkill -INT -f "^$build/server/wivrn-server " || true
+        for _ in $(seq 50); do pgrep -f "^$build/server/wivrn-server " >/dev/null || break; sleep 0.2; done
+        runtime_dir="${XDG_CONFIG_HOME:-$HOME/.config}/openxr/1"
+        if cmp -s -- "$build/openxr_wivrn-dev.json" "$runtime_dir/active_runtime.json"; then
+            rm -f -- "$runtime_dir/active_runtime.json"
+        fi
+        if [ -e "$build/active_runtime.json.saved" ]; then
+            mv -fT -- "$build/active_runtime.json.saved" "$runtime_dir/active_runtime.json"
+        fi
+        systemctl --user start wivrn.service
+        ;;
+    app)
+        shift
+        [ "$#" -gt 0 ] || { echo "usage: $0 app <command> ..." >&2; exit 1; }
+        export XR_RUNTIME_JSON="$build/openxr_wivrn-dev.json"
+        [ -f "$XR_RUNTIME_JSON" ] || { echo "Run $0 build first" >&2; exit 1; }
+        exec "$@"
+        ;;
+    ctl)
+        shift
+        exec "$build/server/wivrnctl" "$@"
+        ;;
+    *) echo "usage: $0 {stop|app <command> ...|ctl ...}" >&2; exit 1 ;;
+esac

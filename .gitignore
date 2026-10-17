@@ -1,6 +1,7 @@
-/build/
+/out/
 /desktop/target/
 /wayvr/target/
 .direnv/
 __pycache__/
 *.pyc
+.cache
