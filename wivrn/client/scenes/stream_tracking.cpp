@@ -187,12 +187,6 @@ static from_headset::hand_tracking locate_hands(
 		for (int i = 0; i < XR_HAND_JOINT_COUNT_EXT; i++)
 		{
 			const auto & joint = joints[i];
-			constexpr auto valid = XR_SPACE_LOCATION_POSITION_VALID_BIT | XR_SPACE_LOCATION_ORIENTATION_VALID_BIT;
-			if ((joint.first.locationFlags & valid) != valid)
-			{
-				res.joints.reset();
-				break;
-			}
 			poses[i] = {
 			        .position = joint.first.pose.position,
 			        .orientation = pack(joint.first.pose.orientation),

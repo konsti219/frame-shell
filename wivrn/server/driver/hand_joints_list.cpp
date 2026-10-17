@@ -38,9 +38,6 @@ static xrt_hand_joint_value interpolate(const xrt_hand_joint_value & a, const xr
 
 xrt_hand_joint_set hand_joints_list::interpolate(const xrt_hand_joint_set & a, const xrt_hand_joint_set & b, float t)
 {
-	if (not a.is_active or not b.is_active)
-		return {};
-
 	xrt_hand_joint_set j = {
 	        .hand_pose = pose_list::interpolate(a.hand_pose, b.hand_pose, t),
 	        .is_active = a.is_active,
@@ -76,11 +73,6 @@ static xrt_hand_joint_set convert_joints(const std::optional<std::array<from_hea
 
 	if (input_joints)
 	{
-		constexpr auto valid = from_headset::pose_flags::position_valid | from_headset::pose_flags::orientation_valid;
-		for (const auto & joint: *input_joints)
-			if ((joint.flags & valid) != valid)
-				return {};
-
 		output_joints.is_active = true;
 		output_joints.hand_pose = to_relation((*input_joints)[XRT_HAND_JOINT_WRIST]);
 
