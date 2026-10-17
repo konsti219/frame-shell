@@ -262,10 +262,11 @@ fn stream_codec(
     } else {
         ("h264", "h264parse", "video/x-h264")
     };
-    // Keyframes come on request when the headset loses a frame; periodic ones would only be large bursts
+    // Keyframes come on request when the headset loses a frame; periodic ones would only be large bursts (VA caps at 1024).
+    // VBR with the target at the configured rate: CBR pads a static desktop to the full rate over Wi-Fi
     let encoder = if gst::ElementFactory::find(&format!("va{codec}enc")).is_some() {
         format!(
-            "vapostproc ! video/x-raw,format=NV12 ! va{codec}enc name=encoder bitrate={bitrate} key-int-max=1200 b-frames=0"
+            "vapostproc ! video/x-raw,format=NV12 ! va{codec}enc name=encoder rate-control=vbr target-percentage=100 bitrate={bitrate} key-int-max=1024 b-frames=0"
         )
     } else if gst::ElementFactory::find(&format!("nv{codec}enc")).is_some() {
         format!(
