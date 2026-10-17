@@ -33,6 +33,8 @@ struct application
 	std::string exec;
 	std::optional<std::filesystem::path> icon_path;
 	std::optional<std::string> path;
+	// Steam games: Unix time last played, 0 if never or not a Steam game
+	uint64_t last_played = 0;
 };
 
 std::unordered_map<std::string, application> list_applications();

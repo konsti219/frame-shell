@@ -24,6 +24,7 @@
 #include "wivrn_packets.h"
 #include <chrono>
 #include <unordered_map>
+#include <tuple>
 
 namespace scenes
 {
@@ -37,6 +38,7 @@ class app_launcher
 		std::string id;
 		std::string name;
 		std::vector<std::byte> image;
+		std::string icon_path;
 	};
 
 	std::chrono::steady_clock::time_point start_time{};
@@ -65,5 +67,19 @@ public:
 	}
 
 	void operator()(wivrn::to_headset::application_list && apps);
+
+	const std::string & server() const
+	{
+		return server_name;
+	}
+
+	// Id and name of each application the server offered
+	std::vector<std::tuple<std::string, std::string, std::string>> list()
+	{
+		std::vector<std::tuple<std::string, std::string, std::string>> result;
+		for (const auto & app: *applications.lock())
+			result.emplace_back(app.id, app.name, app.icon_path);
+		return result;
+	}
 	void operator()(wivrn::to_headset::application_icon && icon);
 };

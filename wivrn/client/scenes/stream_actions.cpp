@@ -20,6 +20,9 @@
 #include "application.h"
 #include "stream.h"
 #include <spdlog/spdlog.h>
+#if defined(__linux__) && !defined(__ANDROID__)
+#include "linux/shell_focus.h"
+#endif
 
 void scenes::stream::read_actions()
 {
@@ -61,6 +64,11 @@ void scenes::stream::read_actions()
 			}
 		}
 	}
+
+#if defined(__linux__) && !defined(__ANDROID__)
+	static frame_shell::focus_reader focus;
+	focus.filter(inputs, instance.now());
+#endif
 
 	try
 	{

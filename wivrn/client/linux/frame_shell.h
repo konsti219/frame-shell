@@ -1,0 +1,250 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+#pragma once
+#include <atomic>
+#include <cstdlib>
+#include <cstdio>
+#include <cstdint>
+#include <cstddef>
+#include <deque>
+#include <map>
+#include <memory>
+#include <mutex>
+#include <optional>
+#include <span>
+#include <string>
+#include <string_view>
+#include <vector>
+#include <dlfcn.h>
+#include <stdexcept>
+#include <thread>
+#include <algorithm>
+#include <charconv>
+#include <cmath>
+#include "configuration.h"
+#include "decoder/decoder.h"
+#include "frame_abi.h"
+#include <spdlog/fmt/fmt.h>
+#include <spdlog/spdlog.h>
+
+namespace frame_shell
+{
+// WayVR's entry points (frame_abi.h), null without FRAME_SHELL_LIBRARY
+inline const frame_shell_api * api = nullptr;
+inline bool enabled() { return api != nullptr; }
+
+using input = frame_shell_input;
+using desktop_surface_info = frame_shell_desktop_surface;
+using desktop_frame_info = frame_shell_desktop_frame;
+
+inline bool input_poll(input * event) { return api->input_poll(event); }
+inline void desktop_surface(const desktop_surface_info * info) { api->desktop_surface(info); }
+inline void connected(bool value) { api->connected(value); }
+inline void lobby_state(const char * json) { api->lobby_state(json); }
+inline void stream_state(const char * json) { api->stream_state(json); }
+inline void host_message(std::span<const uint8_t> data) { api->host_message(data.data(), data.size()); }
+inline bool command_poll(char * buffer, size_t size) { return api->command_poll(buffer, size); }
+inline void drag_offset(float * out) { api->drag_offset(out); }
+
+// Messages from the shell for the connected PC, sent by the stream's network thread
+inline std::mutex host_messages_mutex;
+inline std::deque<std::vector<uint8_t>> host_messages;
+
+inline std::vector<std::vector<uint8_t>> take_host_messages()
+{
+    std::scoped_lock lock(host_messages_mutex);
+    std::vector<std::vector<uint8_t>> taken(std::make_move_iterator(host_messages.begin()), std::make_move_iterator(host_messages.end()));
+    host_messages.clear();
+    return taken;
+}
+
+// Exported buffers outlive their decoder until the shell releases them after GPU use.
+inline std::mutex held_mutex;
+inline std::map<uint64_t, std::shared_ptr<void>> held_frames;
+
+inline void present_desktop(std::shared_ptr<void> handle, const desktop_frame_info & info)
+{
+    {
+        std::scoped_lock lock(held_mutex);
+        held_frames.emplace(info.id, std::move(handle));
+    }
+    api->desktop_frame(&info);
+}
+
+// Tints the defoveated PC stream by its resolution (dashboard debug view, not saved)
+inline std::atomic<bool> foveation_debug{false};
+
+inline std::string settings_json(const configuration & config)
+{
+    const char * codec = "auto";
+    if (config.codec) {
+        switch (*config.codec) {
+        case wivrn::video_codec::h264: codec = "h264"; break;
+        case wivrn::video_codec::h265: codec = "h265"; break;
+        case wivrn::video_codec::av1: codec = "av1"; break;
+        case wivrn::video_codec::raw: codec = "raw"; break;
+        }
+    }
+    return fmt::format(R"({{"bitrate":{},"max_bitrate":{},"fec":{},"retransmit":{},"resolution":{},"foveation":{},"max_foveation":{},"codec":"{}","foveation_debug":{},"desktop_bitrate":{},"desktop_codec":"{}","codec_support":{{"h264":{},"h265":{},"av1":{}}}}})",
+                       config.bitrate_bps, config.max_bitrate(),
+                       config.fec_percent, config.retransmit, config.resolution_scale,
+                       config.chosen_stream_scale(), 100, codec,
+                       foveation_debug.load(), config.desktop_bitrate_kbps,
+                       config.desktop_codec == wivrn::video_codec::h265 ? "h265" : "h264",
+                       wivrn::decoder::supports_codec(wivrn::video_codec::h264),
+                       wivrn::decoder::supports_codec(wivrn::video_codec::h265),
+                       wivrn::decoder::supports_codec(wivrn::video_codec::av1));
+}
+
+inline bool apply_setting(configuration & config, std::string_view command)
+{
+    if (!command.starts_with("setting ")) return false;
+    auto separator = command.find(' ', 8);
+    if (separator == std::string_view::npos) return false;
+    auto key = command.substr(8, separator - 8);
+    auto value = command.substr(separator + 1);
+    auto parse = [value](auto & number) {
+        auto [end, error] = std::from_chars(value.data(), value.data() + value.size(), number);
+        return error == std::errc{} && end == value.data() + value.size();
+    };
+    if (key == "retransmit") {
+        config.retransmit = value == "1";
+        config.save();
+        return true;
+    }
+    if (key == "foveation_debug") {
+        foveation_debug = value == "1";
+        return true;
+    }
+    if (key == "bitrate") {
+        uint32_t bitrate;
+        if (!parse(bitrate) || bitrate < 1'000'000 || bitrate > config.max_bitrate()) return false;
+        config.bitrate_bps = bitrate;
+    } else if (key == "fec") {
+        // Percent parity
+        uint32_t percent;
+        if (!parse(percent) || percent > 50) return false;
+        config.fec_percent = percent;
+    } else if (key == "resolution") {
+        float scale;
+        if (!parse(scale) || !std::isfinite(scale) || scale < 0.5f || scale > 2.f) return false;
+        config.resolution_scale = scale;
+    } else if (key == "foveation") {
+        // Streamed size as a fraction of the render size; 1 streams it whole (the decoder's size limit applies when used)
+        float scale;
+        if (!parse(scale) || !std::isfinite(scale) || scale < 0.2f || scale > 1.f) return false;
+        config.set_stream_scale(scale);
+    } else if (key == "desktop_bitrate") {
+        // kbit/s per 1080p
+        uint32_t bitrate;
+        if (!parse(bitrate) || bitrate < 1'000 || bitrate > 150'000) return false;
+        config.desktop_bitrate_kbps = bitrate;
+    } else if (key == "desktop_codec") {
+        wivrn::video_codec requested;
+        if (value == "h264") requested = wivrn::video_codec::h264;
+        else if (value == "h265") requested = wivrn::video_codec::h265;
+        else return false;
+        if (!wivrn::decoder::supports_codec(requested)) return false;
+        config.desktop_codec = requested;
+    } else if (key == "codec") {
+        std::optional<wivrn::video_codec> requested;
+        if (value == "auto") requested.reset();
+        else if (value == "h264") requested = wivrn::video_codec::h264;
+        else if (value == "h265") requested = wivrn::video_codec::h265;
+        else if (value == "av1") requested = wivrn::video_codec::av1;
+        else return false;
+        if (requested && !wivrn::decoder::supports_codec(*requested)) return false;
+        config.codec = requested;
+    } else return false;
+    config.save();
+    return true;
+}
+
+// Set when the user disconnected from the shell's UI, so the lobby doesn't reconnect on its own
+inline std::atomic<bool> user_disconnected{false};
+
+// Next queued shell command that `accept` takes; the others stay queued for the scene that handles them.
+inline std::mutex command_mutex;
+inline std::deque<std::string> command_queue;
+
+// Commands for a PC that are moot once disconnected
+inline void clear_stream_commands()
+{
+    std::scoped_lock lock(command_mutex);
+    std::erase_if(command_queue, [](const auto & command) {
+        return command.starts_with("stop_app ") || command.starts_with("set_active_app ");
+    });
+    std::scoped_lock messages(host_messages_mutex);
+    host_messages.clear();
+}
+
+inline std::optional<std::string> take_command(bool (*accept)(std::string_view))
+{
+    std::scoped_lock lock(command_mutex);
+    auto & queue = command_queue;
+    char buffer[512];
+    while (command_poll(buffer, sizeof(buffer))) {
+        queue.emplace_back(buffer);
+        if (queue.size() > 32) queue.pop_front();
+    }
+    for (auto it = queue.begin(); it != queue.end(); ++it) {
+        if (accept(*it)) {
+            std::string command = std::move(*it);
+            queue.erase(it);
+            return command;
+        }
+    }
+    return std::nullopt;
+}
+
+class runtime
+{
+    std::jthread thread;
+    void * library = nullptr;
+    frame_shell_host host{
+            .user = nullptr,
+            .release_desktop_frame = [](void *, uint64_t id) {
+                std::shared_ptr<void> handle;
+                std::scoped_lock lock(held_mutex);
+                if (auto it = held_frames.find(id); it != held_frames.end())
+                {
+                    // Dropped after the lock: giving the buffer back may wake the decoder
+                    handle = std::move(it->second);
+                    held_frames.erase(it);
+                }
+            },
+            .send_host_message = [](void *, const uint8_t * data, size_t size) {
+                std::scoped_lock lock(host_messages_mutex);
+                if (host_messages.size() < 256)
+                    host_messages.emplace_back(data, data + size);
+            },
+    };
+public:
+    runtime()
+    {
+        const char * path = std::getenv("FRAME_SHELL_LIBRARY");
+        if (!path) return;
+        library = dlopen(path, RTLD_NOW | RTLD_LOCAL);
+        if (!library) throw std::runtime_error(dlerror());
+        auto entry = reinterpret_cast<frame_shell_api_fn>(dlsym(library, "frame_shell_api"));
+        if (!entry) throw std::runtime_error(dlerror());
+        const frame_shell_api * table = entry();
+        if (!table || table->version != FRAME_SHELL_ABI_VERSION)
+            throw std::runtime_error("Frame shell library has another ABI version");
+        api = table;
+        thread = std::jthread([run = api->run, host = &host] {
+            if (int result = run(host); result != 0) {
+                std::fprintf(stderr, "Frame shell failed (%d)\n", result);
+                std::_Exit(EXIT_FAILURE);
+            }
+        });
+    }
+    ~runtime()
+    {
+        if (enabled()) {
+            api->stop();
+            thread.join();
+            // Keep Rust/GStreamer thread-local destructors valid until process exit.
+        }
+    }
+};
+}

@@ -1,3 +1,6 @@
+#ifndef __ANDROID__
+#include "linux/frame_shell.h"
+#endif
 /*
  * WiVRn VR streaming
  * Copyright (C) 2022  Guillaume Meunier <guillaume.meunier@centraliens.net>
@@ -54,6 +57,9 @@ void real_main(int argc, char ** argv)
 		info.name = "WiVRn";
 		info.version = VK_MAKE_VERSION(1, 0, 0);
 		application app(info);
+#ifndef __ANDROID__
+		frame_shell::runtime shell;
+#endif
 
 #ifndef __ANDROID__
 		if (argc == 2)

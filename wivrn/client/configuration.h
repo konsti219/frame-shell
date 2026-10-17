@@ -75,6 +75,16 @@ public:
 	float resolution_scale = 1.2;
 	std::optional<wivrn::video_codec> codec;
 	uint32_t bitrate_bps = 50'000'000;
+	// Frame shell PC desktop streams: kbit/s per 1920×1080 of pixels (scaled per monitor), H.264 or HEVC
+	uint32_t desktop_bitrate_kbps = 16'000;
+	wivrn::video_codec desktop_codec = wivrn::video_codec::h264;
+	// Parity the PC adds to each video frame, in percent of its shards (from_headset::link_settings)
+	uint32_t fec_percent = 10;
+	// Ask the PC to send lost video shards again (from_headset::video_nack)
+	bool retransmit = true;
+	// Testing: drop this share of incoming video shards, in runs of about simulated_loss_burst shards
+	float simulated_loss_percent = 0;
+	uint32_t simulated_loss_burst = 10;
 	uint8_t bit_depth = 10;
 
 	bool passthrough_enabled = false;
@@ -156,6 +166,11 @@ public:
 
 	void set_stream_scale(float);
 	float get_stream_scale() const;
+	float chosen_stream_scale() const
+	{
+		return stream_scale.value_or(get_default_stream_scale());
+	}
+	float max_stream_scale() const;
 	float get_default_stream_scale() const;
 
 	float get_height_offset() const;
@@ -166,7 +181,7 @@ public:
 
 	uint32_t max_bitrate(bool extended) const
 	{
-		return extended ? 800'000'000u : 200'000'000u;
+		return extended ? 800'000'000u : 400'000'000u;
 	}
 
 	uint32_t max_bitrate() const

@@ -1,3 +1,6 @@
+#ifndef __ANDROID__
+#include "linux/frame_shell.h"
+#endif
 /*
  * WiVRn VR streaming
  * Copyright (C) 2022  Guillaume Meunier <guillaume.meunier@centraliens.net>
@@ -627,6 +630,9 @@ void scenes::stream::gui_toasts()
 
 void scenes::stream::draw_gui(XrTime predicted_display_time, XrDuration predicted_display_period)
 {
+#ifndef __ANDROID__
+	if (frame_shell::enabled()) { gui_status = stream_tab::hidden; next_gui_status = stream_tab::hidden; return; }
+#endif
 	if (auto new_status = next_gui_status.load(); new_status != gui_status)
 	{
 		spdlog::info("Switch tab from {} to {}", magic_enum::enum_name(gui_status), magic_enum::enum_name(new_status));

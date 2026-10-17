@@ -33,6 +33,7 @@
 #include <vulkan/vulkan_raii.hpp>
 #include <openxr/openxr.h>
 
+#include <chrono>
 #include <compare>
 #include <optional>
 #include <uni_algo/case.h>
@@ -255,6 +256,16 @@ class lobby : public scene_impl<lobby>
 	void setup_passthrough();
 
 	void connect(const configuration::server_data & data);
+
+#ifndef __ANDROID__
+	// Frame shell: the lobby's connection logic without its UI; the shell shows state and sends commands
+	void render_shell(const XrFrameState &);
+	void handle_shell_command(const std::string &);
+	void publish_shell_state();
+	std::string shell_state;
+	// When to allow autoconnecting again after a failed connection or a dropped stream
+	std::chrono::steady_clock::time_point shell_autoconnect_retry{};
+#endif
 	std::unique_ptr<wivrn_session> connect_to_session(wivrn_discover::service service, bool manual_connection);
 
 	std::optional<glm::vec3> check_recenter_gesture(xr::spaces space, const xr::hand_tracker::joint_array & joints, const std::pair<glm::vec3, glm::quat> & head_pose);

@@ -18,6 +18,10 @@
  */
 
 #include "lobby.h"
+#include "utils/json_string.h"
+#ifndef __ANDROID__
+#include "linux/frame_shell.h"
+#endif
 
 #include "application.h"
 #include "configuration.h"
@@ -867,6 +871,13 @@ static void stick_finger_to_gui(std::array<xr::hand_tracker::joint, XR_HAND_JOIN
 
 void scenes::lobby::render(const XrFrameState & frame_state)
 {
+#ifndef __ANDROID__
+	if (frame_shell::enabled())
+	{
+		render_shell(frame_state);
+		return;
+	}
+#endif
 	if (async_session.valid() && async_session.poll() == utils::future_status::ready)
 	{
 		try
@@ -1049,7 +1060,11 @@ void scenes::lobby::render(const XrFrameState & frame_state)
 	}
 #endif
 
-	std::vector<std::pair<int, XrCompositionLayerQuad>> imgui_layers = draw_gui(frame_state.predictedDisplayTime);
+	std::vector<std::pair<int, XrCompositionLayerQuad>> imgui_layers;
+#ifndef __ANDROID__
+    if (!frame_shell::enabled() || !next_scene)
+#endif
+        imgui_layers = draw_gui(frame_state.predictedDisplayTime);
 
 #if WIVRN_CLIENT_DEBUG_MENU
 	if (auto * node = world.try_get<components::node>(debug_primitive_to_highlight.first);
@@ -1141,6 +1156,11 @@ void scenes::lobby::render(const XrFrameState & frame_state)
 void scenes::lobby::on_focused()
 {
 	recenter_gui = true;
+#ifndef __ANDROID__
+	// The shell has no lobby UI to reconnect from: reconnect on our own after a stream ends
+	if (frame_shell::enabled())
+		autoconnect_enabled = true;
+#endif
 
 	auto views = system.view_configuration_views(viewconfig);
 	assert(views.size() == 2); // FIXME
@@ -1497,3 +1517,219 @@ scene::meta & scenes::lobby::get_meta_scene()
 
 	return m;
 }
+
+#ifndef __ANDROID__
+static bool is_lobby_command(std::string_view command)
+{
+	for (std::string_view prefix: {"connect ", "disconnect", "pin ", "pin_cancel", "autoconnect ", "forget ", "setting "})
+		if (command.starts_with(prefix))
+			return true;
+	return false;
+}
+
+void scenes::lobby::render_shell(const XrFrameState & frame_state)
+{
+	using namespace std::chrono_literals;
+	const auto now = std::chrono::steady_clock::now();
+
+	if (async_session.valid() && async_session.poll() == utils::future_status::ready)
+	{
+		try
+		{
+			auto session = async_session.get();
+			if (session)
+				next_scene = stream::create(std::move(session), 1'000'000'000.f / frame_state.predictedDisplayPeriod, server_name, *this);
+
+			async_session.reset();
+		}
+		catch (std::exception & e)
+		{
+			spdlog::error("Error connecting to server: {}", e.what());
+			async_session.cancel();
+			async_error = e.what();
+			shell_autoconnect_retry = now + 5s;
+		}
+	}
+
+	if (next_scene)
+	{
+		server_hid_forwarding = next_scene->hid_forwarding_enabled();
+
+		switch (next_scene->current_state())
+		{
+			case scenes::stream::state::streaming:
+				application::push_scene(next_scene);
+				break;
+
+			case scenes::stream::state::shutdown:
+				// The lobby UI clears a finished stream; without it, do it here and reconnect once the server is
+				// back, unless the user disconnected
+				async_error = next_scene->pop_stream_error();
+				next_scene.reset();
+				if (frame_shell::user_disconnected.exchange(false))
+					shell_autoconnect_retry = {};
+				else
+					shell_autoconnect_retry = now + 2s;
+				break;
+
+			default:
+				break;
+		}
+	}
+
+	update_server_list();
+
+	while (auto command = frame_shell::take_command(is_lobby_command))
+		handle_shell_command(*command);
+
+	if (shell_autoconnect_retry != std::chrono::steady_clock::time_point{} and now >= shell_autoconnect_retry)
+	{
+		shell_autoconnect_retry = {};
+		autoconnect_enabled = true;
+	}
+
+	if (!async_session.valid() && !next_scene && autoconnect_enabled)
+	{
+		for (auto && [cookie, data]: application::get_config().servers)
+		{
+			if (data.visible && (data.autoconnect || force_autoconnect) && data.compatible)
+			{
+				autoconnect_enabled = false;
+				connect(data);
+				break;
+			}
+		}
+	}
+
+	publish_shell_state();
+
+	// Nothing to draw: the shell's overlays are the UI
+	session.begin_frame();
+	session.end_frame(frame_state.predictedDisplayTime, {});
+}
+
+void scenes::lobby::handle_shell_command(const std::string & command)
+{
+	spdlog::info("Shell command: {}", command);
+	auto & config = application::get_config();
+	if (command.starts_with("setting "))
+	{
+		frame_shell::apply_setting(config, command);
+		return;
+	}
+	auto argument = [&](size_t index) -> std::string {
+		size_t start = 0;
+		for (size_t i = 0; i <= index; ++i)
+		{
+			start = command.find(' ', start);
+			if (start == std::string::npos)
+				return "";
+			++start;
+		}
+		return command.substr(start, command.find(' ', start) - start);
+	};
+
+	if (command.starts_with("connect "))
+	{
+		auto server = config.servers.find(argument(0));
+		if (server != config.servers.end() and not async_session.valid() and not next_scene)
+		{
+			autoconnect_enabled = false;
+			shell_autoconnect_retry = {};
+			connect(server->second);
+		}
+	}
+	else if (command == "disconnect")
+	{
+		autoconnect_enabled = false;
+		shell_autoconnect_retry = {};
+		if (async_session.valid())
+		{
+			auto request = pin_request.lock();
+			request->pin_cancelled = true;
+			request.notify_one();
+			async_session.cancel();
+		}
+		if (next_scene)
+		{
+			frame_shell::user_disconnected = true;
+			next_scene->exit();
+		}
+		async_error.reset();
+	}
+	else if (command.starts_with("pin "))
+	{
+		auto request = pin_request.lock();
+		request->pin = argument(0);
+		request->pin_requested = false;
+		request.notify_one();
+	}
+	else if (command == "pin_cancel")
+	{
+		auto request = pin_request.lock();
+		request->pin_cancelled = true;
+		request.notify_one();
+	}
+	else if (command.starts_with("autoconnect "))
+	{
+		auto server = config.servers.find(argument(0));
+		if (server != config.servers.end())
+		{
+			server->second.autoconnect = argument(1) == "1";
+			config.save();
+		}
+	}
+	else if (command.starts_with("forget "))
+	{
+		config.servers.erase(argument(0));
+		config.save();
+	}
+}
+
+void scenes::lobby::publish_shell_state()
+{
+	std::string state = "idle";
+	std::string detail;
+	if (next_scene)
+		state = "connected";
+	else if (pin_request.lock()->pin_requested)
+		state = "pin";
+	else if (async_session.valid())
+	{
+		state = "connecting";
+		detail = async_session.get_progress();
+	}
+	else if (async_error)
+	{
+		state = "error";
+		detail = *async_error;
+	}
+
+	std::string json = fmt::format(R"({{"state":{},"server":{},"detail":{},"servers":[)",
+	                               json_string(state),
+	                               json_string(server_name),
+	                               json_string(detail));
+	bool first = true;
+	for (const auto & [cookie, data]: application::get_config().servers)
+	{
+		if (not first)
+			json += ',';
+		first = false;
+		json += fmt::format(R"({{"cookie":{},"name":{},"hostname":{},"visible":{},"compatible":{},"autoconnect":{},"manual":{}}})",
+		                    json_string(cookie),
+		                    json_string(data.service.name),
+		                    json_string(data.service.hostname),
+		                    data.visible,
+		                    data.compatible,
+		                    data.autoconnect,
+		                    data.manual);
+	}
+	json += R"(],"settings":)" + frame_shell::settings_json(application::get_config()) + "}";
+
+	if (json != shell_state)
+	{
+		shell_state = json;
+		frame_shell::lobby_state(shell_state.c_str());
+	}
+}
+#endif

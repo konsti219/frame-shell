@@ -31,6 +31,10 @@
 
 #include <IconsFontAwesome7.h>
 #include <algorithm>
+#include <fstream>
+#ifndef __ANDROID__
+#include "linux/frame_shell.h"
+#endif
 #include <imspinner.h>
 #include <spdlog/fmt/fmt.h>
 #include <uni_algo/case.h>
@@ -280,9 +284,13 @@ app_launcher::clicked app_launcher::draw_gui(imgui_context & imgui_ctx, const st
 
 void app_launcher::operator()(to_headset::application_list && apps)
 {
-	std::ranges::sort(apps.applications, [](auto & l, auto & r) {
-		return una::casesens::collate_utf8(l.name, r.name) < 0;
-	});
+#ifndef __ANDROID__
+	// The shell keeps the server's order (most recently played first)
+	if (not frame_shell::enabled())
+#endif
+		std::ranges::sort(apps.applications, [](auto & l, auto & r) {
+			return una::casesens::collate_utf8(l.name, r.name) < 0;
+		});
 
 	auto locked = applications.lock();
 
@@ -301,5 +309,27 @@ void app_launcher::operator()(to_headset::application_icon && icon)
 {
 	auto locked = applications.lock();
 	if (auto it = std::ranges::find(*locked, icon.id, &app::id); it != locked->end())
+	{
+#ifndef __ANDROID__
+		if (frame_shell::enabled() && !icon.image.empty())
+		{
+			try
+			{
+				auto dir = application::get_config_path() / "app-icons";
+				std::filesystem::create_directories(dir);
+				auto key = server_name + '\n' + icon.id;
+				auto path = dir / (std::to_string(std::hash<std::string>{}(key)) + ".png");
+				std::ofstream file(path, std::ios::binary | std::ios::trunc);
+				file.write(reinterpret_cast<const char *>(icon.image.data()), icon.image.size());
+				file.close();
+				if (file) it->icon_path = path.string();
+			}
+			catch (const std::exception & e)
+			{
+				spdlog::warn("Could not cache shell app icon: {}", e.what());
+			}
+		}
+#endif
 		it->image = std::move(icon.image);
+	}
 }

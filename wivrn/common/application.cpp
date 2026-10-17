@@ -233,11 +233,15 @@ std::unordered_map<std::string, application> list_applications()
 		auto cmd = steam.get_steam_command() + " ";
 		for (auto && app: steam.list_applications())
 		{
+			// Library games carry no icon: the headset shows Steam's cover art for their app id; shortcuts
+			// (non-Steam games) keep theirs
+			bool shortcut = app.appid & 0x02000000;
 			res.emplace(std::to_string(app.appid),
 			            application{
 			                    .name = std::move(app.name),
 			                    .exec = cmd + app.url,
-			                    .icon_path = steam.get_icon(app.appid),
+			                    .icon_path = shortcut ? steam.get_icon(app.appid) : std::nullopt,
+			                    .last_played = app.last_played,
 			            });
 		}
 	}

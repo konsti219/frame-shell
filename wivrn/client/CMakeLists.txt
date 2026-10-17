@@ -182,6 +182,12 @@ target_compile_definitions(wivrn PRIVATE -DGLM_ENABLE_EXPERIMENTAL)
 target_compile_definitions(wivrn PRIVATE IMGUI_DEFINE_MATH_OPERATORS)
 
 target_include_directories(wivrn PRIVATE .)
+# Needs the packets' OpenXR types, which wivrn-common is built without
+target_sources(wivrn PRIVATE ../common/fec.cpp)
+target_link_libraries(wivrn leopard)
+if(NOT ANDROID)
+    target_include_directories(wivrn PRIVATE ${FRAME_ABI_INCLUDE_DIR})
+endif()
 
 if(NOT ANDROID)
     install(TARGETS wivrn)

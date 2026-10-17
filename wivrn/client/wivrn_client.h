@@ -93,7 +93,14 @@ public:
 		if (r < 0)
 			throw std::system_error(errno, std::system_category());
 
-		if (fds[0].revents & (POLLHUP | POLLERR))
+		// UDP reports ICMP errors (e.g. a stray port-unreachable): transient, a dead path shows as silence instead
+		if (fds[0].revents & POLLERR)
+		{
+			int error = 0;
+			socklen_t size = sizeof(error);
+			getsockopt(stream.get_fd(), SOL_SOCKET, SO_ERROR, &error, &size);
+		}
+		if (fds[0].revents & POLLHUP)
 			throw std::runtime_error("Error on stream socket");
 
 		if (fds[1].revents & (POLLHUP | POLLERR))
@@ -117,6 +124,18 @@ public:
 
 		return r;
 	}
+
+	void shutdown()
+	{
+		::shutdown(control.get_fd(), SHUT_RDWR);
+		::shutdown(stream.get_fd(), SHUT_RDWR);
+	}
+
+	int control_fd()
+	{
+		return control.get_fd();
+	}
+
 
 	uint64_t bytes_received() const
 	{

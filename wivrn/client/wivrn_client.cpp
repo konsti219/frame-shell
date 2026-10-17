@@ -58,6 +58,16 @@ template <typename T>
 void init_stream(T & stream)
 {
 	stream.set_receive_buffer_size(1024 * 1024 * 5);
+	// Tracking, feedback and inputs as Wi-Fi voice: they win the medium against the incoming video, which halves
+	// their latency spikes on a busy link (only these small packets: the video keeps its own class)
+	try
+	{
+		stream.set_tos(IPTOS_DSCP_EF);
+	}
+	catch (std::exception & e)
+	{
+		spdlog::warn("Failed to set IP ToS to Expedited Forwarding: {}", e.what());
+	}
 }
 
 auto & port(sockaddr_in & sa)

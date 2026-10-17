@@ -19,10 +19,13 @@
 
 #include "configuration.h"
 #include "application.h"
+#include "decoder/decoder.h"
 #include "utils/contains.h"
 #include "utils/json_string.h"
 #include "wivrn_packets.h"
+#include "wivrn_config.h"
 
+#include <algorithm>
 #include <fstream>
 #include <functional>
 #include <magic_enum.hpp>
@@ -310,6 +313,12 @@ configuration::configuration(xr::system & system, xr::session & session, const s
 	{
 		spdlog::warn("Cannot read configuration: {}", e.what());
 	}
+	if (codec and not wivrn::decoder::supports_codec(*codec))
+	{
+		spdlog::warn("Saved codec {} is unavailable; using automatic codec selection", magic_enum::enum_name(*codec));
+		codec.reset();
+		save();
+	}
 }
 
 const std::vector<config_field> & configuration::config_fields()
@@ -317,6 +326,12 @@ const std::vector<config_field> & configuration::config_fields()
 	static const std::vector<config_field> fields = {
 	        scalar("resolution_scale", &configuration::resolution_scale),
 	        scalar("bitrate_bps", &configuration::bitrate_bps),
+	        scalar("desktop_bitrate_kbps", &configuration::desktop_bitrate_kbps),
+	        scalar("desktop_codec", &configuration::desktop_codec),
+	        scalar("fec_percent", &configuration::fec_percent),
+	        scalar("retransmit", &configuration::retransmit),
+	        scalar("simulated_loss_percent", &configuration::simulated_loss_percent),
+	        scalar("simulated_loss_burst", &configuration::simulated_loss_burst),
 	        scalar("enable_stream_gui", &configuration::enable_stream_gui),
 	        scalar("app_list_view", &configuration::app_list_view),
 	        scalar("app_icon_size", &configuration::app_icon_size),
@@ -401,14 +416,30 @@ void configuration::save()
 
 void configuration::set_stream_scale(float val)
 {
-	stream_scale = val;
+	// Kept as chosen: get_stream_scale applies the decoder's size limit
+	stream_scale = std::clamp(val, 0.2f, 1.f);
 }
 
 float configuration::get_stream_scale() const
 {
-	if (stream_scale)
-		return *stream_scale;
-	return get_default_stream_scale();
+	return std::min(stream_scale.value_or(get_default_stream_scale()), max_stream_scale());
+}
+
+float configuration::max_stream_scale() const
+{
+#if WIVRN_USE_V4L2
+	static const auto native_size = [] {
+		auto view = application::get_system().view_configuration_views(XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO)[0];
+		view = application::get_hmd_traits().override_view(view);
+		return std::max(view.recommendedImageRectWidth, view.recommendedImageRectHeight);
+	}();
+	// Iris mock tests passed at 2624 and failed at 2816; leave headroom at 2432 pixels per eye.
+	constexpr uint32_t max_encoded_size = 2432;
+	auto percent = std::min(100, int(std::floor(max_encoded_size / (native_size * resolution_scale) * 20)) * 5);
+	return percent / 100.f;
+#else
+	return 1.f;
+#endif
 }
 
 float configuration::get_default_stream_scale() const
