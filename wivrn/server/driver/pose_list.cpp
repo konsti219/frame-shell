@@ -199,7 +199,8 @@ void pose_list::add_sample(XrTime production_timestamp, XrTime timestamp, const 
 			        pose.angular_velocity.y,
 			        pose.angular_velocity.z};
 
-			orientation.dy.emplace(0.5 * (ω * q).coeffs());
+			const Eigen::Quaternionf dq = ω * q;
+			orientation.dy.emplace(0.5f * dq.w(), 0.5f * dq.x(), 0.5f * dq.y(), 0.5f * dq.z());
 		}
 	}
 

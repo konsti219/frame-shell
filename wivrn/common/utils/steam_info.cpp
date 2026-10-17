@@ -371,56 +371,65 @@ std::vector<wivrn::steam> wivrn::steam::find_installations()
 std::vector<wivrn::steam::application> wivrn::steam::list_applications()
 {
 	std::vector<wivrn::steam::application> res;
-	// Steam games, from VR manifest
+	// Installed Steam games, from the libraries' app manifests (as WayVR's dashboard lists them)
 	try
 	{
-		std::ifstream manifest(root / "config/steamapps.vrmanifest");
-		nlohmann::json json = nlohmann::json::parse(manifest);
-		for (auto & i: json["applications"])
+		using kv_list = std::vector<wivrn::vdf::keyvalue>;
+		static const kv_list none;
+		auto children = [](const wivrn::vdf::keyvalue & kv) -> const kv_list & {
+			auto list = std::get_if<kv_list>(&kv.value);
+			return list ? *list : none;
+		};
+		auto text = [](const wivrn::vdf::keyvalue & kv) -> std::string_view {
+			auto value = std::get_if<wivrn::vdf::string>(&kv.value);
+			return value ? value->data : std::string_view{};
+		};
+		wivrn::vdf::root libraries(root / "steamapps/libraryfolders.vdf");
+		for (const auto & library: children(libraries))
 		{
-			try
+			std::filesystem::path path;
+			const kv_list * apps = nullptr;
+			for (const auto & entry: children(library))
 			{
-				// Steam games have an url launch
-				// shortcuts may be in this file, or may not...
-				if (i["launch_type"] != "url")
-					continue;
-
-				std::string app_key = i["app_key"];
-				const char prefix[] = "steam.app.";
-				if (not app_key.starts_with(prefix))
-					continue;
-
-				application app{
-				        .appid = stoul(app_key.substr(strlen(prefix))),
-				        .url = i["url"],
-				};
-
-				for (auto [locale, items]: i["strings"].items())
-				{
-					if (auto it = items.find("name"); it != items.end())
-						app.name[locale] = *it;
-				}
-
-				if (not app.name.contains(""))
-				{
-					auto it = app.name.find("en_us");
-					if (it == app.name.end())
-						it = app.name.begin();
-					if (it != app.name.end())
-						app.name[""] = it->second;
-					else
-						continue; // skip unnamed app
-				}
-				res.push_back(std::move(app));
+				if (entry.key == "path")
+					path = text(entry);
+				else if (entry.key == "apps")
+					apps = &children(entry);
 			}
-			catch (std::exception & e)
+			for (const auto & app_entry: apps ? *apps : none)
 			{
-				std::cerr << "Failed to parse Steam VR manifest: " << e.what() << std::endl;
+				uint64_t appid;
+				if (std::from_chars(app_entry.key.data.begin(), app_entry.key.data.end(), appid).ec != std::errc{})
+					continue;
+				try
+				{
+					wivrn::vdf::root manifest(path / std::format("steamapps/appmanifest_{}.acf", appid));
+					application app{
+					        .appid = appid,
+					        .url = std::format("steam://rungameid/{}", appid),
+					};
+					for (const auto & field: children(manifest))
+					{
+						if (field.key == "name")
+							app.name[""] = text(field);
+						else if (field.key == "LastPlayed")
+							std::from_chars(text(field).data(), text(field).data() + text(field).size(), app.last_played);
+					}
+					// Steam's tools are in the libraries too; their manifests don't say so
+					auto & name = app.name[""];
+					bool tool = name.empty() or name.starts_with("Proton ") or name.starts_with("Steam Linux Runtime") or
+					            name.starts_with("Steamworks ") or name == "SteamVR";
+					if (not tool)
+						res.push_back(std::move(app));
+				}
+				catch (std::exception &)
+				{}
 			}
 		}
 	}
 	catch (std::exception & e)
 	{
+		std::cerr << "Failed to list Steam libraries: " << e.what() << std::endl;
 	}
 
 	// Shortcuts

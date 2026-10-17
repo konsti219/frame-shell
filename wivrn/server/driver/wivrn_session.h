@@ -37,6 +37,8 @@
 #include "wivrn_htc_face_tracker.h"
 #include "wivrn_ipc.h"
 #include "wivrn_packets.h"
+#include "audio_link.h"
+#include "frame_host.h"
 #include "wivrn_uinput.h"
 #include "xrt/xrt_results.h"
 #include "xrt/xrt_system.h"
@@ -87,6 +89,10 @@ class wivrn_session : public xrt_system_devices
 
 	tracking_control control;
 
+	// Frame shell space drag, see apply_drag_offset
+	XrPosef applied_drag{{0, 0, 0, 1}, {0, 0, 0}};
+	std::optional<xrt_pose> base_origin_offset;
+	void apply_drag_offset(const XrPosef & drag);
 	wivrn_hmd hmd;
 	wivrn_controller left_controller;
 	int32_t left_controller_index;
@@ -110,12 +116,27 @@ class wivrn_session : public xrt_system_devices
 	std::atomic<XrDuration> tracking_latency; // production to reception time
 
 	std::unique_ptr<audio_device> audio_handle;
+	audio_link::receiver mic_link;
 
 	// when sessions shall be destroyed, key is client id, value is timestamp
 	thread_safe<std::map<uint32_t, int64_t>> session_loss;
 
 	std::jthread net_thread;
 	std::jthread worker_thread;
+	std::unique_ptr<frame_host_session> desktop;
+	// Streamed monitors: where each one lies in the PC's whole desktop (x, y, w, h), for pointer input
+	std::mutex desktop_mutex;
+	std::map<uint32_t, std::array<float, 4>> desktop_regions;
+	// Next frame number of each monitor's video
+	std::map<uint32_t, uint32_t> desktop_frames;
+	// Each surface's last frames as sent (data and parity shards), to send again what the headset reports missing
+	struct sent_desktop_frame
+	{
+		uint32_t frame = -1;
+		std::vector<to_headset::desktop_video> shards;
+	};
+	std::map<uint32_t, std::array<sent_desktop_frame, 8>> sent_desktop;
+	void send_desktop_video(uint32_t surface, std::span<const uint8_t> data);
 
 	thread_safe<std::exception_ptr> net_exception;
 
@@ -164,6 +185,7 @@ public:
 	void operator()(from_headset::pin_check_3 &&) {}
 	void operator()(from_headset::headset_info_packet &&);
 	void operator()(const from_headset::settings_changed &);
+	void operator()(from_headset::stream_settings &&);
 	void operator()(from_headset::handshake &&) {}
 	void operator()(const from_headset::tracking &);
 	void operator()(from_headset::derived_pose &&);
@@ -174,6 +196,12 @@ public:
 	void operator()(from_headset::htc_body &&);
 	void operator()(from_headset::inputs &&);
 	void operator()(from_headset::hid::input && e);
+	void operator()(from_headset::shell_input && e);
+	void operator()(from_headset::shell_message && e);
+	void operator()(from_headset::desktop_keyframe && e);
+	void operator()(from_headset::link_settings && e);
+	void operator()(from_headset::video_nack &&);
+	void operator()(from_headset::desktop_nack &&);
 	void operator()(from_headset::timesync_response &&);
 	void operator()(from_headset::feedback &&);
 	void operator()(from_headset::battery &&);
@@ -212,6 +240,14 @@ public:
 			throw;
 		}
 	}
+
+	// Parity per frame in percent of its shards, from the headset (from_headset::link_settings)
+	std::atomic<uint8_t> fec_percent = 0;
+	struct transport_statistics {
+		int64_t started = 0;
+		uint64_t frames = 0, missing = 0, recovered_frames = 0, recovered_shards = 0, partial = 0, displayed = 0;
+		std::array<double, 6> stage_ms{};
+	} transport_stats;
 
 	template <typename T>
 	void send_control(T && packet)

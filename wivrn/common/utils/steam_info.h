@@ -35,6 +35,8 @@ public:
 		// localised names, with empty locale for default
 		std::unordered_map<std::string, std::string> name;
 		std::string url;
+		// Unix time, 0 if never
+		uint64_t last_played = 0;
 	};
 	struct icon
 	{

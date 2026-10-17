@@ -323,6 +323,9 @@ void wivrn_uinput::init_mouse()
 
 	ioctl_or_throw(fd, UI_SET_EVBIT, EV_KEY);
 	ioctl_or_throw(fd, UI_SET_EVBIT, EV_REL);
+	ioctl_or_throw(fd, UI_SET_EVBIT, EV_ABS);
+	ioctl_or_throw(fd, UI_SET_ABSBIT, ABS_X);
+	ioctl_or_throw(fd, UI_SET_ABSBIT, ABS_Y);
 
 	// buttons
 	ioctl_or_throw(fd, UI_SET_KEYBIT, BTN_LEFT);
@@ -338,6 +341,8 @@ void wivrn_uinput::init_mouse()
 	uinput_user_dev uidev;
 	fill_ids(uidev, 0x0839);
 	std::snprintf(uidev.name, sizeof(uidev.name), "WiVRn Mouse");
+	uidev.absmax[ABS_X] = 65535;
+	uidev.absmax[ABS_Y] = 65535;
 	write_or_throw(fd, &uidev, sizeof(uidev));
 	ioctl_or_throw(fd, UI_DEV_CREATE);
 }
@@ -381,4 +386,43 @@ void wivrn_uinput::init_gamepad()
 
 	write_or_throw(fd, &uidev, sizeof(uidev));
 	ioctl_or_throw(fd, UI_DEV_CREATE);
+}
+
+void wivrn_uinput::handle_shell_input(const wivrn::from_headset::shell_input & e)
+{
+	if (kbd_fd.get_fd() < 0) init_keyboard();
+	if (mouse_fd.get_fd() < 0) init_mouse();
+	if (!std::isfinite(e.x) || !std::isfinite(e.y)) return;
+	switch (e.kind)
+	{
+		case 0:
+			if (e.code > KEY_MAX) return;
+			if (e.x != 0) shell_keys.insert(e.code); else shell_keys.erase(e.code);
+			send_key(e.code, e.x != 0);
+			break;
+		case 1:
+			if (e.code > 2) return;
+			if (e.x != 0) shell_buttons.insert(e.code); else shell_buttons.erase(e.code);
+			send_button(e.code, e.x != 0);
+			break;
+		case 2:
+			emit_ev(mouse_fd.get_fd(), EV_ABS, ABS_X, std::clamp(e.x, 0.f, 1.f) * 65535);
+			emit_ev(mouse_fd.get_fd(), EV_ABS, ABS_Y, std::clamp(e.y, 0.f, 1.f) * 65535);
+			syn(mouse_fd.get_fd());
+			break;
+		case 3: {
+            shell_scroll_x += std::clamp(e.x, -12000.f, 12000.f) / 120.f;
+            shell_scroll_y += std::clamp(e.y, -12000.f, 12000.f) / 120.f;
+            const int horizontal = std::trunc(shell_scroll_x), vertical = std::trunc(shell_scroll_y);
+            shell_scroll_x -= horizontal; shell_scroll_y -= vertical;
+            mouse_scroll(vertical, horizontal);
+			break;
+        }
+		case 4:
+			for (auto key : shell_keys) send_key(key, false);
+			for (auto button : shell_buttons) send_button(button, false);
+			shell_keys.clear(); shell_buttons.clear();
+            shell_scroll_x = shell_scroll_y = 0;
+			break;
+	}
 }

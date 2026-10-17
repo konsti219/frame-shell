@@ -20,11 +20,15 @@
 
 #include "wivrn_session.h"
 
+#include "fec.h"
+
 #include "accept_connection.h"
 #include "application.h"
 #include "configuration.h"
 #include "driver/app_pacer.h"
 #include "driver/xrt_cast.h"
+#include "encoder/video_encoder.h"
+#include "math/m_api.h"
 #include "server/ipc_server.h"
 #include "utils/load_icon.h"
 #include "utils/method.h"
@@ -52,6 +56,8 @@
 #include "xrt/xrt_device.h"
 #include "xrt/xrt_session.h"
 
+#include <limits>
+#include <span>
 #include <algorithm>
 #include <chrono>
 #include <magic_enum.hpp>
@@ -379,6 +385,7 @@ void wivrn_session::start(ipc_server * server)
 void wivrn_session::stop()
 {
 	net_thread = std::jthread();
+	desktop.reset();
 	worker_thread = std::jthread();
 }
 
@@ -407,6 +414,7 @@ void wivrn_session::request_stop()
 
 void wivrn_session::pause_session()
 {
+	desktop.reset();
 	assert(mnd_ipc_server);
 
 	// notify clients about session pause
@@ -471,6 +479,43 @@ void wivrn_session::resume_session()
 	// resume session and notify clients
 
 	worker_thread = std::jthread([this](std::stop_token stop) { return run_worker(stop); });
+	try
+	{
+		char hostname[256] = "PC";
+		gethostname(hostname, sizeof(hostname) - 1);
+		desktop = std::make_unique<frame_host_session>(frame_host_session::callbacks{
+		        .surface = [this, source = std::string(hostname)](const frame_host_surface & surface) {
+			        {
+				        std::scoped_lock lock(desktop_mutex);
+				        desktop_regions[surface.id] = {surface.region[0], surface.region[1], surface.region[2], surface.region[3]};
+			        }
+			        send_control(to_headset::desktop_surface{
+			                .surface = surface.id,
+			                .width = uint16_t(surface.width),
+			                .height = uint16_t(surface.height),
+			                .name = surface.name ? surface.name : "",
+			                .source = source,
+			                .removed = false,
+			                .codec = surface.codec == 1 ? video_codec::h265 : video_codec::h264,
+			        });
+		        },
+		        .surface_removed = [this](uint32_t id) {
+			        {
+				        std::scoped_lock lock(desktop_mutex);
+				        desktop_regions.erase(id);
+			        }
+			        send_control(to_headset::desktop_surface{.surface = id, .removed = true});
+		        },
+		        .video = [this](uint32_t surface, std::span<const uint8_t> data) { send_desktop_video(surface, data); },
+		        .message = [this](std::span<const uint8_t> data) {
+			        send_control(to_headset::shell_message{.payload = {data.begin(), data.end()}});
+		        },
+		});
+	}
+	catch (const std::exception & e)
+	{
+		U_LOG_E("%s", e.what());
+	}
 	update_client_states(true, true);
 	hmd.update_presence(true, os_monotonic_get_ns());
 }
@@ -527,6 +572,25 @@ void wivrn_session::operator()(const from_headset::settings_changed & settings)
 	wivrn_ipc_socket_monado->send(std::move(settings));
 }
 
+void wivrn_session::operator()(from_headset::stream_settings && stream)
+{
+	U_LOG_I("Stream settings changed: render %dx%d, stream %dx%d",
+	        stream.render_eye_width,
+	        stream.render_eye_height,
+	        stream.stream_eye_width,
+	        stream.stream_eye_height);
+	// New applications copy the recommended render size into their IPC shared HMD description.
+	if (headset_info.render_eye_width != stream.render_eye_width or headset_info.render_eye_height != stream.render_eye_height)
+		hmd.set_render_size(stream.render_eye_width, stream.render_eye_height);
+	headset_info.render_eye_width = stream.render_eye_width;
+	headset_info.render_eye_height = stream.render_eye_height;
+	headset_info.stream_eye_width = stream.stream_eye_width;
+	headset_info.stream_eye_height = stream.stream_eye_height;
+	headset_info.supported_codecs = std::move(stream.supported_codecs);
+	headset_info.bit_depth = stream.bit_depth;
+	compositor.reconfigure();
+}
+
 static xrt_device_name get_name(interaction_profile profile)
 {
 	switch (profile)
@@ -581,6 +645,28 @@ static xrt_device_name get_name(interaction_profile profile)
 			return XRT_DEVICE_FRAME_CONTROLLER;
 	}
 	throw std::runtime_error("invalid interaction profile id " + std::to_string(int(profile)));
+}
+
+// The frame shell's space drag arrives out of the poses: apply it to the shared tracking origin, so every device
+// (SolarXR trackers too) and every reference space moves with it, as with a drag on the PC
+void wivrn_session::apply_drag_offset(const XrPosef & drag)
+{
+	if (std::memcmp(&drag, &applied_drag, sizeof(drag)) == 0)
+		return;
+	xrt_tracking_origin * origin = static_cast<xrt_device &>(hmd).tracking_origin;
+	if (not base_origin_offset)
+	{
+		xrt_pose base = XRT_POSE_IDENTITY;
+		xrt_space_overseer_get_tracking_origin_offset(space_overseer, origin, &base);
+		base_origin_offset = base;
+	}
+	xrt_pose stage_from_floor;
+	xrt_pose floor_from_stage = xrt_cast(drag);
+	math_pose_invert(&floor_from_stage, &stage_from_floor);
+	xrt_pose offset;
+	math_pose_transform(&*base_origin_offset, &stage_from_floor, &offset);
+	if (xrt_space_overseer_set_tracking_origin_offset(space_overseer, origin, &offset) == XRT_SUCCESS)
+		applied_drag = drag;
 }
 
 void wivrn_session::operator()(const from_headset::tracking & tracking)
@@ -662,6 +748,7 @@ void wivrn_session::operator()(const from_headset::tracking & tracking)
 		tracking_latency = std::lerp(tracking_latency.load(), latency, 0.1);
 	}
 
+	apply_drag_offset(tracking.drag_offset);
 	hmd.update_tracking(tracking, offset);
 	if (roles.left == left_hand_interaction_index)
 		left_hand_interaction.update_tracking(tracking, offset);
@@ -801,6 +888,46 @@ void wivrn_session::operator()(from_headset::timesync_response && timesync)
 
 void wivrn_session::operator()(from_headset::feedback && feedback)
 {
+	if (feedback.stream_index == 0) {
+		auto & stats = transport_stats;
+		auto now = os_monotonic_get_ns();
+		if (not stats.started) stats.started = now;
+		if (not feedback.received_from_decoder and not feedback.blitted) {
+			if (feedback.received_last_packet) {
+				++stats.frames;
+				stats.partial += feedback.partial;
+				stats.recovered_frames += feedback.fec_recovered != 0;
+				stats.recovered_shards += feedback.fec_recovered;
+			} else ++stats.missing;
+		}
+		if (feedback.times_displayed == 1 and feedback.encode_begin and feedback.send_begin) {
+			++stats.displayed;
+			stats.stage_ms[0] += (feedback.encode_end - feedback.encode_begin) / 1e6;
+			stats.stage_ms[1] += (feedback.received_first_packet - feedback.send_begin) / 1e6;
+			stats.stage_ms[2] += (feedback.received_last_packet - feedback.received_first_packet) / 1e6;
+			stats.stage_ms[3] += (feedback.received_from_decoder - feedback.sent_to_decoder) / 1e6;
+			stats.stage_ms[4] += (feedback.blitted - feedback.received_from_decoder) / 1e6;
+			stats.stage_ms[5] += (feedback.displayed - feedback.encode_begin) / 1e6;
+		}
+		if (now - stats.started >= 5'000'000'000) {
+			double divisor = std::max<uint64_t>(1, stats.displayed);
+			U_LOG_I("Transport: %.1f fps, %lu incomplete, %lu partial, FEC %lu frames/%lu shards; ms encode %.2f queue+network %.2f assembly %.2f decode %.2f render-wait %.2f total %.2f",
+			        stats.frames * 1e9 / (now - stats.started), stats.missing, stats.partial, stats.recovered_frames, stats.recovered_shards,
+			        stats.stage_ms[0] / divisor, stats.stage_ms[1] / divisor, stats.stage_ms[2] / divisor,
+			        stats.stage_ms[3] / divisor, stats.stage_ms[4] / divisor, stats.stage_ms[5] / divisor);
+			for (int eye = 0; eye < 2; ++eye)
+			{
+				auto & e = encoder_stats[eye];
+				uint64_t frames = std::max<uint64_t>(1, e.frames.exchange(0));
+				uint64_t predicted = std::max<uint64_t>(1, frames - e.keyframes);
+				U_LOG_I("Encoder %d: %lu keyframes, %lu skipped, %lu shards resent; reference %.1f frames back (max %lu); %.0f kB per frame (max %lu)",
+				        eye, e.keyframes.exchange(0), e.skipped.exchange(0), e.resent.exchange(0), double(e.ref_distance.exchange(0)) / predicted, e.max_ref_distance.exchange(0),
+				        e.bytes.exchange(0) / 1e3 / frames, e.max_bytes.exchange(0) / 1000);
+			}
+			stats = {};
+		}
+	}
+
 	clock_offset o = offset_est.get_offset();
 	if (not o)
 		return;
@@ -899,7 +1026,15 @@ void wivrn_session::operator()(from_headset::get_application_list && request)
 
 	auto apps = list_applications();
 
-	for (const auto & [id, app]: apps)
+	// Most recently played first, then by name
+	std::vector<std::pair<std::string, application>> sorted(apps.begin(), apps.end());
+	std::ranges::sort(sorted, [](const auto & a, const auto & b) {
+		if (a.second.last_played != b.second.last_played)
+			return a.second.last_played > b.second.last_played;
+		return a.second.name.at("") < b.second.name.at("");
+	});
+
+	for (const auto & [id, app]: sorted)
 	{
 		response.applications.emplace_back(
 		        std::move(id),
@@ -987,7 +1122,7 @@ void wivrn_session::operator()(const from_headset::stop_application & req)
 void wivrn_session::operator()(audio_data && data)
 {
 	if (audio_handle)
-		audio_handle->process_mic_data(std::move(data));
+		mic_link.receive(std::move(data), [&](audio_data && chunk) { audio_handle->process_mic_data(std::move(chunk)); });
 }
 
 void wivrn_session::operator()(to_monado::stop &&)
@@ -1089,6 +1224,7 @@ void wivrn_session::run_net(std::stop_token stop)
 		catch (const std::exception & e)
 		{
 			U_LOG_W("Network exception: %s, Session paused.", e.what());
+			connection->shutdown();
 			pause_session();
 
 			reconnect(stop);
@@ -1201,18 +1337,7 @@ std::pair<bool, std::optional<std::string>> wivrn_session::validate_headset_info
 
 	// stream settings
 	{
-		warn |= prev_info.render_eye_width != info.render_eye_width;
-		warn |= prev_info.render_eye_height != info.render_eye_height;
-		warn |= prev_info.stream_eye_width != info.stream_eye_width;
-		warn |= prev_info.stream_eye_height != info.stream_eye_height;
-
-		refuse |= prev_info.supported_codecs != info.supported_codecs;
-		refuse |= prev_info.bit_depth != info.bit_depth;
-
-		if (refuse)
-		{
-			return std::make_pair(false, "video codec mismatch.");
-		}
+		// Size and codec changes are applied by rebuilding the encoders in reconnect()
 	}
 
 	// audio settings
@@ -1311,6 +1436,23 @@ void wivrn_session::reconnect(std::stop_token stop)
 
 			headset_info.settings = info.settings;
 			(*this)(headset_info.settings);
+
+			if (headset_info.render_eye_width != info.render_eye_width or
+			    headset_info.render_eye_height != info.render_eye_height or
+			    headset_info.stream_eye_width != info.stream_eye_width or
+			    headset_info.stream_eye_height != info.stream_eye_height or
+			    headset_info.supported_codecs != info.supported_codecs or
+			    headset_info.bit_depth != info.bit_depth)
+			{
+				(*this)(from_headset::stream_settings{
+				        .render_eye_width = info.render_eye_width,
+				        .render_eye_height = info.render_eye_height,
+				        .stream_eye_width = info.stream_eye_width,
+				        .stream_eye_height = info.stream_eye_height,
+				        .supported_codecs = info.supported_codecs,
+				        .bit_depth = info.bit_depth,
+				});
+			}
 
 			headset_info.language = info.language;
 			headset_info.country = info.country;
@@ -1441,3 +1583,123 @@ void wivrn_session::destroy()
 	delete this;
 }
 } // namespace wivrn
+
+void wivrn::wivrn_session::operator()(from_headset::shell_input && event)
+{
+	if (event.kind == 2)
+	{
+		// Pointer position on one streamed monitor: map it into the whole desktop
+		std::scoped_lock lock(desktop_mutex);
+		auto region = desktop_regions.find(event.surface);
+		if (region == desktop_regions.end())
+			return;
+		event.x = region->second[0] + event.x * region->second[2];
+		event.y = region->second[1] + event.y * region->second[3];
+	}
+	if (uinput_handler)
+		uinput_handler->handle_shell_input(event);
+}
+
+void wivrn::wivrn_session::operator()(from_headset::shell_message && event)
+{
+	if (desktop)
+		desktop->receive(event.payload);
+}
+
+void wivrn::wivrn_session::operator()(from_headset::link_settings && event)
+{
+	U_LOG_I("Link: %u%% parity", event.fec_percent);
+	fec_percent = std::min<uint8_t>(event.fec_percent, 50);
+}
+
+void wivrn::wivrn_session::operator()(from_headset::video_nack && nack)
+{
+	compositor.on_nack(nack);
+}
+
+void wivrn::wivrn_session::operator()(from_headset::desktop_keyframe && event)
+{
+	if (desktop)
+		desktop->request_keyframe(event.surface);
+}
+
+// Shards an access unit for the stream socket (UDP when available): the headset drops incomplete frames and asks
+// for a keyframe, instead of video holding up control messages
+void wivrn::wivrn_session::send_desktop_video(uint32_t surface, std::span<const uint8_t> data)
+{
+	const uint8_t percent = has_stream() ? fec_percent.load() : 0;
+	const size_t shard_size = percent ? fec::block_size : to_headset::desktop_video::max_payload_size;
+	const size_t count = std::max<size_t>(1, (data.size() + shard_size - 1) / shard_size);
+	const auto parity_count = fec::parity_count(count, percent);
+	if (count + parity_count > std::numeric_limits<uint16_t>::max())
+		throw std::logic_error("Desktop frame exceeds the shard index range");
+	std::vector<to_headset::desktop_video> shards;
+	shards.reserve(count + parity_count);
+	std::vector<std::vector<uint8_t>> blocks;
+	{
+		std::scoped_lock lock(desktop_mutex);
+		uint32_t frame = desktop_frames[surface]++;
+		for (size_t shard = 0; shard < count; ++shard)
+		{
+			auto begin = data.begin() + std::min(data.size(), shard * shard_size);
+			auto end = data.begin() + std::min(data.size(), (shard + 1) * shard_size);
+			std::vector<uint8_t> payload(begin, end);
+			if (percent)
+			{
+				payload.resize(fec::block_size);
+				blocks.push_back(payload);
+			}
+			shards.push_back({.surface = surface, .frame = frame, .shard = uint16_t(shard), .shard_count = uint16_t(count), .parity_count = parity_count, .frame_size = uint32_t(data.size()), .payload = std::move(payload)});
+		}
+		if (percent)
+		{
+			auto parity = fec::encode(blocks, parity_count);
+			for (size_t i = 0; i < parity.size(); ++i)
+				shards.push_back({.surface = surface, .frame = frame, .shard = uint16_t(count + i), .shard_count = uint16_t(count), .parity_count = parity_count, .frame_size = uint32_t(data.size()), .payload = std::move(parity[i])});
+		}
+		auto & sent = sent_desktop[surface][frame % 8];
+		sent.frame = frame;
+		sent.shards = shards;
+	}
+	// Sending encrypts the payloads in place: these are copies of what's kept
+	for (auto & shard: shards)
+	{
+		try
+		{
+			send_stream(std::move(shard));
+		}
+		catch (const std::system_error &)
+		{
+		}
+	}
+}
+
+void wivrn::wivrn_session::operator()(from_headset::desktop_nack && nack)
+{
+	std::vector<to_headset::desktop_video> shards;
+	{
+		std::scoped_lock lock(desktop_mutex);
+		auto it = sent_desktop.find(nack.surface);
+		if (it == sent_desktop.end())
+			return;
+		const auto & sent = it->second[nack.frame % 8];
+		if (sent.frame != nack.frame)
+			return;
+		if (nack.shards.empty())
+			shards = sent.shards;
+		else
+			for (auto index: nack.shards)
+				if (index < sent.shards.size())
+					shards.push_back(sent.shards[index]);
+	}
+	for (auto & shard: shards)
+	{
+		try
+		{
+			send_stream(std::move(shard));
+		}
+		catch (const std::system_error &)
+		{
+		}
+	}
+}

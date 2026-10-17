@@ -44,6 +44,7 @@
 #include "wivrn_ipc.h"
 #include "wivrn_packets.h"
 #include "wivrn_sockets.h"
+#include "frame_abi.h"
 
 #include "wivrn_server_dbus.h"
 
@@ -58,6 +59,7 @@
 #include <memory>
 #include <poll.h>
 #include <random>
+#include <spawn.h>
 #include <sys/signalfd.h>
 #include <sys/un.h>
 #include <sys/wait.h>
@@ -71,6 +73,11 @@
 
 #include <shared/ipc_protocol.h>
 #include <util/u_file.h>
+
+extern "C"
+{
+#include <util/u_metrics.h>
+}
 
 // Insert the on load constructor to init trace marker.
 U_TRACE_TARGET_SETUP(U_TRACE_WHICH_SERVICE)
@@ -204,6 +211,7 @@ std::optional<std::jthread> connection_thread;
 std::unique_ptr<children_manager> children;
 
 bool quitting_main_loop;
+bool session_initialized;
 bool do_fork;
 bool do_active_runtime;
 #if WIVRN_FEATURE_DEBUG_GUI
@@ -241,74 +249,83 @@ void stop_publishing();
 
 void update_fsm();
 
-void start_server(configuration config)
+void run_server(configuration config)
 {
-	server_pid = do_fork ? fork() : 0;
-
-	if (server_pid < 0)
-	{
-		perror("fork");
-		g_main_loop_quit(main_loop);
-	}
-	else if (server_pid == 0)
-	{
-		if (do_fork)
-			setsid();
-
-		setenv("AMD_DEBUG", "lowlatencyenc", false);
-
-		// https://github.com/WiVRn/WiVRn/issues/695
-		// something is broken with Intel CCS under vaapi
-		setenv("INTEL_DEBUG", "noccs", false);
-
-		setenv("XRT_LOG", "info", false);
-
-		wivrn::ipc_server_cb server_cb;
-
-		ipc_server_main_info server_info{
-		        .udgci = {
-		                .window_title = "WiVRn",
+	setenv("AMD_DEBUG", "lowlatencyenc", false);
+	setenv("INTEL_DEBUG", "noccs", false);
+	setenv("XRT_LOG", "info", false);
+	wivrn::ipc_server_cb server_cb;
+	ipc_server_main_info server_info{
+	        .udgci = {
+	                .window_title = "WiVRn",
 #if WIVRN_FEATURE_DEBUG_GUI
-		                .open = (config.debug_gui or show_debug_gui) ? U_DEBUG_GUI_OPEN_ALWAYS : U_DEBUG_GUI_OPEN_AUTO,
+	                .open = (config.debug_gui or show_debug_gui) ? U_DEBUG_GUI_OPEN_ALWAYS : U_DEBUG_GUI_OPEN_AUTO,
 #else
-		                .open = U_DEBUG_GUI_OPEN_NEVER,
+	                .open = U_DEBUG_GUI_OPEN_NEVER,
 #endif
-		        },
-		        .no_stdin = true,
-		};
+	        },
+	        .no_stdin = true,
+	};
+	u_metrics_init();
+	int ret = ipc_server_main_common(&server_info, &server_cb, nullptr);
+	u_metrics_close();
+	exit(ret);
+}
 
-		try
-		{
-			exit(ipc_server_main_common(&server_info, &server_cb, nullptr));
-		}
-		catch (std::exception & e)
-		{
-			std::cerr << e.what() << std::endl;
-			exit(EXIT_FAILURE);
-		}
+void spawn_server(TCP tcp)
+{
+	int bootstrap[2];
+	if (pipe2(bootstrap, O_CLOEXEC) < 0)
+		throw std::system_error(errno, std::generic_category());
+	fd_base bootstrap_read{bootstrap[0]}, bootstrap_write{bootstrap[1]};
+	auto settings = nlohmann::json{{"state", int(enc_state)}, {"pin", pin}}.dump();
+	if (write(bootstrap_write, settings.data(), settings.size()) != ssize_t(settings.size()))
+		throw std::system_error(errno, std::generic_category());
+	bootstrap_write = fd_base{};
 
-		__builtin_unreachable();
-	}
-	else
+	posix_spawn_file_actions_t actions;
+	posix_spawn_file_actions_init(&actions);
+	const int descriptors[] = {tcp.get_fd(), control_pipe_fds[1], listen_socket, bootstrap_read.get_fd()};
+	for (size_t i = 0; i < std::size(descriptors); ++i)
+		posix_spawn_file_actions_adddup2(&actions, descriptors[i], 100 + i);
+	posix_spawnattr_t attributes;
+	posix_spawnattr_init(&attributes);
+	posix_spawnattr_setflags(&attributes, POSIX_SPAWN_SETSID);
+	std::vector<std::string> args{"wivrn-server", "--session", "100", "101", "102", "103"};
+	auto config = configuration::get_config_file();
+	if (!config.empty())
 	{
-		std::cerr << "Server started, PID " << server_pid << std::endl;
-
-		assert(server_watch == 0);
-		assert(server_kill_watch == 0);
-		wivrn_server_set_session_running(dbus_server, true);
-		server_watch = g_child_watch_add(server_pid, [](pid_t, int status, void *) {
-			wivrn_server_set_session_running(dbus_server, false);
-			display_child_status(status, "Server");
-			g_source_remove(server_watch);
-			if (server_kill_watch)
-				g_source_remove(server_kill_watch);
-
-			server_watch = 0;
-			server_kill_watch = 0;
-
-			update_fsm(); }, nullptr);
+		args.emplace_back("-f");
+		args.push_back(config.string());
 	}
+	std::vector<char *> argv;
+	for (auto & arg: args)
+		argv.push_back(arg.data());
+	argv.push_back(nullptr);
+	int error = posix_spawn(&server_pid, "/proc/self/exe", &actions, &attributes, argv.data(), environ);
+	posix_spawnattr_destroy(&attributes);
+	posix_spawn_file_actions_destroy(&actions);
+	if (error)
+		throw std::system_error(error, std::generic_category());
 
+	session_initialized = false;
+	std::cerr << "Server started, PID " << server_pid << std::endl;
+	assert(server_watch == 0);
+	assert(server_kill_watch == 0);
+	wivrn_server_set_session_running(dbus_server, true);
+	server_watch = g_child_watch_add(server_pid, [](pid_t, int status, void *) {
+        wivrn_server_set_session_running(dbus_server, false);
+        display_child_status(status, "Server");
+        g_source_remove(server_watch);
+        if (server_kill_watch) g_source_remove(server_kill_watch);
+        server_watch = 0;
+        server_kill_watch = 0;
+        if (WIFEXITED(status) && WEXITSTATUS(status) == 73)
+            delay_next_try *= 2;
+        // Monado unlinks its socket on exit, so the next session needs a newly bound listener.
+        close(listen_socket);
+        listen_socket = create_listen_socket();
+        update_fsm(); }, nullptr);
 	if (do_active_runtime)
 		runtime_setter.emplace();
 }
@@ -319,6 +336,7 @@ void kill_server()
 
 	// Send SIGTERM after 1s if it is still running
 	server_kill_watch = g_timeout_add(3500, [](void *) {
+        server_kill_watch = 0;
 		assert(server_pid > 0);
 		kill(-server_pid, SIGTERM);
 		return G_SOURCE_REMOVE; }, 0);
@@ -442,7 +460,7 @@ gboolean headset_connected_success(void *)
 	expose_known_keys_on_dbus();
 
 	configuration c;
-	start_server(c);
+	run_server(c);
 	try
 	{
 		children->start_application(c.application);
@@ -490,6 +508,20 @@ gboolean headset_connected(gint fd, GIOCondition condition, gpointer user_data)
 	stop_listening();
 	stop_publishing();
 
+	if (do_fork)
+	{
+		try
+		{
+			spawn_server(std::move(tcp));
+		}
+		catch (const std::exception & e)
+		{
+			std::cerr << "Starting session failed: " << e.what() << std::endl;
+			update_fsm();
+		}
+		return G_SOURCE_CONTINUE;
+	}
+
 	connection_thread.emplace([](std::stop_token stop_token, TCP && tcp, std::string pin, wivrn_connection::encryption_state enc_state) {
 		try
 		{
@@ -521,6 +553,22 @@ gboolean control_received(gint fd, GIOCondition condition, gpointer user_data)
 	{
 		std::visit(utils::overloaded{
 		                   [&](const wivrn::from_headset::headset_info_packet & info) {
+			                   if (!session_initialized)
+			                   {
+				                   session_initialized = true;
+				                   delay_next_try = default_delay_next_try;
+				                   expose_known_keys_on_dbus();
+				                   if (enc_state == wivrn_connection::encryption_state::pairing)
+					                   set_encryption_state(wivrn_connection::encryption_state::enabled);
+				                   try
+				                   {
+					                   children->start_application(configuration().application);
+				                   }
+				                   catch (const std::exception & e)
+				                   {
+					                   std::cerr << "Failed to start application: " << e.what() << std::endl;
+				                   }
+			                   }
 			                   on_headset_info_packet(info);
 			                   inhibitor.emplace();
 			                   wivrn_server_set_headset_connected(dbus_server, true);
@@ -1023,12 +1071,14 @@ int main(int argc, char * argv[])
 	CLI::App app;
 
 	std::string config_file;
+	std::vector<int> session_fds;
+	app.add_option("--session", session_fds)->expected(4)->group("");
 	app.add_option("-f", config_file, "configuration file")->option_text("FILE")->check(CLI::ExistingFile);
 	auto version_flag = app.add_flag("--version")->description("print version and exit");
 	auto no_active_runtime = app.add_flag("--no-manage-active-runtime")->description("don't set the active runtime on connection");
 	auto early_active_runtime = app.add_flag("--early-active-runtime")->description("forcibly manages the active runtime even if no headset present");
 	auto no_instructions = app.add_flag("--no-instructions")->group("");
-	auto no_fork = app.add_flag("--no-fork")->description("disable fork to serve connection")->group("Debug");
+	auto no_fork = app.add_flag("--no-fork")->description("disable the separate session process")->group("Debug");
 	auto no_publish = app.add_flag("--no-publish-service")->description("disable publishing the service through avahi");
 	auto no_encrypt = app.add_flag("--no-encrypt")->description("disable encryption")->group("Debug");
 #if WIVRN_FEATURE_DEBUG_GUI
@@ -1045,6 +1095,36 @@ int main(int argc, char * argv[])
 
 	if (not config_file.empty())
 		configuration::set_config_file(config_file);
+
+	if (!session_fds.empty())
+	{
+		try
+		{
+			listen_socket = session_fds[2];
+			wivrn_ipc_socket_monado.emplace(session_fds[1]);
+			fd_base bootstrap{session_fds[3]};
+			std::string settings;
+			char buffer[128];
+			ssize_t count;
+			while ((count = read(bootstrap, buffer, sizeof(buffer))) > 0)
+				settings.append(buffer, size_t(count));
+			if (count < 0)
+				throw std::system_error(errno, std::generic_category());
+			auto value = nlohmann::json::parse(settings);
+			auto state = wivrn_connection::encryption_state(value.at("state").get<int>());
+			connection = std::make_unique<wivrn_connection>(std::stop_token{}, state, value.at("pin").get<std::string>(), TCP(session_fds[0]));
+			run_server(configuration());
+		}
+		catch (const wivrn::incorrect_pin &)
+		{
+			return 73;
+		}
+		catch (const std::exception & e)
+		{
+			std::cerr << "Session failed: " << e.what() << std::endl;
+			return EXIT_FAILURE;
+		}
+	}
 
 	if (*early_active_runtime)
 	{
