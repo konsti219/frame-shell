@@ -120,6 +120,14 @@ incoming video packets in runs of about that many packets.
 
 The WiVRn tab shows the Wi-Fi link (signal, rates) and the VR stream's freezes over 50 ms in the last 5 s.
 
+### Defoveation in the runtime
+
+With frame-monado's `XR_FRAME_foveated_projection`, the client copies the decoded (foveated) frame 1:1 and attaches
+the per-axis foveation segments to the projection layer; Monado expands it in its distortion pass. That skips the
+client's full-size pass (1.75 → 0.45 ms GPU) and a 3240² write and read per frame, for ~1 ms more in Monado's pass:
+~0.5 W less in the spin test. Alpha streams, the stream GUI's dimming and the foveation tint use the old pass;
+`runtime_defoveation: false` in `client.json` forces it.
+
 ### Eye expressions
 
 The headset client runs Babble Frame Runtime's eye model (vendored in `wivrn/client/frame_eyes/babble/`, GPL-3.0;

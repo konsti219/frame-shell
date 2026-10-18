@@ -89,6 +89,8 @@ public:
 	bool eye_expressions = true;
 	// One eye model update per this many camera frames
 	uint32_t eye_expressions_divisor = 1;
+	// Let the runtime expand the foveated stream (XR_FRAME_foveated_projection) instead of a full-size pass here
+	bool runtime_defoveation = true;
 	uint8_t bit_depth = 10;
 
 	bool passthrough_enabled = false;

@@ -32,6 +32,8 @@
 #define GLM_FORCE_RADIANS
 
 #include "stream.h"
+#include "xr/frame_foveated_projection.h"
+#include "wivrn_foveation.h"
 #ifndef __ANDROID__
 #endif
 
@@ -1151,8 +1153,43 @@ void scenes::stream::render(const XrFrameState & frame_state)
 		const float scale = std::lerp(1, constants::stream::dimming_scale, x);
 		const float bias = std::lerp(0, constants::stream::dimming_bias, x);
 
+		// The runtime expands the foveated image itself (XR_FRAME_foveated_projection): copy it 1:1 and attach the
+		// mapping, instead of expanding it to the full render size here and resampling that again in the runtime
+		bool foveated_layer = application::get_config().runtime_defoveation and
+		                      instance.has_extension(XR_FRAME_FOVEATED_PROJECTION_EXTENSION_NAME) and not use_alpha and
+		                      scale == 1 and bias == 0;
+#ifndef __ANDROID__
+		foveated_layer = foveated_layer and not frame_shell::foveation_debug.load(std::memory_order_relaxed);
+#endif
+		auto copy_foveation = foveation;
+		for (size_t view = 0; foveated_layer and view < view_count; view++)
+		{
+			if (foveated_layer_cache[view] != foveation[view])
+			{
+				wivrn::foveation_parameter tables;
+				wivrn::generate_foveation(foveation[view], tables);
+				auto & info = foveated_layer_info[view];
+				info = {.type = XR_TYPE_COMPOSITION_LAYER_PROJECTION_FOVEATION_FRAME};
+				foveated_layer_valid[view] = tables.x.size() <= XR_FOVEATION_MAX_SEGMENTS_FRAME and
+				                             tables.y.size() <= XR_FOVEATION_MAX_SEGMENTS_FRAME;
+				for (auto [axis, counts]: {std::pair{&info.x, &tables.x}, std::pair{&info.y, &tables.y}})
+				{
+					axis->segmentCount = std::min<size_t>(counts->size(), XR_FOVEATION_MAX_SEGMENTS_FRAME);
+					axis->centerSegment = (counts->size() - 1) / 2;
+					std::copy_n(counts->begin(), axis->segmentCount, axis->pixelCounts);
+				}
+				foveated_layer_cache[view] = foveation[view];
+			}
+			foveated_layer = foveated_layer and foveated_layer_valid[view];
+			copy_foveation[view].x.source_size = foveation[view].x.encoded_size;
+			copy_foveation[view].y.source_size = foveation[view].y.encoded_size;
+		}
+		if (foveated_layer)
+			for (size_t view = 0; view < view_count; view++)
+				extents[view] = {copy_foveation[view].x.source_size, copy_foveation[view].y.source_size};
+
 		defoveator->defoveate(command_buffer,
-		                      foveation,
+		                      foveated_layer ? copy_foveation : foveation,
 		                      images,
 		                      {scale, scale, scale, 1.},
 		                      {bias, bias, bias, 0.},
@@ -1241,6 +1278,7 @@ void scenes::stream::render(const XrFrameState & frame_state)
 			layer_view[view] =
 			        {
 			                .type = XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW,
+			                .next = foveated_layer ? &foveated_layer_info[view] : nullptr,
 			                .pose = pose[view],
 			                .fov = fov[view],
 

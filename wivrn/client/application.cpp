@@ -18,6 +18,7 @@
  */
 
 #include "application.h"
+#include "xr/frame_foveated_projection.h"
 
 #include "openxr/openxr.h"
 #include "scene.h"
@@ -1364,6 +1365,7 @@ void application::initialize()
 	        XR_KHR_MAINTENANCE1_EXTENSION_NAME,
 	        XR_KHR_VISIBILITY_MASK_EXTENSION_NAME,
 	        XR_KHR_VULKAN_SWAPCHAIN_FORMAT_LIST_EXTENSION_NAME,
+	        XR_FRAME_FOVEATED_PROJECTION_EXTENSION_NAME,
 
 	        XR_EXT_EYE_GAZE_INTERACTION_EXTENSION_NAME,
 	        XR_EXT_HAND_INTERACTION_EXTENSION_NAME,

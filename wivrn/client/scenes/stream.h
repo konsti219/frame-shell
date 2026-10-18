@@ -32,6 +32,7 @@
 #include "wifi_lock.h"
 #include "wivrn_client.h"
 #include "wivrn_packets.h"
+#include "xr/frame_foveated_projection.h"
 #include "xr/space.h"
 #ifndef __ANDROID__
 #include "linux/frame_shell.h"
@@ -177,6 +178,10 @@ private:
 	xr::swapchain swapchain;
 
 	std::optional<audio> audio_handle;
+	// XR_FRAME_foveated_projection per view, regenerated when the frame's foveation changes
+	std::array<std::optional<wivrn::foveation_description>, 2> foveated_layer_cache;
+	std::array<XrCompositionLayerProjectionFoveationFRAME, 2> foveated_layer_info{};
+	std::array<bool, 2> foveated_layer_valid{};
 #if WIVRN_FRAME_EYES
 	std::unique_ptr<frame_eyes::tracker> eye_tracker;
 #endif
