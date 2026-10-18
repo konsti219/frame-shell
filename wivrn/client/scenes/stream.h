@@ -36,6 +36,9 @@
 #ifndef __ANDROID__
 #include "linux/frame_shell.h"
 #endif
+#if WIVRN_FRAME_EYES
+#include "frame_eyes/tracker.h"
+#endif
 #include <chrono>
 #include <deque>
 #include <map>
@@ -179,6 +182,9 @@ private:
 	xr::swapchain swapchain;
 
 	std::optional<audio> audio_handle;
+#if WIVRN_FRAME_EYES
+	std::unique_ptr<frame_eyes::tracker> eye_tracker;
+#endif
 
 	std::optional<xr::hand_tracker> left_hand;
 	std::optional<xr::hand_tracker> right_hand;
@@ -337,6 +343,7 @@ public:
 	std::string shell_state;
 	std::string shell_video_debug = "null";
 	std::string shell_audio_debug = "null";
+	std::string shell_eyes_debug = "null";
 	std::chrono::steady_clock::time_point shell_next_audio_log{};
 	std::string shell_desktop_debug = "[]";
 	// The last five seconds of the VR stream (render thread), for the WiVRn tab

@@ -30,12 +30,14 @@
 #include "application.h"
 #include "utils/i18n.h"
 #include "utils/named_thread.h"
+#include "utils/xdg_base_directory.h"
 
 #include <arpa/inet.h>
 #include <ifaddrs.h>
 #include <netinet/in.h>
 #include <random>
 #include <spdlog/spdlog.h>
+#include <system_error>
 #include <uni_algo/case.h>
 
 #ifndef __ANDROID__
@@ -282,6 +284,30 @@ void scenes::stream::operator()(to_headset::video_stream_description && desc)
 	{
 		tracking_thread = utils::named_thread("tracking_thread", &stream::tracking, this);
 	}
+#if WIVRN_FRAME_EYES
+	if (not eye_tracker and application::get_config().eye_expressions)
+		eye_tracker = std::make_unique<frame_eyes::tracker>(
+		        xdg_data_home() / "frame-shell" / "eye_split96_uncapped_fp16.pte",
+		        application::get_config().eye_expressions_divisor,
+		        [this](from_headset::frame_eyes && eyes) {
+			        if (state_ == state::shutdown)
+				        return;
+			        try
+			        {
+				        network_session->send_stream(std::move(eyes));
+			        }
+			        catch (const wivrn::socket_shutdown &)
+			        {
+				        exit();
+			        }
+			        catch (const std::system_error & e)
+			        {
+				        spdlog::info("Exception in eye tracking sender, exiting: {}", e.what());
+				        exit();
+			        }
+		        },
+		        [this]() { return instance.now(); });
+#endif
 }
 
 void scenes::stream::operator()(to_headset::refresh_rate_change && rate)
@@ -709,6 +735,9 @@ void scenes::stream::poll_shell()
     if (auto now = std::chrono::steady_clock::now(); now >= shell_next_debug) {
         shell_next_debug = now + std::chrono::seconds(1);
         shell_audio_debug = audio_handle ? audio_handle->statistics_json() : "null";
+#if WIVRN_FRAME_EYES
+        shell_eyes_debug = eye_tracker ? eye_tracker->statistics_json() : "null";
+#endif
         if (now >= shell_next_audio_log) {
             shell_next_audio_log = now + std::chrono::seconds(5);
             spdlog::info("Audio: {}", shell_audio_debug);
@@ -729,7 +758,7 @@ void scenes::stream::poll_shell()
 		first = false;
 	}
 	update_desktop_stats();
-	json += R"(],"settings":)" + frame_shell::settings_json(application::get_config()) + R"(,"video_debug":)" + shell_video_debug + R"(,"audio_debug":)" + shell_audio_debug + R"(,"desktop_debug":)" + shell_desktop_debug;
+	json += R"(],"settings":)" + frame_shell::settings_json(application::get_config()) + R"(,"video_debug":)" + shell_video_debug + R"(,"audio_debug":)" + shell_audio_debug + R"(,"desktop_debug":)" + shell_desktop_debug + R"(,"eyes_debug":)" + shell_eyes_debug;
 	{
 		std::scoped_lock lock(shell_vr_debug_mutex);
 		json += R"(,"vr_debug":)" + shell_vr_debug;

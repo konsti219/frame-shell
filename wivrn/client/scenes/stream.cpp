@@ -637,6 +637,10 @@ scenes::stream::~stream()
 	if (network_thread.joinable())
 		network_thread.join();
 
+#if WIVRN_FRAME_EYES
+	eye_tracker.reset();
+#endif
+
 	if (*fence)
 		wait_for_frame();
 	current_blit_handles.fill(nullptr);
@@ -1569,6 +1573,10 @@ void scenes::stream::on_xr_event(const xr::event & event)
 			        .present = (bool)event.user_presence_changed.isUserPresent,
 			        .change_time = instance.now(),
 			});
+#if WIVRN_FRAME_EYES
+			if (eye_tracker)
+				eye_tracker->set_present(event.user_presence_changed.isUserPresent);
+#endif
 			break;
 		case XR_TYPE_EVENT_DATA_INTERACTION_PROFILE_CHANGED:
 			on_interaction_profile_changed(event.interaction_profile_changed);

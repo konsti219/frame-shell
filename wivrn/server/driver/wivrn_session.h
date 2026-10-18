@@ -38,6 +38,7 @@
 #include "wivrn_ipc.h"
 #include "wivrn_packets.h"
 #include "audio_link.h"
+#include "eye_osc.h"
 #include "frame_host.h"
 #include "wivrn_uinput.h"
 #include "xrt/xrt_results.h"
@@ -124,6 +125,7 @@ class wivrn_session : public xrt_system_devices
 	std::jthread net_thread;
 	std::jthread worker_thread;
 	std::unique_ptr<frame_host_session> desktop;
+	std::unique_ptr<eye_osc> eye_osc_sender;
 	// Streamed monitors: where each one lies in the PC's whole desktop (x, y, w, h), for pointer input
 	std::mutex desktop_mutex;
 	std::map<uint32_t, std::array<float, 4>> desktop_regions;
@@ -201,6 +203,7 @@ public:
 	void operator()(from_headset::desktop_keyframe && e);
 	void operator()(from_headset::link_settings && e);
 	void operator()(from_headset::video_nack &&);
+	void operator()(from_headset::frame_eyes &&);
 	void operator()(from_headset::desktop_nack &&);
 	void operator()(from_headset::timesync_response &&);
 	void operator()(from_headset::feedback &&);

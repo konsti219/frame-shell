@@ -27,3 +27,18 @@ ENV PKG_CONFIG_ALLOW_CROSS=1 PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgcon
 ENV SHADERC_LIB_DIR=/usr/lib/x86_64-linux-gnu
 RUN apt-get update && apt-get install -y --no-install-recommends libcurl4-openssl-dev:arm64 libpng-dev:arm64 libasound2-dev:arm64 libfontconfig-dev:arm64 libharfbuzz-dev:arm64 libfreetype-dev:arm64 && rm -rf /var/lib/apt/lists/*
 RUN apt-get update && apt-get install -y --no-install-recommends libopengl-dev:arm64 libdav1d-dev:arm64 && rm -rf /var/lib/apt/lists/*
+
+# ExecuTorch (XNNPACK) for the headset's eye model; its kernel codegen needs torchgen, which only ships in the torch wheel
+COPY scripts/aarch64-toolchain.cmake /opt/aarch64-toolchain.cmake
+COPY scripts/build-executorch.sh /opt/build-executorch.sh
+RUN curl -fL 'https://download.pytorch.org/whl/cpu/torch-2.13.0%2Bcpu-cp313-cp313-manylinux_2_28_x86_64.whl' -o /tmp/torch.whl \
+    && echo '3fbf9c9d1f3c10c2d59d04aca426dee9ccc6ceb32d255c61e93acc3b4f75fae6  /tmp/torch.whl' | sha256sum -c - \
+    && unzip -q /tmp/torch.whl 'torchgen/*' -d /tmp/torchgen && rm /tmp/torch.whl \
+    && git clone -q --filter=blob:none --no-checkout https://github.com/pytorch/executorch.git /tmp/executorch \
+    && git -C /tmp/executorch checkout -q e4d02f41f7909e8ed5bf4a14ffc520d733453d9f \
+    && git -C /tmp/executorch submodule update --init --depth 1 \
+        backends/xnnpack/third-party/FP16 backends/xnnpack/third-party/FXdiv backends/xnnpack/third-party/XNNPACK \
+        backends/xnnpack/third-party/cpuinfo backends/xnnpack/third-party/pthreadpool \
+        third-party/flatbuffers third-party/flatcc third-party/json third-party/gflags \
+    && CCACHE_DISABLE=1 PYTHONPATH=/tmp/torchgen bash /opt/build-executorch.sh /tmp/executorch /opt/executorch-arm64 \
+    && rm -rf /tmp/executorch /tmp/torchgen /tmp/et-build

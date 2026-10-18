@@ -146,6 +146,17 @@ wivrn::wivrn_session::wivrn_session(std::unique_ptr<wivrn_connection> connection
 	static_xdevs[static_xdev_count++] = &gamepad_device.emplace(*this);
 
 	auto conf = configuration();
+	if (not conf.eye_osc.empty())
+	{
+		try
+		{
+			eye_osc_sender = std::make_unique<eye_osc>(conf.eye_osc, conf.eye_osc_prefix);
+		}
+		catch (std::exception & e)
+		{
+			U_LOG_E("Eye data over OSC disabled: %s", e.what());
+		}
+	}
 
 #if WIVRN_FEATURE_STEAMVR_LIGHTHOUSE
 
@@ -1615,6 +1626,12 @@ void wivrn::wivrn_session::operator()(from_headset::link_settings && event)
 void wivrn::wivrn_session::operator()(from_headset::video_nack && nack)
 {
 	compositor.on_nack(nack);
+}
+
+void wivrn::wivrn_session::operator()(from_headset::frame_eyes && eyes)
+{
+	if (eye_osc_sender)
+		eye_osc_sender->send(eyes);
 }
 
 void wivrn::wivrn_session::operator()(from_headset::desktop_keyframe && event)

@@ -57,6 +57,8 @@ if(CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64" AND NOT ANDROID)
     set(_WIVRN_USE_V4L2_DEFAULT ON)
 endif()
 option(WIVRN_USE_V4L2 "Enable V4L2 hardware video decoder" ${_WIVRN_USE_V4L2_DEFAULT})
+option(WIVRN_FRAME_EYES "Steam Frame eye expressions (needs ExecuTorch, see WIVRN_EXECUTORCH_PREFIX)" OFF)
+set(WIVRN_EXECUTORCH_PREFIX "" CACHE PATH "Install prefix of the ExecuTorch runtime for WIVRN_FRAME_EYES")
 unset(_WIVRN_USE_V4L2_DEFAULT)
 
 if(WIVRN_OPTIMIZE_SHADERS AND WIVRN_DEBUG_SHADERS)

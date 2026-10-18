@@ -29,6 +29,7 @@ install -m644 "$stage/frame-shell.desktop" "$HOME/.local/share/applications/fram
 install -m755 "$stage/frame-shell-client" "$HOME/.local/bin/frame-shell-client"
 install -m755 "$stage/wayvr" "$HOME/.local/bin/wayvr"
 install -m755 "$stage/"*.so* "$HOME/.local/lib/frame-shell/"
+install -Dm644 "$stage/eye_split96_uncapped_fp16.pte" "$HOME/.local/share/frame-shell/eye_split96_uncapped_fp16.pte"
 install -m644 "$stage/not-with-shell.conf" "$HOME/.config/systemd/user/monado-wivrn.service.d/not-with-shell.conf"
 install -m644 "$stage/not-with-shell.conf" "$HOME/.config/systemd/user/monado-wayvr.service.d/not-with-shell.conf"
 touch "$HOME/.config/steamframe-enable-shell"

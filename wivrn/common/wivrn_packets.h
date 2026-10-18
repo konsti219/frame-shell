@@ -754,6 +754,21 @@ struct link_settings
 	uint8_t fec_percent;
 };
 
+// Steam Frame eyes: per-eye gaze from Valve's eye tracker, lids and pupils from Babble's eye model
+struct frame_eyes
+{
+	XrTime timestamp;
+	// Left and right eye of the wearer, head space (-Z forward)
+	std::array<XrVector3f, 2> gaze;
+	bool gaze_valid;
+	// 0 closed to 1 at the wearer's neutral opening; widen is 0..1 beyond it
+	std::array<float, 2> openness;
+	std::array<float, 2> widen;
+	bool lids_valid;
+	// 0..1 with 0.5 at the wearer's baseline, negative until a baseline exists
+	std::array<float, 2> dilation;
+};
+
 // Data shards of a video frame that didn't arrive, for the server to send again
 struct video_nack
 {
@@ -829,7 +844,8 @@ using packets = std::variant<
         link_settings,
         stream_settings,
         video_nack,
-        desktop_nack>;
+        desktop_nack,
+        frame_eyes>;
 } // namespace from_headset
 
 namespace to_headset

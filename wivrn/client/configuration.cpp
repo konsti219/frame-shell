@@ -332,6 +332,8 @@ const std::vector<config_field> & configuration::config_fields()
 	        scalar("retransmit", &configuration::retransmit),
 	        scalar("simulated_loss_percent", &configuration::simulated_loss_percent),
 	        scalar("simulated_loss_burst", &configuration::simulated_loss_burst),
+	        scalar("eye_expressions", &configuration::eye_expressions),
+	        scalar("eye_expressions_divisor", &configuration::eye_expressions_divisor),
 	        scalar("enable_stream_gui", &configuration::enable_stream_gui),
 	        scalar("app_list_view", &configuration::app_list_view),
 	        scalar("app_icon_size", &configuration::app_icon_size),

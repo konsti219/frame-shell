@@ -59,6 +59,9 @@ struct configuration
 	bool use_steamvr_lh = false;
 	std::optional<int64_t> lh_max_extrapolation;
 	std::optional<float> lh_stick_deadzone;
+	// Steam Frame eye data as VRCFT avatar parameters over OSC: host:port (empty: off) and parameter prefix
+	std::string eye_osc = "127.0.0.1:9000";
+	std::string eye_osc_prefix = "/FT";
 	bool hid_forwarding = false;
 	bool tcp_only = false;
 	int port = wivrn::default_port;

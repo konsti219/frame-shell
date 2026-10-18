@@ -16,6 +16,7 @@ cmake -S /work/wivrn -B "$build/client" -G Ninja \
     -DWIVRN_BUILD_CLIENT=ON -DWIVRN_BUILD_SERVER=OFF -DWIVRN_BUILD_DASHBOARD=OFF \
     -DWIVRN_BUILD_WIVRNCTL=OFF -DWIVRN_USE_SYSTEM_LIBKTX=ON -DWIVRN_COMPRESS_GLB=OFF \
     -DWIVRN_USE_SYSTEM_BOOST=OFF -DWIVRN_USE_SYSTEM_OPENXR=OFF -DWIVRN_USE_V4L2=ON \
+    -DWIVRN_FRAME_EYES=ON -DWIVRN_EXECUTORCH_PREFIX=/opt/executorch-arm64 \
     -DWIVRN_WERROR=OFF "${flags[@]}"
 cmake --build "$build/client" --parallel "$(nproc)"
 mkdir -p "$build/host-libs"

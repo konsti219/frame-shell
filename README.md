@@ -122,3 +122,20 @@ Host logs report every five seconds the VR delivery and FEC counts, average enco
 render-wait and total times, and per eye the encoder's keyframes, skipped frames, reference distance and frame
 sizes. The headset logs the longest gap per eye without a new frame. These are software timestamps, not photon
 latency.
+
+### Eye expressions
+
+The headset client runs Babble Frame Runtime's eye model (vendored in `wivrn/client/frame_eyes/babble/`, GPL-3.0;
+the model is downloaded by `./build headset`) on the raw eye-camera frames from Valve's `dsp_service`, through
+ExecuTorch (cross-built into the build container). It gives per-eye openness, widen and pupil dilation, calibrated
+to the wearer after a few seconds and again each time the headset is put on; per-eye gaze comes from Valve's eye
+tracker (`/dev/shm/eye-server.mmap`) with the shell's click calibration. The `from_headset::frame_eyes` packet
+carries them over the stream socket, and the server sends them as VRCFT v2 avatar parameters
+(`v2/EyeLeftX/Y`, `v2/EyeRightX/Y`, `v2/EyeX/Y`, `v2/EyeLidLeft/Right` with widen above 0.75, `v2/EyeLid`,
+`v2/PupilDilation`, plus `EyeTrackingActive`) to VRChat's OSC port. VRChat's native eye tracking isn't sent.
+The WiVRn tab's "Eyes" line shows the update rate, model time and current values.
+
+- Headset `client.json`: `eye_expressions` (default on), `eye_expressions_divisor` (one model update per that many
+  camera frames, default 1). The cameras run at the rate Valve's eye service sets (15 fps while unworn).
+- Server config: `eye-osc` (`host:port`, default `127.0.0.1:9000`; empty or `false` turns it off) and
+  `eye-osc-prefix` (default `/FT`).
