@@ -136,3 +136,7 @@ The WiVRn tab's eye tracking line shows the update rate and whether it is still 
   camera frames, default 1). The cameras run at the rate Valve's eye service sets (15 fps while unworn).
 - Server config: `eye-osc` (`host:port`, default `127.0.0.1:9000`; empty or `false` turns it off) and
   `eye-osc-prefix` (default `/FT`).
+
+Server config `tracking-sample-ms` (default 6, upstream 3): the prediction step between the headset's tracking
+samples of a device. Each sample is a runtime query and a packet; 6 ms halves them (~0.25 W on the headset in the
+spin test), 12 ms saved nothing more.

@@ -18,10 +18,17 @@
 
 #include "tracking_control.h"
 
+#include "driver/configuration.h"
 #include "driver/wivrn_connection.h"
 #include "wivrn_config.h"
 #include <magic_enum_containers.hpp>
 #include <ranges>
+
+wivrn::tracking_control::tracking_control(wivrn_connection & cnx) :
+        cnx(cnx),
+        sample_step(configuration().tracking_sample_ms * 1'000'000),
+        next(std::chrono::steady_clock::now() + step)
+{}
 
 bool wivrn::tracking_control::advance(std::chrono::steady_clock::time_point now)
 {
@@ -78,7 +85,7 @@ void wivrn::tracking_control::resolve(XrDuration frame_time, XrDuration latency)
 			case device_id::EYE_GAZE:
 				req.min_prediction = latency;
 				req.max_prediction = frame_time + latency;
-				step = 3'000'000;
+				step = sample_step;
 				break;
 
 			// High frequency polling for those
@@ -91,7 +98,7 @@ void wivrn::tracking_control::resolve(XrDuration frame_time, XrDuration latency)
 			case device_id::RIGHT_PALM:
 			case device_id::LEFT_PINCH_POSE:
 			case device_id::RIGHT_PINCH_POSE:
-				step = 3'000'000;
+				step = sample_step;
 				break;
 
 			// Face tracking can't extrapolate

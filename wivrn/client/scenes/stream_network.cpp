@@ -700,8 +700,13 @@ void scenes::stream::poll_shell()
 	for (auto & message: frame_shell::take_host_messages())
 		network_session->send_control(from_headset::shell_message{.payload = std::move(message)});
 
+	// This runs per received packet batch: the state for the shell only every 100 ms
+	auto now = std::chrono::steady_clock::now();
+	if (now < shell_next_state)
+		return;
+	shell_next_state = now + std::chrono::milliseconds(100);
 #if WIVRN_FRAME_EYES
-	if (auto now = std::chrono::steady_clock::now(); now >= shell_next_debug)
+	if (now >= shell_next_debug)
 	{
 		shell_next_debug = now + std::chrono::seconds(1);
 		shell_eyes_debug = eye_tracker ? eye_tracker->statistics_json() : "null";

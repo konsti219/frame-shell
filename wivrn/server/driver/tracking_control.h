@@ -40,11 +40,13 @@ class tracking_control
 	to_headset::tracking_control last_control;
 
 	wivrn_connection & cnx;
+	// Prediction step between the headset's samples of a device (each is a packet and a runtime query)
+	XrDuration sample_step;
 
 public:
 	std::chrono::steady_clock::time_point next;
 
-	tracking_control(wivrn_connection & cnx) : cnx(cnx), next(std::chrono::steady_clock::now() + step) {}
+	tracking_control(wivrn_connection & cnx);
 	bool advance(std::chrono::steady_clock::time_point now);
 	void add_request(device_id device, int64_t now, int64_t at_ns, int64_t produced_ns);
 

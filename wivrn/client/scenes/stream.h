@@ -342,6 +342,7 @@ public:
 	std::mutex shell_vr_debug_mutex;
 	std::string shell_vr_debug = "null";
 	std::chrono::steady_clock::time_point shell_next_debug{};
+	std::chrono::steady_clock::time_point shell_next_state{};
 	uint16_t shell_encoded_width = 0, shell_encoded_height = 0;
 	std::chrono::steady_clock::time_point shell_next_running_query{};
 	// The Wi-Fi link to the PC (signal, rates) as JSON for the shell

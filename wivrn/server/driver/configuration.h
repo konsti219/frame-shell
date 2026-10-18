@@ -59,6 +59,8 @@ struct configuration
 	bool use_steamvr_lh = false;
 	std::optional<int64_t> lh_max_extrapolation;
 	std::optional<float> lh_stick_deadzone;
+	// Prediction step of the headset's tracking samples, in ms (upstream: 3)
+	int tracking_sample_ms = 6;
 	// Steam Frame eye data as VRCFT avatar parameters over OSC: host:port (empty: off) and parameter prefix
 	std::string eye_osc = "127.0.0.1:9000";
 	std::string eye_osc_prefix = "/FT";

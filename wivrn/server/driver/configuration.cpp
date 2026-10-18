@@ -194,6 +194,9 @@ configuration::configuration()
 		if (auto it = json.find("hid-forwarding"); it != json.end())
 			hid_forwarding = *it;
 
+		if (auto it = json.find("tracking-sample-ms"); it != json.end())
+			tracking_sample_ms = std::clamp(it->get<int>(), 1, 20);
+
 		if (auto it = json.find("eye-osc"); it != json.end())
 			eye_osc = it->is_string() ? it->get<std::string>() : "";
 
