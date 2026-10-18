@@ -36,12 +36,7 @@ public:
 	struct statistics
 	{
 		std::string state = "starting";
-		float camera_fps = 0;
 		float update_hz = 0;
-		float inference_ms = 0;
-		std::array<float, 2> openness{};
-		std::array<float, 2> widen{};
-		std::array<float, 2> dilation{-1, -1};
 		bool calibrated = false;
 		bool gaze = false;
 	};

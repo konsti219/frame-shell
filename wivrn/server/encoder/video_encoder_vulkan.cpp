@@ -828,13 +828,6 @@ void wivrn::video_encoder_vulkan::present_image(vk::Image y_cbcr, vk::SemaphoreS
 	std::unique_lock lock(dpb.mutex);
 	auto [ref_slot, slot] = dpb.get_ref(frame_index);
 	slot_item.idr = ref_slot == nullptr;
-	if (ref_slot)
-	{
-		encoder_stats[stream_idx].ref_distance += frame_index - ref_slot->frame_index;
-		encoder_statistics::raise(encoder_stats[stream_idx].max_ref_distance, frame_index - ref_slot->frame_index);
-	}
-	else
-		++encoder_stats[stream_idx].keyframes;
 
 	vk::VideoReferenceSlotInfoKHR init_refs[2] = {};
 	init_refs[0] = slot->info;

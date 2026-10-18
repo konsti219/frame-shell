@@ -128,8 +128,6 @@ std::optional<uint16_t> shard_set::insert(data_shard && shard, xr::instance & in
 
 static void debug_why_not_sent(const shard_set & shards)
 {
-	if (shards.feedback.stream_index == 0)
-		++frames_lost;
 	const auto & frame = shards.data;
 	if (frame.empty())
 	{
@@ -298,8 +296,6 @@ void shard_accumulator::try_submit_frame(uint16_t shard_idx)
 		return;
 
 	current.feedback.resent = current.tail_requests or std::ranges::any_of(current.requested, [](uint8_t count) { return count > 0; });
-	if (current.feedback.resent)
-		++resend_completed;
 	current.feedback.received_last_packet = instance.now();
 	current.feedback.sent_to_decoder = current.feedback.received_last_packet;
 	data_shard::timing_info_t timing_info = data_shards.back()->timing_info.value_or(data_shard::timing_info_t{});

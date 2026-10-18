@@ -136,13 +136,8 @@ private:
 		};
 		std::map<uint32_t, pending_frame> pending;
 		std::optional<uint32_t> last_frame;
-		int resent_frames = 0;
 		// Recent decoder failures, to stop recreating a decoder that keeps failing
 		std::deque<std::chrono::steady_clock::time_point> failures;
-		// The last five seconds, for the log and the WiVRn tab: frames decoded, dropped, waits for a keyframe
-		std::chrono::steady_clock::time_point last_decoded{};
-		int decoded = 0, dropped = 0, keyframe_waits = 0;
-		std::chrono::steady_clock::duration longest_gap{};
 	};
 	void desktop_frame_lost(desktop_stream &);
 	void deliver_desktop_frames(std::map<uint32_t, std::unique_ptr<desktop_stream>>::iterator);
@@ -342,15 +337,10 @@ public:
 	from_headset::stream_settings stream_settings();
 	std::string shell_state;
 	std::string shell_video_debug = "null";
-	std::string shell_audio_debug = "null";
 	std::string shell_eyes_debug = "null";
-	std::chrono::steady_clock::time_point shell_next_audio_log{};
-	std::string shell_desktop_debug = "[]";
 	// The last five seconds of the VR stream (render thread), for the WiVRn tab
 	std::mutex shell_vr_debug_mutex;
 	std::string shell_vr_debug = "null";
-	std::chrono::steady_clock::time_point desktop_stats_start{};
-	void update_desktop_stats();
 	std::chrono::steady_clock::time_point shell_next_debug{};
 	uint16_t shell_encoded_width = 0, shell_encoded_height = 0;
 	std::chrono::steady_clock::time_point shell_next_running_query{};

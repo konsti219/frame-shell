@@ -46,18 +46,6 @@ inline const char * encoder_x264 = "x264";
 inline const char * encoder_vulkan = "vulkan";
 inline const char * encoder_raw = "raw";
 
-// Per stream, for the session's transport log (which resets them): what loss does to the encoded stream
-struct encoder_statistics
-{
-	std::atomic<uint64_t> frames, keyframes, skipped, bytes, max_bytes, ref_distance, max_ref_distance, resent;
-	static void raise(std::atomic<uint64_t> & max, uint64_t value)
-	{
-		for (auto current = max.load(); value > current and not max.compare_exchange_weak(current, value);)
-			;
-	}
-};
-inline std::array<encoder_statistics, 3> encoder_stats;
-
 class video_encoder
 {
 protected:
@@ -108,7 +96,6 @@ private:
 	uint8_t encode_slot = 0;
 
 	std::mutex mutex;
-	size_t frame_bytes = 0;
 	// The last frames' data shards as fec::block, to send again what the headset reports missing
 	struct sent_frame
 	{

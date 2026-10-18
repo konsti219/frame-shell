@@ -246,11 +246,6 @@ public:
 
 	// Parity per frame in percent of its shards, from the headset (from_headset::link_settings)
 	std::atomic<uint8_t> fec_percent = 0;
-	struct transport_statistics {
-		int64_t started = 0;
-		uint64_t frames = 0, missing = 0, recovered_frames = 0, recovered_shards = 0, partial = 0, displayed = 0;
-		std::array<double, 6> stage_ms{};
-	} transport_stats;
 
 	template <typename T>
 	void send_control(T && packet)

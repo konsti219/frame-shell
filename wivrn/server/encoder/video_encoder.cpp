@@ -248,7 +248,6 @@ void video_encoder::present_image(vk::Image y_cbcr, vk::SemaphoreSubmitInfo info
 	state[present_slot].wait(busy);
 	if (idr->should_skip(frame_index, stream_idx))
 	{
-		++encoder_stats[stream_idx].skipped;
 		state[present_slot] = skip;
 		return;
 	}
@@ -325,7 +324,6 @@ void video_encoder::resend(const from_headset::video_nack & nack)
 			for (size_t index = *nack.tail_from; index < frame.shards.size(); ++index)
 				add(index);
 	}
-	encoder_stats[stream_idx].resent += shards.size();
 	for (auto & shard: shards)
 	{
 		try
@@ -355,15 +353,6 @@ void video_encoder::SendData(std::span<uint8_t> data, bool end_of_frame, bool co
 	}
 	if (video_dump)
 		video_dump.write((char *)data.data(), data.size());
-	frame_bytes += data.size();
-	if (end_of_frame)
-	{
-		auto & stats = encoder_stats[stream_idx];
-		++stats.frames;
-		stats.bytes += frame_bytes;
-		encoder_statistics::raise(stats.max_bytes, frame_bytes);
-		frame_bytes = 0;
-	}
 
 	ssize_t max_payload_size = (cnx->has_stream() and not control) ? to_headset::video_stream_data_shard::max_payload_size : std::numeric_limits<uint32_t>::max();
 	if (control)

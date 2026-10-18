@@ -149,7 +149,7 @@ struct frame_eyes::tracker::impl
 		for (auto & c: openness)
 			c.set_timing(p.skip, p.warmup, p.every, p.peak_window);
 		set_pupil_windows();
-		spdlog::info("Eyes: filters tuned for {:.0f} updates/s", hz);
+		spdlog::debug("Eyes: filters tuned for {:.0f} updates/s", hz);
 	}
 
 	bool copy_view(bool right, uint32_t idx, std::vector<uint8_t> & dst)
@@ -233,20 +233,7 @@ void frame_eyes::tracker::set_present(bool p)
 std::string frame_eyes::tracker::statistics_json()
 {
 	std::lock_guard lock(stats_mutex);
-	return fmt::format(R"({{"state":"{}","camera_fps":{:.0f},"update_hz":{:.0f},"inference_ms":{:.1f},)"
-	                   R"("openness":[{:.2f},{:.2f}],"widen":[{:.2f},{:.2f}],"dilation":[{:.2f},{:.2f}],"calibrated":{},"gaze":{}}})",
-	                   stats.state,
-	                   stats.camera_fps,
-	                   stats.update_hz,
-	                   stats.inference_ms,
-	                   stats.openness[0],
-	                   stats.openness[1],
-	                   stats.widen[0],
-	                   stats.widen[1],
-	                   stats.dilation[0],
-	                   stats.dilation[1],
-	                   stats.calibrated,
-	                   stats.gaze);
+	return fmt::format(R"({{"state":"{}","update_hz":{:.0f},"calibrated":{},"gaze":{}}})", stats.state, stats.update_hz, stats.calibrated, stats.gaze);
 }
 
 void frame_eyes::tracker::run()
@@ -271,7 +258,6 @@ void frame_eyes::tracker::run()
 	uint32_t layout_faults = 0, pair_count = 0;
 	uint64_t last_pair = 0;
 	float camera_fps = 0;
-	double inference_avg = 0;
 
 	bool tracking = false;
 	auto disconnect = [&](const std::string & why) {
@@ -405,12 +391,9 @@ void frame_eyes::tracker::run()
 			}
 		}
 
-		const uint64_t t0 = babble::mono_ns();
 		d->prepare();
 		if (not d->run_model())
 			continue;
-		const double inference_ms = double(babble::mono_ns() - t0) / 1e6;
-		inference_avg = inference_avg ? inference_avg * 0.95 + inference_ms * 0.05 : inference_ms;
 
 		std::array<double, 2> openness, widen;
 		std::array<std::optional<double>, 2> dilation;
@@ -440,12 +423,7 @@ void frame_eyes::tracker::run()
 			if (stats.state != "tracking")
 				spdlog::info("Eyes: tracking");
 			stats.state = "tracking";
-			stats.camera_fps = camera_fps;
 			stats.update_hz = d->update_rate.hz();
-			stats.inference_ms = inference_avg;
-			stats.openness = packet.openness;
-			stats.widen = packet.widen;
-			stats.dilation = packet.dilation;
 			stats.calibrated = d->openness[0].ready() and d->openness[1].ready();
 			stats.gaze = packet.gaze_valid;
 		}

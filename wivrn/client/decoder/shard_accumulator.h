@@ -42,9 +42,6 @@ class stream;
 namespace wivrn
 {
 
-// Frames completed thanks to shards sent again, and frames given up (left eye), for the stream's statistics
-inline std::atomic<uint32_t> resend_completed = 0;
-inline std::atomic<uint32_t> frames_lost = 0;
 
 class shard_accumulator
 {

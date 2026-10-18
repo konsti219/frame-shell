@@ -1268,12 +1268,8 @@ void scenes::stream::render(const XrFrameState & frame_state)
 		{
 			if (gaps.window_start)
 			{
-				auto resent = wivrn::resend_completed.exchange(0);
-				auto lost = wivrn::frames_lost.exchange(0);
-				spdlog::info("Display: longest gap without a new frame {:.0f}/{:.0f} ms, gaps over 50 ms {}/{} (left/right), {} frames lost, {} completed by retransmission",
-				             gaps.longest[0] / 1e6, gaps.longest[1] / 1e6, gaps.over_50ms[0], gaps.over_50ms[1], lost, resent);
 				std::scoped_lock lock(shell_vr_debug_mutex);
-				shell_vr_debug = fmt::format(R"({{"lost":{},"resent":{},"freezes":{},"longest_ms":{:.0f}}})", lost, resent,
+				shell_vr_debug = fmt::format(R"({{"freezes":{},"longest_ms":{:.0f}}})",
 				                             std::max(gaps.over_50ms[0], gaps.over_50ms[1]), std::max(gaps.longest[0], gaps.longest[1]) / 1e6);
 			}
 			gaps.window_start = frame_state.predictedDisplayTime;

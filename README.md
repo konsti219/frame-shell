@@ -104,7 +104,7 @@ Error correction (WiVRn tab, `fec_percent` in the headset's `client.json`, defau
 parity to every VR and desktop frame; it applies live and costs only its share of the bitrate. Over home Wi-Fi at
 100 Mbit/s, 10% repairs about half the lost frames.
 
-Retransmission (WiVRn tab "Resend lost packets", `retransmit`, default on): when a frame's packets go missing,
+Retransmission (`retransmit` in `client.json`, default on): when a frame's packets go missing,
 the headset asks for exactly those (or, for VR, everything after the last one received when the frame's end didn't
 arrive), and the PC resends them from the last 8 frames it keeps per stream. A complete newer VR frame isn't held
 back for an older one's resend: the encoder only references frames the headset confirmed, so it decodes on its own.
@@ -113,15 +113,12 @@ keyframes are only sent on request (and every 20 s).
 
 Speaker and microphone audio go over the stream socket (UDP) instead of the TCP control connection, whose resends
 after a lost packet stall everything behind it (up to its ~200 ms timeout). Each chunk is sent again two chunks
-(~6 ms) later and the receiver puts them back in order; the WiVRn tab's audio line counts chunks lost on the network.
+(~6 ms) later and the receiver puts them back in order.
 
 For testing, `simulated_loss_percent` and `simulated_loss_burst` in the headset's `client.json` drop that share of
 incoming video packets in runs of about that many packets.
 
-Host logs report every five seconds the VR delivery and FEC counts, average encode, network, assembly, decode,
-render-wait and total times, and per eye the encoder's keyframes, skipped frames, reference distance and frame
-sizes. The headset logs the longest gap per eye without a new frame. These are software timestamps, not photon
-latency.
+The WiVRn tab shows the Wi-Fi link (signal, rates) and the VR stream's freezes over 50 ms in the last 5 s.
 
 ### Eye expressions
 
@@ -133,7 +130,7 @@ tracker (`/dev/shm/eye-server.mmap`) with the shell's click calibration. The `fr
 carries them over the stream socket, and the server sends them as VRCFT v2 avatar parameters
 (`v2/EyeLeftX/Y`, `v2/EyeRightX/Y`, `v2/EyeX/Y`, `v2/EyeLidLeft/Right` with widen above 0.75, `v2/EyeLid`,
 `v2/PupilDilation`, plus `EyeTrackingActive`) to VRChat's OSC port. VRChat's native eye tracking isn't sent.
-The WiVRn tab's "Eyes" line shows the update rate, model time and current values.
+The WiVRn tab's eye tracking line shows the update rate and whether it is still calibrating.
 
 - Headset `client.json`: `eye_expressions` (default on), `eye_expressions_divisor` (one model update per that many
   camera frames, default 1). The cameras run at the rate Valve's eye service sets (15 fps while unworn).

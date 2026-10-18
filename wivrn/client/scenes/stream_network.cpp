@@ -450,35 +450,9 @@ std::unique_ptr<scenes::stream::desktop_stream> scenes::stream::make_desktop_str
 	return stream;
 }
 
-// Every five seconds per monitor: frames decoded, dropped and the longest time without a new one
-void scenes::stream::update_desktop_stats()
-{
-#if WIVRN_USE_V4L2
-	auto now = std::chrono::steady_clock::now();
-	if (now - desktop_stats_start < std::chrono::seconds(5))
-		return;
-	desktop_stats_start = now;
-	std::shared_lock lock(desktop_mutex);
-	std::string json;
-	for (auto & [surface, stream]: desktop_streams)
-	{
-		auto longest = std::chrono::duration_cast<std::chrono::milliseconds>(stream->longest_gap).count();
-		if (stream->decoded or stream->dropped)
-			spdlog::info("Desktop {}: {} frames, {} dropped, {} keyframe waits, {} completed by retransmission, longest gap {} ms", stream->name, stream->decoded, stream->dropped, stream->keyframe_waits, stream->resent_frames, longest);
-		json += fmt::format(R"({}{{"name":{},"frames":{},"dropped":{},"keyframe_waits":{},"resent":{},"longest_ms":{}}})", json.empty() ? "" : ",",
-		                    json_string(stream->name), stream->decoded, stream->dropped, stream->keyframe_waits, stream->resent_frames, longest);
-		stream->decoded = stream->dropped = stream->keyframe_waits = stream->resent_frames = 0;
-		stream->longest_gap = {};
-	}
-	shell_desktop_debug = "[" + json + "]";
-#endif
-}
-
 // A desktop video frame went missing: decoding resumes at the next keyframe, which the PC is asked for
 void scenes::stream::desktop_frame_lost(desktop_stream & stream)
 {
-	++stream.dropped;
-	stream.keyframe_waits += not stream.wait_keyframe;
 	stream.wait_keyframe = true;
 	auto now = std::chrono::steady_clock::now();
 	if (now - stream.keyframe_requested < std::chrono::milliseconds(250))
@@ -561,7 +535,6 @@ void scenes::stream::deliver_desktop_frames(std::map<uint32_t, std::unique_ptr<d
 			auto frame = std::move(first->second);
 			stream.pending.erase(first);
 			stream.last_frame = expected;
-			stream.resent_frames += frame.requests > 0;
 			if (not decode_desktop_frame(it, frame))
 				return;
 			continue;
@@ -620,11 +593,6 @@ bool scenes::stream::decode_desktop_frame(std::map<uint32_t, std::unique_ptr<des
 			throw std::runtime_error("iris decoder stopped taking input");
 		stream.decoder->frame_completed({.frame_index = stream.frame_index, .stream_index = 255}, {});
 		++stream.frame_index;
-		auto now = std::chrono::steady_clock::now();
-		if (stream.last_decoded != std::chrono::steady_clock::time_point{})
-			stream.longest_gap = std::max(stream.longest_gap, now - stream.last_decoded);
-		stream.last_decoded = now;
-		++stream.decoded;
 	}
 	catch (const std::exception & e)
 	{
@@ -732,17 +700,13 @@ void scenes::stream::poll_shell()
 	for (auto & message: frame_shell::take_host_messages())
 		network_session->send_control(from_headset::shell_message{.payload = std::move(message)});
 
-    if (auto now = std::chrono::steady_clock::now(); now >= shell_next_debug) {
-        shell_next_debug = now + std::chrono::seconds(1);
-        shell_audio_debug = audio_handle ? audio_handle->statistics_json() : "null";
 #if WIVRN_FRAME_EYES
-        shell_eyes_debug = eye_tracker ? eye_tracker->statistics_json() : "null";
+	if (auto now = std::chrono::steady_clock::now(); now >= shell_next_debug)
+	{
+		shell_next_debug = now + std::chrono::seconds(1);
+		shell_eyes_debug = eye_tracker ? eye_tracker->statistics_json() : "null";
+	}
 #endif
-        if (now >= shell_next_audio_log) {
-            shell_next_audio_log = now + std::chrono::seconds(5);
-            spdlog::info("Audio: {}", shell_audio_debug);
-        }
-    }
 	std::string json = fmt::format(R"({{"server":{},"apps":[)", json_string(apps.server()));
 	bool first = true;
 	for (const auto & [id, name, icon]: apps.list())
@@ -757,8 +721,7 @@ void scenes::stream::poll_shell()
 		json += fmt::format(R"({}{{"id":{},"name":{},"active":{},"overlay":{}}})", first ? "" : ",", app.id, json_string(app.name), app.active, app.overlay);
 		first = false;
 	}
-	update_desktop_stats();
-	json += R"(],"settings":)" + frame_shell::settings_json(application::get_config()) + R"(,"video_debug":)" + shell_video_debug + R"(,"audio_debug":)" + shell_audio_debug + R"(,"desktop_debug":)" + shell_desktop_debug + R"(,"eyes_debug":)" + shell_eyes_debug;
+	json += R"(],"settings":)" + frame_shell::settings_json(application::get_config()) + R"(,"video_debug":)" + shell_video_debug + R"(,"eyes_debug":)" + shell_eyes_debug;
 	{
 		std::scoped_lock lock(shell_vr_debug_mutex);
 		json += R"(,"vr_debug":)" + shell_vr_debug;

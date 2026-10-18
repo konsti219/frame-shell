@@ -899,46 +899,6 @@ void wivrn_session::operator()(from_headset::timesync_response && timesync)
 
 void wivrn_session::operator()(from_headset::feedback && feedback)
 {
-	if (feedback.stream_index == 0) {
-		auto & stats = transport_stats;
-		auto now = os_monotonic_get_ns();
-		if (not stats.started) stats.started = now;
-		if (not feedback.received_from_decoder and not feedback.blitted) {
-			if (feedback.received_last_packet) {
-				++stats.frames;
-				stats.partial += feedback.partial;
-				stats.recovered_frames += feedback.fec_recovered != 0;
-				stats.recovered_shards += feedback.fec_recovered;
-			} else ++stats.missing;
-		}
-		if (feedback.times_displayed == 1 and feedback.encode_begin and feedback.send_begin) {
-			++stats.displayed;
-			stats.stage_ms[0] += (feedback.encode_end - feedback.encode_begin) / 1e6;
-			stats.stage_ms[1] += (feedback.received_first_packet - feedback.send_begin) / 1e6;
-			stats.stage_ms[2] += (feedback.received_last_packet - feedback.received_first_packet) / 1e6;
-			stats.stage_ms[3] += (feedback.received_from_decoder - feedback.sent_to_decoder) / 1e6;
-			stats.stage_ms[4] += (feedback.blitted - feedback.received_from_decoder) / 1e6;
-			stats.stage_ms[5] += (feedback.displayed - feedback.encode_begin) / 1e6;
-		}
-		if (now - stats.started >= 5'000'000'000) {
-			double divisor = std::max<uint64_t>(1, stats.displayed);
-			U_LOG_I("Transport: %.1f fps, %lu incomplete, %lu partial, FEC %lu frames/%lu shards; ms encode %.2f queue+network %.2f assembly %.2f decode %.2f render-wait %.2f total %.2f",
-			        stats.frames * 1e9 / (now - stats.started), stats.missing, stats.partial, stats.recovered_frames, stats.recovered_shards,
-			        stats.stage_ms[0] / divisor, stats.stage_ms[1] / divisor, stats.stage_ms[2] / divisor,
-			        stats.stage_ms[3] / divisor, stats.stage_ms[4] / divisor, stats.stage_ms[5] / divisor);
-			for (int eye = 0; eye < 2; ++eye)
-			{
-				auto & e = encoder_stats[eye];
-				uint64_t frames = std::max<uint64_t>(1, e.frames.exchange(0));
-				uint64_t predicted = std::max<uint64_t>(1, frames - e.keyframes);
-				U_LOG_I("Encoder %d: %lu keyframes, %lu skipped, %lu shards resent; reference %.1f frames back (max %lu); %.0f kB per frame (max %lu)",
-				        eye, e.keyframes.exchange(0), e.skipped.exchange(0), e.resent.exchange(0), double(e.ref_distance.exchange(0)) / predicted, e.max_ref_distance.exchange(0),
-				        e.bytes.exchange(0) / 1e3 / frames, e.max_bytes.exchange(0) / 1000);
-			}
-			stats = {};
-		}
-	}
-
 	clock_offset o = offset_est.get_offset();
 	if (not o)
 		return;

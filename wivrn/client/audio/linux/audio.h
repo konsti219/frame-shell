@@ -79,12 +79,9 @@ class audio
 	std::atomic<size_t> speaker_buffer_size_bytes = 0;
 	wivrn::audio_data speaker_current;
 	bool speaker_primed = false;
-	std::atomic<uint64_t> speaker_underruns = 0;
 	// Over the stream socket: microphone chunks out, speaker chunks back in order (network thread)
 	wivrn::audio_link::sender microphone_link;
 	wivrn::audio_link::receiver speaker_link;
-	std::atomic<uint32_t> speaker_lost_chunks = 0, speaker_received = 0, speaker_duplicates = 0;
-	std::atomic<size_t> speaker_dropped_bytes = 0;
 
 	utils::ring_buffer<wivrn::audio_data, 100> microphone_samples;
 	std::atomic<size_t> microphone_buffer_size_bytes = 0;
@@ -102,7 +99,6 @@ public:
 
 	void operator()(wivrn::audio_data &&);
 	void set_mic_state(bool running);
-	std::string statistics_json() const;
 
 	static void get_audio_description(wivrn::from_headset::headset_info_packet & info);
 };

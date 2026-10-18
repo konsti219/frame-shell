@@ -51,7 +51,6 @@ public:
 
 	void operator()(wivrn::audio_data &&) {}
 	void set_mic_state(bool running) {}
-	std::string statistics_json() const { return "null"; }
 
 	static void get_audio_description(wivrn::from_headset::headset_info_packet & info) {}
 };

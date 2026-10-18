@@ -419,9 +419,6 @@ void audio::operator()(wivrn::audio_data && data)
 		if (not speaker_samples.write(std::move(chunk)))
 			speaker_buffer_size_bytes.fetch_sub(size, std::memory_order_relaxed);
 	});
-	speaker_lost_chunks.store(speaker_link.skipped, std::memory_order_relaxed);
-	speaker_received.store(speaker_link.received, std::memory_order_relaxed);
-	speaker_duplicates.store(speaker_link.duplicates, std::memory_order_relaxed);
 }
 
 void audio::set_mic_state(bool running)
@@ -443,16 +440,6 @@ void audio::set_mic_state(bool running)
 		spdlog::warn("Failed to {} PipeWire microphone: {}", running ? "start" : "stop", spa_strerror(result));
 	}
 	microphone_cv.notify_one();
-}
-
-std::string audio::statistics_json() const
-{
-    if (!desc.speaker) return "null";
-    auto bytes_per_ms = desc.speaker->num_channels * sizeof(int16_t) * desc.speaker->sample_rate / 1000.0;
-    return std::format(R"({{"buffer_ms":{:.1f},"target_ms":{},"underruns":{},"dropped_ms":{:.1f},"lost_chunks":{},"received":{},"duplicates":{}}})",
-        speaker_buffer_size_bytes.load(std::memory_order_relaxed) / bytes_per_ms, speaker_jitter_ms,
-        speaker_underruns.load(std::memory_order_relaxed), speaker_dropped_bytes.load(std::memory_order_relaxed) / bytes_per_ms,
-        speaker_lost_chunks.load(std::memory_order_relaxed), speaker_received.load(std::memory_order_relaxed), speaker_duplicates.load(std::memory_order_relaxed));
 }
 
 void audio::speaker_process(void * userdata)
@@ -516,10 +503,7 @@ void audio::speaker_process(void * userdata)
 	}
 
 	if (written < requested_bytes) {
-        if (self->speaker_primed) {
-            self->speaker_underruns.fetch_add(1, std::memory_order_relaxed);
-            self->speaker_primed = false;
-        }
+        self->speaker_primed = false;
         std::memset(output + written, 0, requested_bytes - written);
     }
     const size_t ramp_frames = std::min<size_t>(written / frame_size, self->desc.speaker->sample_rate / 500);
@@ -548,7 +532,6 @@ void audio::speaker_process(void * userdata)
 			if (not dropped)
 				break;
 			self->speaker_buffer_size_bytes.fetch_sub(dropped->payload.size_bytes(), std::memory_order_relaxed);
-            self->speaker_dropped_bytes.fetch_add(dropped->payload.size_bytes(), std::memory_order_relaxed);
 		}
 	}
 }
