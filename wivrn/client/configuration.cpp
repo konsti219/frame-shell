@@ -330,6 +330,7 @@ const std::vector<config_field> & configuration::config_fields()
 	        scalar("desktop_codec", &configuration::desktop_codec),
 	        scalar("fec_percent", &configuration::fec_percent),
 	        scalar("retransmit", &configuration::retransmit),
+	        scalar("frame_margin_ms", &configuration::frame_margin_ms),
 	        scalar("simulated_loss_percent", &configuration::simulated_loss_percent),
 	        scalar("simulated_loss_burst", &configuration::simulated_loss_burst),
 	        scalar("eye_expressions", &configuration::eye_expressions),

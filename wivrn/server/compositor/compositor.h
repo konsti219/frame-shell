@@ -205,6 +205,7 @@ public:
 
 	void on_feedback(const from_headset::feedback &, const clock_offset &);
 	void on_nack(const from_headset::video_nack &);
+	void set_frame_margin(float ms);
 };
 
 } // namespace wivrn

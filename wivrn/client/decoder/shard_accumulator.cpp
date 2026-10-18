@@ -43,6 +43,7 @@ void shard_set::reset(uint64_t frame_index)
 	data_count = 0;
 	requested.clear();
 	last_request = 0;
+	last_shard = 0;
 	tail_requests = 0;
 
 	uint8_t stream_index = feedback.stream_index;
@@ -115,6 +116,7 @@ std::optional<uint16_t> shard_set::insert(data_shard && shard, xr::instance & in
 {
 	if (empty())
 		feedback.received_first_packet = instance.now();
+	last_shard = instance.now();
 
 	feedback.generation = shard.generation;
 	auto idx = shard.shard_idx;
@@ -240,6 +242,7 @@ void shard_accumulator::push_parity(video_stream_parity_shard && parity)
 		if (set.empty())
 			set.feedback.received_first_packet = instance.now();
 		set.feedback.generation = parity.generation;
+		set.last_shard = instance.now();
 		set.data_count = parity.data_count;
 		set.parity.resize(parity.parity_count);
 		set.parity[parity.parity_idx].assign(parity.payload.begin(), parity.payload.end());
@@ -349,6 +352,18 @@ void shard_accumulator::request_missing(shard_set & set, size_t limit, uint8_t m
 		        .shards = std::move(missing),
 		        .tail_from = tail_from,
 		});
+}
+
+void shard_accumulator::request_stalled()
+{
+	if (current.empty() or is_complete(current) or not current.last_shard)
+		return;
+	XrTime now = instance.now();
+	// A frame's shards arrive within a few ms: silence since means its end (or more) was lost. Asking now rather than
+	// when the next frame starts gets the resend in before that frame completes and this one is given up.
+	if (now - current.last_shard < 3'000'000 or (current.last_request and now - current.last_request < 8'000'000))
+		return;
+	request_missing(current, current.data_count ? current.data_count : current.data.size(), current.last_request ? 2 : 1, true);
 }
 
 void shard_accumulator::send_feedback(wivrn::from_headset::feedback & feedback)

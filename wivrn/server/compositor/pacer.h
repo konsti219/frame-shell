@@ -91,6 +91,8 @@ public:
 	        int64_t & out_predicted_display_time_ns);
 
 	void on_feedback(const wivrn::from_headset::feedback &, const clock_offset &);
+	// Extra time before the headset picks a frame, on top of the 99.5th percentile of present to decoded
+	void set_client_margin(float ms);
 
 	void mark_timing_point(
 	        comp_target_timing_point point,

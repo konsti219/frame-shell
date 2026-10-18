@@ -748,10 +748,12 @@ struct desktop_nack
 	std::vector<uint16_t> shards;
 };
 
-// Parity shards per video frame, in percent of its data shards (0: none)
+// Parity shards per video frame, in percent of its data shards (0: none), and the frame margin: how much earlier
+// than the slowest 0.5% of frames need the PC aims to have frames decoded before the headset picks them (ms)
 struct link_settings
 {
 	uint8_t fec_percent;
+	uint8_t frame_margin_ms;
 };
 
 // Steam Frame eyes: per-eye gaze from Valve's eye tracker, lids and pupils from Babble's eye model

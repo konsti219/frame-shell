@@ -1579,8 +1579,9 @@ void wivrn::wivrn_session::operator()(from_headset::shell_message && event)
 
 void wivrn::wivrn_session::operator()(from_headset::link_settings && event)
 {
-	U_LOG_I("Link: %u%% parity", event.fec_percent);
+	U_LOG_I("Link: %u%% parity, %u ms frame margin", event.fec_percent, event.frame_margin_ms);
 	fec_percent = std::min<uint8_t>(event.fec_percent, 50);
+	compositor.set_frame_margin(std::min<uint8_t>(event.frame_margin_ms, 20));
 }
 
 void wivrn::wivrn_session::operator()(from_headset::video_nack && nack)

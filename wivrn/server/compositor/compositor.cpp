@@ -882,6 +882,11 @@ void compositor::reconfigure() noexcept
 	send_video_stream_description();
 }
 
+void compositor::set_frame_margin(float ms)
+{
+	pacer.set_client_margin(ms);
+}
+
 void compositor::on_nack(const from_headset::video_nack & nack)
 {
 	std::lock_guard lock{encoders_mutex};

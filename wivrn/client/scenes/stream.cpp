@@ -986,6 +986,9 @@ void scenes::stream::render(const XrFrameState & frame_state)
 			set_state(state::stalled);
 		++blit_handle->feedback.times_displayed;
 		blit_handle->feedback.displayed = frame_state.predictedDisplayTime;
+		// A stream frame shown again: a jump while the picture moves
+		if (i == 0 and blit_handle->feedback.frame_index == gaps.frame[0])
+			++gaps.repeats;
 		if (i < view_count and blit_handle->feedback.frame_index != gaps.frame[i])
 		{
 			auto now = frame_state.predictedDisplayTime;
@@ -1307,12 +1310,13 @@ void scenes::stream::render(const XrFrameState & frame_state)
 			if (gaps.window_start)
 			{
 				std::scoped_lock lock(shell_vr_debug_mutex);
-				shell_vr_debug = fmt::format(R"({{"freezes":{},"longest_ms":{:.0f}}})",
+				shell_vr_debug = fmt::format(R"({{"repeats":{},"freezes":{},"longest_ms":{:.0f}}})", gaps.repeats,
 				                             std::max(gaps.over_50ms[0], gaps.over_50ms[1]), std::max(gaps.longest[0], gaps.longest[1]) / 1e6);
 			}
 			gaps.window_start = frame_state.predictedDisplayTime;
 			gaps.longest = {};
 			gaps.over_50ms = {};
+			gaps.repeats = 0;
 		}
 
 		draw_gui(frame_state.predictedDisplayTime, frame_state.predictedDisplayPeriod);

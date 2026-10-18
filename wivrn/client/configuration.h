@@ -80,6 +80,8 @@ public:
 	wivrn::video_codec desktop_codec = wivrn::video_codec::h264;
 	// Parity the PC adds to each video frame, in percent of its shards (from_headset::link_settings)
 	uint32_t fec_percent = 10;
+	// How much earlier than the slowest 0.5% of frames need the PC aims to have frames decoded (from_headset::link_settings)
+	uint32_t frame_margin_ms = 1;
 	// Ask the PC to send lost video shards again (from_headset::video_nack)
 	bool retransmit = true;
 	// Testing: drop this share of incoming video shards, in runs of about simulated_loss_burst shards

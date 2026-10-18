@@ -84,9 +84,9 @@ inline std::string settings_json(const configuration & config)
         case wivrn::video_codec::raw: codec = "raw"; break;
         }
     }
-    return fmt::format(R"({{"bitrate":{},"max_bitrate":{},"fec":{},"retransmit":{},"resolution":{},"foveation":{},"max_foveation":{},"codec":"{}","foveation_debug":{},"desktop_bitrate":{},"desktop_codec":"{}","codec_support":{{"h264":{},"h265":{},"av1":{}}}}})",
+    return fmt::format(R"({{"bitrate":{},"max_bitrate":{},"fec":{},"frame_margin":{},"retransmit":{},"resolution":{},"foveation":{},"max_foveation":{},"codec":"{}","foveation_debug":{},"desktop_bitrate":{},"desktop_codec":"{}","codec_support":{{"h264":{},"h265":{},"av1":{}}}}})",
                        config.bitrate_bps, config.max_bitrate(),
-                       config.fec_percent, config.retransmit, config.resolution_scale,
+                       config.fec_percent, config.frame_margin_ms, config.retransmit, config.resolution_scale,
                        config.chosen_stream_scale(), 100, codec,
                        foveation_debug.load(), config.desktop_bitrate_kbps,
                        config.desktop_codec == wivrn::video_codec::h265 ? "h265" : "h264",
@@ -119,6 +119,10 @@ inline bool apply_setting(configuration & config, std::string_view command)
         uint32_t bitrate;
         if (!parse(bitrate) || bitrate < 1'000'000 || bitrate > config.max_bitrate()) return false;
         config.bitrate_bps = bitrate;
+    } else if (key == "frame_margin") {
+        uint32_t ms;
+        if (!parse(ms) || ms > 20) return false;
+        config.frame_margin_ms = ms;
     } else if (key == "fec") {
         // Percent parity
         uint32_t percent;

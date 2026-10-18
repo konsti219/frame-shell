@@ -111,6 +111,12 @@ back for an older one's resend: the encoder only references frames the headset c
 Desktop frames decode in order, so a later one waits up to 40 ms for the resend before falling back to a keyframe. Desktop
 keyframes are only sent on request (and every 20 s).
 
+A frame decoded after the headset picked the frame for its display slot is shown one slot late and the next one is
+skipped: a jump while the picture moves (the WiVRn tab's "repeated frames"). The PC aims to have frames decoded the
+99.5th percentile of its frames' delivery plus the frame margin (WiVRn tab, `frame_margin_ms`, default 1) before
+that; a larger margin trades that much latency for fewer late frames. When a frame's packets stop before its end,
+the headset asks for the rest after 3 ms instead of waiting for the next frame.
+
 Speaker and microphone audio go over the stream socket (UDP) instead of the TCP control connection, whose resends
 after a lost packet stall everything behind it (up to its ~200 ms timeout). Each chunk is sent again two chunks
 (~6 ms) later and the receiver puts them back in order.

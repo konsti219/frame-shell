@@ -116,6 +116,7 @@ void scenes::stream::send_link_settings()
 #ifndef __ANDROID__
 	network_session->send_control(from_headset::link_settings{
 	        .fec_percent = uint8_t(std::min<uint32_t>(application::get_config().fec_percent, 50)),
+	        .frame_margin_ms = uint8_t(std::min<uint32_t>(application::get_config().frame_margin_ms, 20)),
 	});
 #endif
 }
@@ -155,6 +156,12 @@ void scenes::stream::process_packets()
             }
 #endif
             network_session->poll(*this, std::chrono::milliseconds(20));
+            {
+                std::shared_lock lock(decoder_mutex);
+                for (auto & d: decoders)
+                    if (d.decoder)
+                        d.decoder->request_stalled();
+            }
 		}
 		catch (std::exception & e)
 		{
@@ -650,7 +657,7 @@ void scenes::stream::poll_shell()
 			auto & config = application::get_config();
 			if (not frame_shell::apply_setting(config, *command))
 				continue;
-			if (command->starts_with("setting fec "))
+			if (command->starts_with("setting fec ") or command->starts_with("setting frame_margin "))
 			{
 				send_link_settings();
 				continue;

@@ -59,6 +59,8 @@ public:
 		// How often each data shard was asked to be sent again (from_headset::video_nack), and when last
 		std::vector<uint8_t> requested;
 		XrTime last_request = 0;
+		// When the last data or parity shard of this frame arrived
+		XrTime last_shard = 0;
 		// How often everything after the received shards was asked for (the frame's end didn't arrive)
 		uint8_t tail_requests = 0;
 		// Rebuilds missing data shards once there is enough parity: the first one rebuilt
@@ -108,6 +110,8 @@ public:
 
 	void push_shard(wivrn::to_headset::video_stream_data_shard &&);
 	void push_parity(wivrn::to_headset::video_stream_parity_shard &&);
+	// Network thread, between packets: asks for what an incomplete frame lacks once its shards stopped arriving
+	void request_stalled();
 
 	vk::Sampler sampler()
 	{

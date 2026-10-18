@@ -104,6 +104,7 @@ private:
 		std::array<uint64_t, 2> frame{};
 		std::array<XrTime, 2> since{}, longest{};
 		std::array<int, 2> over_50ms{};
+		int repeats = 0;
 	} gaps;
 	std::atomic<XrDuration> real_display_period = 0;
 	std::optional<std::thread> tracking_thread;

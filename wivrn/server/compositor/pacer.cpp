@@ -130,6 +130,13 @@ void pacer::predict(
 	out_present_slop_ns = slop_ns;
 }
 
+void pacer::set_client_margin(float ms)
+{
+	std::scoped_lock lock(mutex, compute_mutex);
+	// Applied by the next percentile update (every 100 frames)
+	client_margin_ms.val = ms;
+}
+
 void pacer::on_feedback(const wivrn::from_headset::feedback & feedback, const clock_offset & offset)
 {
 	// Frames completed by a resend are late by a round trip: counting them would delay every frame
