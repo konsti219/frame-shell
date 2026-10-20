@@ -104,6 +104,30 @@ struct State {
 	id_label: WidgetID,  // Label
 	id_sprite: WidgetID, // Sprite
 	children_discovered: bool,
+	enabled: bool,
+	// Label color to restore when a disabled (dimmed) button is enabled again
+	enabled_label_color: Option<WguiColor>,
+}
+
+impl State {
+	fn apply_enabled_label(&mut self, common: &mut CallbackDataCommon) {
+		let Some(mut label) = common.state.widgets.get_as::<WidgetLabel>(self.id_label) else {
+			return;
+		};
+		let dimmed = WguiColorName::Outline.to_wgui_color();
+		if self.enabled {
+			if let Some(color) = self.enabled_label_color.take() {
+				label.set_color(common, color, true);
+			}
+		} else {
+			// Something may have repainted the label since it was dimmed: keep that as the colour to restore
+			let current = label.get_color();
+			if current != dimmed || self.enabled_label_color.is_none() {
+				self.enabled_label_color = Some(current);
+			}
+			label.set_color(common, dimmed, true);
+		}
+	}
 }
 
 impl TooltipTrait for State {
@@ -137,6 +161,12 @@ impl ComponentTrait for ComponentButton {
 
 		if !state.children_discovered {
 			state.children_discovered = true;
+			// The sticky state may have been set before the children were known (e.g. at startup)
+			let initial_color = if state.sticky_down {
+				state.colors.sticky_color
+			} else {
+				state.colors.color
+			};
 
 			let mut children = vec![];
 			data
@@ -154,7 +184,7 @@ impl ComponentTrait for ComponentButton {
 						log::error!("Button with more than one sprite!");
 					}
 					// apply initial color from button
-					if let Some(apply_color) = color_to_apply(sprite.parent_color(), state.colors.color) {
+					if let Some(apply_color) = color_to_apply(sprite.parent_color(), initial_color) {
 						let common = &mut CallbackDataCommon {
 							state: &data.layout.state,
 							alterables: &mut data.layout.alterables,
@@ -167,7 +197,7 @@ impl ComponentTrait for ComponentButton {
 					if !state.id_label.is_null() && state.id_label != child {
 						log::error!("Button with more than one label!");
 					}
-					if let Some(apply_color) = color_to_apply(widget.parent_color(), state.colors.color) {
+					if let Some(apply_color) = color_to_apply(widget.parent_color(), initial_color) {
 						let common = &mut CallbackDataCommon {
 							state: &data.layout.state,
 							alterables: &mut data.layout.alterables,
@@ -177,6 +207,14 @@ impl ComponentTrait for ComponentButton {
 					}
 					state.id_label = child;
 				}
+			}
+
+			if !state.enabled {
+				let common = &mut CallbackDataCommon {
+					state: &data.layout.state,
+					alterables: &mut data.layout.alterables,
+				};
+				state.apply_enabled_label(common);
 			}
 		}
 
@@ -254,6 +292,18 @@ impl ComponentButton {
 		self.state.borrow().last_pressed.elapsed()
 	}
 
+	/// A disabled button ignores the pointer and shows a dimmed label.
+	pub fn set_enabled(&self, common: &mut CallbackDataCommon, enabled: bool) {
+		let mut state = self.state.borrow_mut();
+		if state.enabled == enabled {
+			return;
+		}
+		state.enabled = enabled;
+		state.down = false;
+		state.apply_enabled_label(common);
+		common.alterables.mark_redraw();
+	}
+
 	pub fn on_click(&self, func: ButtonClickCallback) {
 		self.state.borrow_mut().on_click = Some(func);
 	}
@@ -291,14 +341,11 @@ impl ComponentButton {
 					1.0 - anim_data.pos
 				};
 
+				let state_rc = state.clone();
 				let state = state.borrow();
 				let colors = &state.colors;
 
-				let (alt_color, alt_border_color) = if sticky_down {
-					(&colors.sticky_color, &colors.sticky_border_color)
-				} else {
-					(&colors.hover_color, &colors.hover_border_color)
-				};
+				let (alt_color, alt_border_color) = (&colors.sticky_color, &colors.sticky_border_color);
 
 				{
 					let bg_color = colors.color.lerp(&common.globals().palette, alt_color, mult);
@@ -325,6 +372,11 @@ impl ComponentButton {
 							sprite.set_color(common, apply);
 						}
 					}
+				}
+				let enabled = state.enabled;
+				drop(state);
+				if !enabled {
+					state_rc.borrow_mut().apply_enabled_label(common);
 				}
 				common.alterables.mark_redraw();
 			}),
@@ -357,6 +409,19 @@ impl ComponentButton {
 		rect.params.color = bgcolor;
 		rect.params.color2 = get_color2(&bgcolor, gradient_intensity);
 		rect.params.border_color = border_color;
+		if let Some(mut label) = common.state.widgets.get_as::<WidgetLabel>(state.id_label)
+			&& let Some(color) = color_to_apply(label.parent_color(), bgcolor)
+		{
+			label.set_color(common, color, true);
+		}
+		if let Some(mut sprite) = common.state.widgets.get_as::<WidgetSprite>(state.id_sprite)
+			&& let Some(color) = color_to_apply(sprite.parent_color(), bgcolor)
+		{
+			sprite.set_color(common, color);
+		}
+		if !state.enabled {
+			state.apply_enabled_label(common);
+		}
 		common.alterables.mark_redraw();
 	}
 }
@@ -449,6 +514,9 @@ fn register_event_mouse_enter(
 	listeners.register(
 		EventListenerKind::MouseEnter,
 		Box::new(move |common, event_data, (), ()| {
+			if !state.borrow().enabled {
+				return Ok(EventResult::Pass);
+			}
 			common.alterables.play_sound(WguiSoundType::ButtonMouseEnter);
 			common.alterables.trigger_haptics();
 			common.alterables.mark_redraw();
@@ -468,6 +536,13 @@ fn register_event_mouse_leave(state: Rc<RefCell<State>>, listeners: &mut EventLi
 	listeners.register(
 		EventListenerKind::MouseLeave,
 		Box::new(move |common, event_data, (), ()| {
+			// A disabled button never showed its hover: animating out of it would repaint the label undimmed
+			if !state.borrow().enabled {
+				let mut state = state.borrow_mut();
+				state.active_tooltip = None;
+				state.hovered = false;
+				return Ok(EventResult::Pass);
+			}
 			common.alterables.trigger_haptics();
 			common
 				.alterables
@@ -497,6 +572,9 @@ fn register_event_mouse_press(state: Rc<RefCell<State>>, listeners: &mut EventLi
 		EventListenerKind::MousePress,
 		Box::new(move |common, event_data, (), ()| {
 			let mut state = state.borrow_mut();
+			if !state.enabled {
+				return Ok(EventResult::Pass);
+			}
 
 			let rect = event_data.obj.get_as_mut::<WidgetRectangle>().unwrap();
 			anim_hover(
@@ -539,6 +617,9 @@ fn register_event_mouse_release(
 		Box::new(move |common, event_data, (), ()| {
 			let rect = event_data.obj.get_as_mut::<WidgetRectangle>().unwrap();
 			let mut state = state.borrow_mut();
+			if !state.enabled {
+				return Ok(EventResult::Pass);
+			}
 			if data.sticky {
 				state.sticky_down = !state.sticky_down;
 			}
@@ -720,6 +801,8 @@ pub fn construct(ess: &mut ConstructEssentials, params: Params) -> anyhow::Resul
 			sticky_color,
 			sticky_border_color,
 		},
+		enabled: true,
+		enabled_label_color: None,
 		id_label,
 		id_sprite,
 		children_discovered: false,

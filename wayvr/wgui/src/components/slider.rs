@@ -97,6 +97,7 @@ struct DraggedBy {
 }
 
 struct State {
+	enabled: bool,
 	dragged_by: Option<DraggedBy>,
 	hovered_body: bool,
 	hovered1: bool,
@@ -170,6 +171,10 @@ impl ComponentTrait for ComponentSlider {
 }
 
 impl ComponentSlider {
+	pub fn is_dragging(&self) -> bool {
+		self.state.borrow().dragged_by.is_some()
+	}
+
 	pub fn get_value_primary(&self) -> f32 {
 		self.get_value(ValueIndex::Primary).unwrap() /* safe */
 	}
@@ -189,6 +194,26 @@ impl ComponentSlider {
 
 	pub fn set_value_primary(&self, common: &mut CallbackDataCommon, new_value: f32) {
 		self.set_value(common, ValueIndex::Primary, new_value);
+	}
+
+	pub fn set_enabled(&self, common: &mut CallbackDataCommon, enabled: bool) {
+		let mut state = self.state.borrow_mut();
+		state.enabled = enabled;
+		state.dragged_by = None;
+		state.hovered_body = false;
+		for handle in std::iter::once(&self.data.handle1).chain(self.data.handle2.iter()) {
+			common
+				.state
+				.widgets
+				.call::<WidgetRectangle, _>(handle.id_handle_rect, |rect| {
+					rect.params.color = if enabled {
+						HANDLE_COLOR.into()
+					} else {
+						WguiColorName::Outline.to_wgui_color().mult_rgb(0.5)
+					};
+				});
+		}
+		common.alterables.mark_redraw();
 	}
 
 	pub fn on_value_changed(&self, func: SliderValueChangedCallback) {
@@ -432,6 +457,9 @@ fn register_event_mouse_enter(
 	listeners.register(
 		EventListenerKind::MouseEnter,
 		Box::new(move |common, event_data, (), ()| {
+			if !state.borrow().enabled {
+				return Ok(EventResult::Pass);
+			}
 			common.alterables.trigger_haptics();
 			state.borrow_mut().hovered_body = true;
 
@@ -526,6 +554,9 @@ fn register_event_mouse_motion(
 		EventListenerKind::MouseMotion,
 		Box::new(move |common, event_data, (), ()| {
 			let mut state = state.borrow_mut();
+			if !state.enabled {
+				return Ok(EventResult::Pass);
+			}
 
 			let Some(pos_relative) = event_data
 				.metadata
@@ -569,7 +600,7 @@ fn register_event_mouse_press(
 				unreachable!();
 			};
 
-			if !state.hovered_body {
+			if !state.enabled || !state.hovered_body {
 				// this slider isn't hovered at all?
 				return Ok(EventResult::Pass);
 			}
@@ -708,13 +739,22 @@ pub fn construct(ess: &mut ConstructEssentials, params: Params) -> anyhow::Resul
 		None
 	};
 
+	// Snap the initial values now: snapping them on the first refresh reported a change nobody made
+	let mut value1 = Value::default();
+	value1.set(&params.limits, params.value1.get());
+	let value2 = params.value2.map(|value| {
+		let mut snapped = Value::default();
+		snapped.set(&params.limits, value.get());
+		snapped
+	});
 	let state = State {
+		enabled: true,
 		dragged_by: None,
 		hovered_body: false,
 		hovered1: false,
 		hovered2: false,
-		value1: params.value1,
-		value2: params.value2,
+		value1,
+		value2,
 		limits: params.limits,
 		on_value_changed: None,
 		active_tooltip: None,

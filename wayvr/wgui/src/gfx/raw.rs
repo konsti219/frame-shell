@@ -2845,6 +2845,7 @@ const fn device_type_from_vk(value: vk::PhysicalDeviceType) -> DeviceType {
 const fn format_to_vk(format: Format) -> vk::Format {
 	match format {
 		Format::R8_UNORM => vk::Format::R8_UNORM,
+		Format::R8G8_UNORM => vk::Format::R8G8_UNORM,
 		Format::R8G8B8_UNORM => vk::Format::R8G8B8_UNORM,
 		Format::R8G8B8A8_UNORM => vk::Format::R8G8B8A8_UNORM,
 		Format::R8G8B8A8_SRGB => vk::Format::R8G8B8A8_SRGB,
@@ -2874,6 +2875,7 @@ const fn format_to_vk(format: Format) -> vk::Format {
 const fn format_from_vk(format: vk::Format) -> Option<Format> {
 	Some(match format {
 		vk::Format::R8_UNORM => Format::R8_UNORM,
+		vk::Format::R8G8_UNORM => Format::R8G8_UNORM,
 		vk::Format::R8G8B8_UNORM => Format::R8G8B8_UNORM,
 		vk::Format::R8G8B8A8_UNORM => Format::R8G8B8A8_UNORM,
 		vk::Format::R8G8B8A8_SRGB => Format::R8G8B8A8_SRGB,

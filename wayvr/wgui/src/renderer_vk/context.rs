@@ -21,37 +21,50 @@ use super::{
 	viewport::Viewport,
 };
 
+// A scissor change starts a new pass, so a page of clipped widgets (buttons clip their content) makes many passes:
+// each renderer and its GPU buffers is only created when the pass draws something of its kind
 struct RendererPass<'a> {
 	submitted: bool,
 	text_areas: Vec<TextArea<'a>>,
-	text_renderer: TextRenderer,
-	rect_renderer: RectRenderer,
-	image_renderer: ImageRenderer,
+	rect_pipeline: RectPipeline,
+	image_pipeline: ImagePipeline,
+	rect_renderer: Option<RectRenderer>,
+	image_renderer: Option<ImageRenderer>,
 	scissor: Option<drawing::Boundary>,
 	pixel_scale: f32,
 }
 
 impl RendererPass<'_> {
 	fn new(
-		text_atlas: &mut TextAtlas,
 		rect_pipeline: RectPipeline,
 		image_pipeline: ImagePipeline,
 		scissor: Option<drawing::Boundary>,
 		pixel_scale: f32,
 	) -> anyhow::Result<Self> {
-		let text_renderer = TextRenderer::new(text_atlas)?;
-		let rect_renderer = RectRenderer::new(rect_pipeline)?;
-		let image_renderer = ImageRenderer::new(image_pipeline)?;
-
 		Ok(Self {
 			submitted: false,
-			text_renderer,
-			rect_renderer,
-			image_renderer,
 			text_areas: Vec::new(),
+			rect_pipeline,
+			image_pipeline,
+			rect_renderer: None,
+			image_renderer: None,
 			scissor,
 			pixel_scale,
 		})
+	}
+
+	fn rect_renderer(&mut self) -> anyhow::Result<&mut RectRenderer> {
+		if self.rect_renderer.is_none() {
+			self.rect_renderer = Some(RectRenderer::new(self.rect_pipeline.clone())?);
+		}
+		Ok(self.rect_renderer.as_mut().unwrap())
+	}
+
+	fn image_renderer(&mut self) -> anyhow::Result<&mut ImageRenderer> {
+		if self.image_renderer.is_none() {
+			self.image_renderer = Some(ImageRenderer::new(self.image_pipeline.clone())?);
+		}
+		Ok(self.image_renderer.as_mut().unwrap())
 	}
 
 	fn submit(
@@ -92,16 +105,22 @@ impl RendererPass<'_> {
 		};
 
 		self.submitted = true;
-		self.rect_renderer.render(gfx, viewport, &gfx_scissor, cmd_buf)?;
-		self
-			.image_renderer
-			.render(gfx, viewport, &gfx_scissor, cmd_buf, image_view_cache)?;
+		if let Some(rect_renderer) = &mut self.rect_renderer {
+			rect_renderer.render(gfx, viewport, &gfx_scissor, cmd_buf)?;
+		}
+		if let Some(image_renderer) = &mut self.image_renderer {
+			image_renderer.render(gfx, viewport, &gfx_scissor, cmd_buf, image_view_cache)?;
+		}
+		if self.text_areas.is_empty() {
+			return Ok(());
+		}
 
+		let mut text_renderer = TextRenderer::new(text_atlas)?;
 		{
 			let mut font_system = font_system.system.lock();
 			let mut swash_cache = SWASH_CACHE.lock();
 
-			self.text_renderer.prepare(
+			text_renderer.prepare(
 				&mut font_system,
 				text_atlas,
 				viewport,
@@ -110,7 +129,7 @@ impl RendererPass<'_> {
 			)?;
 		}
 
-		self.text_renderer.render(text_atlas, viewport, &gfx_scissor, cmd_buf)?;
+		text_renderer.render(text_atlas, viewport, &gfx_scissor, cmd_buf)?;
 
 		Ok(())
 	}
@@ -250,7 +269,6 @@ impl Context {
 		for primitive in primitives {
 			if needs_new_pass {
 				passes.push(RendererPass::new(
-					&mut atlas.text_atlas,
 					shared.rect_pipeline.clone(),
 					shared.image_pipeline.clone(),
 					cur_scissor,
@@ -267,7 +285,7 @@ impl Context {
 				}
 				drawing::RenderPrimitive::Rectangle(extent, rectangle) => {
 					pass
-						.rect_renderer
+						.rect_renderer()?
 						.add_rect(extent.boundary, *rectangle, &extent.transform);
 				}
 				drawing::RenderPrimitive::Text(extent, text, shadow) => {
@@ -311,7 +329,7 @@ impl Context {
 				}
 				drawing::RenderPrimitive::Image(extent, image) => {
 					pass
-						.image_renderer
+						.image_renderer()?
 						.add_image(extent.boundary, image.clone(), &extent.transform);
 				}
 				drawing::RenderPrimitive::ScissorSet(boundary) => {

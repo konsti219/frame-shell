@@ -748,7 +748,9 @@ impl Layout {
 		self.animations.tick(&self.state, &mut alterables);
 		self.process_pending_widget_ticks(&mut alterables);
 		self.process_alterables(alterables)?;
-		self.recompute_layout(None)?;
+		// The size last requested by update(): content_size differs for panels smaller than their maximum,
+		// which recomputed the layout and redrew the panel every frame
+		self.recompute_layout(Some(self.prev_size))?;
 		self.process_pending_components();
 		Ok(())
 	}

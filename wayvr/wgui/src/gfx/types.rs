@@ -7,6 +7,7 @@ use std::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Format {
 	R8_UNORM,
+	R8G8_UNORM,
 	R8G8B8_UNORM,
 	R8G8B8A8_UNORM,
 	R8G8B8A8_SRGB,
