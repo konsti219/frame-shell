@@ -259,9 +259,11 @@ pub(super) struct OpenXrHandSource {
     alt_click: CustomClickAction,
     show_hide: CustomClickAction,
     toggle_dashboard: CustomClickAction,
+    reveal_watch: CustomClickAction,
     space_drag: CustomClickAction,
     space_rotate: CustomClickAction,
     space_reset: CustomClickAction,
+    recenter: CustomClickAction,
     modifier_right: CustomClickAction,
     modifier_middle: CustomClickAction,
     move_mouse: CustomClickAction,
@@ -661,6 +663,8 @@ impl OpenXrPointer {
 
         pointer.now.toggle_dashboard = self.source.toggle_dashboard.state(physical_inputs);
 
+        pointer.now.reveal_watch = self.source.reveal_watch.state(physical_inputs);
+
         pointer.now.click_modifier_middle = self.source.modifier_middle.state(physical_inputs);
 
         pointer.now.move_mouse = self.source.move_mouse.state(physical_inputs);
@@ -670,6 +674,8 @@ impl OpenXrPointer {
         pointer.now.space_rotate = self.source.space_rotate.state(physical_inputs);
 
         pointer.now.space_reset = self.source.space_reset.state(physical_inputs);
+
+        pointer.now.recenter = self.source.recenter.state(physical_inputs);
 
         // A button bound to both click and space_drag (e.g. the Frame's bumpers) decides when pressed:
         // it clicks while pointing at an overlay and drags the playspace otherwise
@@ -722,9 +728,11 @@ impl OpenXrHandSource {
             alt_click: CustomClickAction::default(),
             show_hide: CustomClickAction::default(),
             toggle_dashboard: CustomClickAction::default(),
+            reveal_watch: CustomClickAction::default(),
             space_drag: CustomClickAction::default(),
             space_rotate: CustomClickAction::default(),
             space_reset: CustomClickAction::default(),
+            recenter: CustomClickAction::default(),
             modifier_right: CustomClickAction::default(),
             modifier_middle: CustomClickAction::default(),
             move_mouse: CustomClickAction::default(),
@@ -760,11 +768,12 @@ fn for_each_path(spec: Option<&OneOrMany<String>>, mut f: impl FnMut(&str)) {
     }
 }
 
-fn button_actions(profile: &OpenXrInputProfile) -> [Option<&OpenXrInputAction>; 13] {
+fn button_actions(profile: &OpenXrInputProfile) -> [Option<&OpenXrInputAction>; 15] {
     [
         profile.click.as_ref(),
         profile.click_right.as_ref(),
         profile.click_middle.as_ref(),
+        profile.reveal_watch.as_ref(),
         profile.alt_click.as_ref(),
         profile.grab.as_ref(),
         profile.show_hide.as_ref(),
@@ -772,6 +781,7 @@ fn button_actions(profile: &OpenXrInputProfile) -> [Option<&OpenXrInputAction>; 
         profile.space_drag.as_ref(),
         profile.space_rotate.as_ref(),
         profile.space_reset.as_ref(),
+        profile.recenter.as_ref(),
         profile.click_modifier_right.as_ref(),
         profile.click_modifier_middle.as_ref(),
         profile.move_mouse.as_ref(),
@@ -1057,6 +1067,13 @@ fn suggest_bindings(
             |hand| &mut hand.toggle_dashboard,
         );
         add_button_bindings(
+            profile.reveal_watch.as_ref(),
+            profile_index,
+            hands,
+            physical_input_map,
+            |hand| &mut hand.reveal_watch,
+        );
+        add_button_bindings(
             profile.space_drag.as_ref(),
             profile_index,
             hands,
@@ -1076,6 +1093,13 @@ fn suggest_bindings(
             hands,
             physical_input_map,
             |hand| &mut hand.space_reset,
+        );
+        add_button_bindings(
+            profile.recenter.as_ref(),
+            profile_index,
+            hands,
+            physical_input_map,
+            |hand| &mut hand.recenter,
         );
         add_button_bindings(
             profile.click_modifier_right.as_ref(),

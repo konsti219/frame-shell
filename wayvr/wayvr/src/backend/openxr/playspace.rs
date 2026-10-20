@@ -5,7 +5,7 @@ use wgui::log::LogErr;
 use crate::{
     backend::{
         playspace_common::{self, SpaceGravity, SpaceGravityUpdateParams},
-        task::PlayspaceTask,
+        task::{OverlayTask, PlayspaceTask, TaskType},
     },
     state::{AppState, PlayspaceState, load_playspace_state, save_playspace_state},
     windowing::manager::OverlayWindowManager,
@@ -24,17 +24,28 @@ pub(super) struct PlayspaceMover {
     rotate: Option<MoverData<Affine3A>>,
     gravity: SpaceGravity,
     playspace_state: PlayspaceState,
+    /// When the recenter action started being held, and whether it already recentered
+    recenter_hold: Option<(std::time::Instant, bool)>,
+    drag_offset: Affine3A,
+    initialized: bool,
+    saved_calibration: bool,
 }
 
 impl PlayspaceMover {
     pub fn new() -> Self {
         log::info!("Monado: using space offset API");
 
+        let saved = load_playspace_state().ok();
+        let saved_calibration = saved.is_some();
         Self {
             drag: None,
             rotate: None,
             gravity: SpaceGravity::new(),
-            playspace_state: load_playspace_state().unwrap_or_default(),
+            playspace_state: saved.unwrap_or_default(),
+            recenter_hold: None,
+            drag_offset: Affine3A::IDENTITY,
+            initialized: false,
+            saved_calibration,
         }
     }
 
@@ -48,6 +59,8 @@ impl PlayspaceMover {
             return; // monado not available
         };
 
+        self.initialize(&mut monado.ipc);
+
         match task {
             PlayspaceTask::FixFloor => {
                 self.fix_floor(app, overlays);
@@ -59,10 +72,11 @@ impl PlayspaceMover {
                 self.recenter(app, overlays);
             }
             PlayspaceTask::SaveCenter => {
-                self.save_center(&mut monado.ipc);
+                self.save_center();
             }
             PlayspaceTask::ResetCenter => {
-                self.playspace_state.openxr_space_center = Affine3A::IDENTITY;
+                app.floor_calibration.start(10);
+                self.set_calibration(app, overlays, Affine3A::IDENTITY);
             }
         }
     }
@@ -72,6 +86,35 @@ impl PlayspaceMover {
         overlays: &mut OverlayWindowManager<OpenXrOverlayData>,
         app: &mut AppState,
     ) {
+        if let Some(monado) = &mut app.monado_state {
+            self.initialize(&mut monado.ipc);
+        }
+
+        self.update_floor_estimate(app, overlays);
+
+        // Recenter on a held button (the Frame's Steam button), like SteamVR
+        if app
+            .input_state
+            .pointers
+            .iter()
+            .any(|pointer| pointer.now.recenter)
+        {
+            let (since, done) = self
+                .recenter_hold
+                .get_or_insert((std::time::Instant::now(), false));
+            if !*done && since.elapsed() >= std::time::Duration::from_millis(1500) {
+                *done = true;
+                log::info!("Recenter (held)");
+                self.recenter(app, overlays);
+                return;
+            }
+        } else if let Some((_, recentered)) = self.recenter_hold.take() {
+            if !recentered {
+                app.tasks
+                    .enqueue(TaskType::Overlay(OverlayTask::ToggleDashboard));
+            }
+        }
+
         let Some(monado) = &mut app.monado_state else {
             return; // monado not available
         };
@@ -129,6 +172,7 @@ impl PlayspaceMover {
             }
             data.hand_pose = new_hand;
 
+            self.drag_offset = self.playspace_state.openxr_space_center.inverse() * data.pose;
             apply_offset(data.pose, &mut monado.ipc);
             self.rotate = Some(data);
             // drag and rotate can share a button
@@ -178,8 +222,11 @@ impl PlayspaceMover {
             if !pointer.now.space_drag {
                 self.gravity.mark_end_drag(
                     &app.session.config,
-                    relative_pos,
-                    data.pose.translation,
+                    self.playspace_state
+                        .openxr_space_center
+                        .inverse()
+                        .transform_vector3a(relative_pos),
+                    self.drag_offset.translation,
                     app.delta_time,
                 );
 
@@ -199,6 +246,7 @@ impl PlayspaceMover {
             }
             data.hand_pose = new_hand;
 
+            self.drag_offset = self.playspace_state.openxr_space_center.inverse() * data.pose;
             apply_offset(data.pose, &mut monado.ipc);
             self.drag = Some(data);
         } else {
@@ -237,9 +285,9 @@ impl PlayspaceMover {
             config: &app.session.config,
             floor_height: app.session.config.space_gravity_floor_height,
         }) {
-            let prev_playspace_pos = res.playspace_pos - res.playspace_pos_offset;
-            let before_pose = Affine3A::from_translation(prev_playspace_pos.into());
-            let after_pose = Affine3A::from_translation(res.playspace_pos.into());
+            let before_pose = self.playspace_state.openxr_space_center * self.drag_offset;
+            self.drag_offset.translation = res.playspace_pos;
+            let after_pose = self.playspace_state.openxr_space_center * self.drag_offset;
             apply_offset(after_pose, &mut monado.ipc);
 
             if !app.session.config.space_drag_affects_world {
@@ -248,79 +296,115 @@ impl PlayspaceMover {
         }
     }
 
+    pub(super) fn floor_from_stage(&self) -> Affine3A {
+        self.drag_offset
+    }
+
+    pub(super) fn floor_from_raw(&self) -> Affine3A {
+        self.playspace_state.openxr_space_center.inverse()
+    }
+
+    fn initialize(&mut self, monado: &mut Monado) {
+        if self.initialized {
+            return;
+        }
+        if !self.saved_calibration {
+            let Ok(pose) = monado
+                .get_reference_space_offset(ReferenceSpaceType::Stage)
+                .log_err("Could not read playspace calibration")
+            else {
+                return;
+            };
+            self.playspace_state.openxr_space_center =
+                Affine3A::from_rotation_translation(pose.orientation.into(), pose.position.into());
+        }
+        self.initialized = apply_offset(self.playspace_state.openxr_space_center, monado);
+    }
+
+    fn update_floor_estimate(
+        &mut self,
+        app: &mut AppState,
+        overlays: &mut OverlayWindowManager<OpenXrOverlayData>,
+    ) {
+        crate::floor_estimate::request(crate::frame_shell::floor_debug_visible(app));
+        let estimate = crate::floor_estimate::snapshot();
+        app.floor_calibration.update(&estimate);
+        if !self.initialized || self.drag.is_some() || self.rotate.is_some() {
+            return;
+        }
+        let Some(height) = app.floor_calibration.height else {
+            return;
+        };
+        let Some(monado) = &mut app.monado_state else {
+            return;
+        };
+        let mut calibration = self.playspace_state.openxr_space_center;
+        if (calibration.translation.y - height).abs() < 0.001 && !app.floor_calibration.needs_save {
+            return;
+        }
+        let before = calibration * self.drag_offset;
+        calibration.translation.y = height;
+        let after = calibration * self.drag_offset;
+        if !apply_offset(after, &mut monado.ipc) {
+            return;
+        }
+        self.playspace_state.openxr_space_center = calibration;
+        if app.floor_calibration.needs_save {
+            self.save_center();
+            app.floor_calibration.needs_save = false;
+        }
+        if !app.session.config.space_drag_affects_world {
+            playspace_common::shift_world(overlays, &mut app.anchor, &before, &after);
+        }
+    }
+
+    fn stop_moving(&mut self) {
+        self.drag = None;
+        self.rotate = None;
+        self.gravity.reset();
+    }
+
+    fn set_calibration(
+        &mut self,
+        app: &mut AppState,
+        overlays: &mut OverlayWindowManager<OpenXrOverlayData>,
+        calibration: Affine3A,
+    ) {
+        let Some(monado) = &mut app.monado_state else {
+            return;
+        };
+        let before = self.playspace_state.openxr_space_center * self.drag_offset;
+        let after = calibration * self.drag_offset;
+        if !apply_offset(after, &mut monado.ipc) {
+            return;
+        }
+        self.stop_moving();
+        self.playspace_state.openxr_space_center = calibration;
+        self.save_center();
+        if !app.session.config.space_drag_affects_world {
+            playspace_common::shift_world(overlays, &mut app.anchor, &before, &after);
+        }
+        crate::frame_shell::show_floor();
+    }
+
     pub fn recenter(
         &mut self,
         app: &mut AppState,
         overlays: &mut OverlayWindowManager<OpenXrOverlayData>,
     ) {
-        let Some(monado) = &mut app.monado_state else {
+        // Centred on the head in the current (dragged) stage, keeping the drag: stage = calibration * drag
+        let head = app.input_state.hmd;
+        let forward = head.transform_vector3a(Vec3A::NEG_Z);
+        if forward.x * forward.x + forward.z * forward.z <= f32::EPSILON {
             return;
-        };
-
-        if self.drag.is_some() {
-            log::info!("Space drag interrupted by recenter");
-            self.drag = None;
         }
-        if self.rotate.is_some() {
-            log::info!("Space rotate interrupted by recenter");
-            self.rotate = None;
-        }
-
-        let input = &app.input_state;
-        let anchor = &mut app.anchor;
-
-        let Ok(mut pose) = monado
-            .ipc
-            .get_reference_space_offset(ReferenceSpaceType::Stage)
-            .inspect_err(|e| log::warn!("Could not recenter due to libmonado error: {e:?}"))
-        else {
-            return;
-        };
-
-        let before =
-            Affine3A::from_rotation_translation(pose.orientation.into(), pose.position.into());
-
-        let cur_rot: Quat = pose.orientation.into();
-        let cur_pos: Vec3 = pose.position.into();
-
-        let mut stage_offset = Affine3A::from_rotation_translation(cur_rot, cur_pos);
-
-        let horiz_hmd_pos = Vec3::new(input.hmd.translation.x, 0.0, input.hmd.translation.z);
-
-        let fwd = input.hmd.transform_vector3a(Vec3A::NEG_Z);
-        let horiz_len_sq = fwd.x.mul_add(fwd.x, fwd.z * fwd.z);
-
-        let hmd_yaw = if horiz_len_sq > f32::EPSILON {
-            let yaw = (-fwd.x).atan2(-fwd.z);
-            Quat::from_rotation_y(yaw)
-        } else {
-            Quat::IDENTITY
-        };
-
-        let recenter_offset = Affine3A::from_rotation_translation(hmd_yaw, horiz_hmd_pos);
-
-        stage_offset *= recenter_offset;
-
-        let (_, new_rot, new_pos) = stage_offset.to_scale_rotation_translation();
-
-        pose.position = new_pos.into();
-
-        if horiz_len_sq > f32::EPSILON {
-            pose.orientation = new_rot.into();
-        }
-
-        let _ = monado
-            .ipc
-            .set_reference_space_offset(ReferenceSpaceType::Stage, pose)
-            .inspect_err(|e| log::warn!("Could not recenter due to libmonado error: {e:?}"));
-
-        self.gravity.reset();
-
-        if !app.session.config.space_drag_affects_world {
-            let after =
-                Affine3A::from_rotation_translation(pose.orientation.into(), pose.position.into());
-            playspace_common::shift_world(overlays, anchor, &before, &after);
-        }
+        let yaw = (-forward.x).atan2(-forward.z);
+        let horizontal = Vec3::new(head.translation.x, 0.0, head.translation.z);
+        let stage = self.playspace_state.openxr_space_center
+            * self.drag_offset
+            * Affine3A::from_rotation_translation(Quat::from_rotation_y(yaw), horizontal);
+        let calibration = stage * self.drag_offset.inverse();
+        self.set_calibration(app, overlays, calibration);
     }
 
     pub fn reset_offset(
@@ -331,34 +415,15 @@ impl PlayspaceMover {
         let Some(monado) = &mut app.monado_state else {
             return;
         };
-
-        if self.drag.is_some() {
-            log::info!("Space drag interrupted by manual reset");
-            self.drag = None;
-        }
-        if self.rotate.is_some() {
-            log::info!("Space rotate interrupted by manual reset");
-            self.rotate = None;
-        }
-
-        let Ok(pose) = monado
-            .ipc
-            .get_reference_space_offset(ReferenceSpaceType::Stage)
-            .inspect_err(|e| log::warn!("Could not reset offset due to libmonado error: {e:?}"))
-        else {
+        let calibration = self.playspace_state.openxr_space_center;
+        let before = calibration * self.drag_offset;
+        if !apply_offset(calibration, &mut monado.ipc) {
             return;
-        };
-
-        let before =
-            Affine3A::from_rotation_translation(pose.orientation.into(), pose.position.into());
-
-        self.gravity.reset();
-        let offset = self.playspace_state.openxr_space_center;
-        apply_offset(offset, &mut monado.ipc);
-
+        }
+        self.stop_moving();
+        self.drag_offset = Affine3A::IDENTITY;
         if !app.session.config.space_drag_affects_world {
-            let after = offset;
-            playspace_common::shift_world(overlays, &mut app.anchor, &before, &after);
+            playspace_common::shift_world(overlays, &mut app.anchor, &before, &calibration);
         }
     }
 
@@ -367,85 +432,39 @@ impl PlayspaceMover {
         app: &mut AppState,
         overlays: &mut OverlayWindowManager<OpenXrOverlayData>,
     ) {
-        let Some(monado) = &mut app.monado_state else {
+        let mut calibration = self.playspace_state.openxr_space_center;
+        let floor = app
+            .input_state
+            .pointers
+            .iter()
+            .map(|hand| {
+                self.drag_offset
+                    .transform_point3a(hand.raw_pose.translation)
+                    .y
+            })
+            .fold(f32::INFINITY, f32::min)
+            - 0.05;
+        if !floor.is_finite() {
             return;
-        };
-
-        if self.drag.is_some() {
-            log::info!("Space drag interrupted by fix floor");
-            self.drag = None;
         }
-        if self.rotate.is_some() {
-            log::info!("Space rotate interrupted by fix floor");
-            self.rotate = None;
-        }
-
-        let input = &app.input_state;
-        let anchor = &mut app.anchor;
-
-        let Ok(mut pose) = monado
-            .ipc
-            .get_reference_space_offset(ReferenceSpaceType::Stage)
-            .inspect_err(|e| log::warn!("Could not fix floor due to libmonado error: {e:?}"))
-        else {
-            return;
-        };
-
-        let before =
-            Affine3A::from_rotation_translation(pose.orientation.into(), pose.position.into());
-
-        let y1 = input.pointers[0].raw_pose.translation.y;
-        let y2 = input.pointers[1].raw_pose.translation.y;
-        let delta = y1.min(y2) - 0.05;
-
-        pose.position.y += delta;
-
-        self.playspace_state.openxr_space_center.translation.y = pose.position.y;
-
-        let _ = monado
-            .ipc
-            .set_reference_space_offset(ReferenceSpaceType::Stage, pose)
-            .inspect_err(|e| log::warn!("Could not fix floor due to libmonado error: {e:?}"));
-
-        let after =
-            Affine3A::from_rotation_translation(pose.orientation.into(), pose.position.into());
-
-        if !app.session.config.space_drag_affects_world {
-            playspace_common::shift_world(overlays, anchor, &before, &after);
-        }
+        calibration.translation.y += floor;
+        app.floor_calibration.stop();
+        self.set_calibration(app, overlays, calibration);
     }
 
-    pub fn save_center(&mut self, monado: &mut Monado) {
-        if self.drag.is_some() {
-            log::info!("Space drag interrupted by save center");
-            self.drag = None;
-        }
-        if self.rotate.is_some() {
-            log::info!("Space rotate interrupted by save center");
-            self.rotate = None;
-        }
-
-        let Ok(pose) = monado
-            .get_reference_space_offset(ReferenceSpaceType::Stage)
-            .inspect_err(|e| log::warn!("Could not fix floor due to libmonado error: {e:?}"))
-        else {
-            return;
-        };
-
-        let cur_rot: Quat = pose.orientation.into();
-        let cur_pos: Vec3 = pose.position.into();
-
-        let stage_offset = Affine3A::from_rotation_translation(cur_rot, cur_pos);
-        self.playspace_state.openxr_space_center = stage_offset;
-        let _ =
-            save_playspace_state(&self.playspace_state).log_err("Could not save playspace state");
+    pub fn save_center(&mut self) {
+        let _ = save_playspace_state(&self.playspace_state)
+            .log_err("Could not save playspace calibration");
     }
 }
 
-fn apply_offset(transform: Affine3A, monado: &mut Monado) {
+fn apply_offset(transform: Affine3A, monado: &mut Monado) -> bool {
     let pose = Pose {
         position: transform.translation.into(),
         orientation: Quat::from_affine3(&transform).into(),
     };
-    let _ = monado.set_reference_space_offset(ReferenceSpaceType::Stage, pose);
+    monado
+        .set_reference_space_offset(ReferenceSpaceType::Stage, pose)
+        .log_err("Could not apply playspace offset")
+        .is_ok()
 }

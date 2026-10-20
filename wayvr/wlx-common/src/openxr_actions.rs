@@ -79,11 +79,16 @@ pub struct OpenXrInputProfile {
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub toggle_dashboard: Option<OpenXrInputAction>,
 	#[serde(skip_serializing_if = "Option::is_none")]
+	pub reveal_watch: Option<OpenXrInputAction>,
+	#[serde(skip_serializing_if = "Option::is_none")]
 	pub space_drag: Option<OpenXrInputAction>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub space_rotate: Option<OpenXrInputAction>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub space_reset: Option<OpenXrInputAction>,
+	/// Recenter the playspace when held (0.6 s)
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub recenter: Option<OpenXrInputAction>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub click_modifier_right: Option<OpenXrInputAction>,
 	#[serde(skip_serializing_if = "Option::is_none")]

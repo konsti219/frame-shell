@@ -84,6 +84,7 @@ impl LinePool {
                 buf_color,
                 pass,
                 maybe_line: None,
+                drawn_color: None,
             },
         );
         Ok(id)
@@ -158,6 +159,11 @@ impl LinePool {
     ) -> anyhow::Result<()> {
         for line in self.lines.values_mut() {
             if let Some(inner) = line.maybe_line.as_mut() {
+                // A solid colour: the last released image stays valid until the colour changes
+                if line.drawn_color == Some(inner.color) {
+                    continue;
+                }
+                line.drawn_color = Some(inner.color);
                 let tgt = line
                     .swapchain
                     .acquire_wait_image()?
@@ -221,4 +227,5 @@ struct LineContainer {
     buf_color: Arc<Buffer<f32>>,
     pass: WGfxPass<Vert2Uv>,
     maybe_line: Option<Line>,
+    drawn_color: Option<usize>,
 }
