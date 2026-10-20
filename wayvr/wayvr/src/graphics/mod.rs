@@ -11,7 +11,8 @@ use wgui::gfx::{
 use wlx_capture::DrmFormat;
 
 use crate::shaders::{
-    frag_color, frag_grid, frag_screen, frag_simple, frag_sky, frag_srgb, frag_wayland, vert_quad,
+    frag_color, frag_floor_grid, frag_floor_samples, frag_grid, frag_nv12, frag_screen,
+    frag_simple, frag_sky, frag_srgb, frag_wayland, vert_floor_samples, vert_quad,
 };
 
 use dmabuf::get_drm_formats;
@@ -31,7 +32,11 @@ impl WGfxExtras {
         shaders.insert("frag_srgb", frag_srgb::load(gfx)?);
         shaders.insert("frag_sky", frag_sky::load(gfx)?);
         shaders.insert("frag_grid", frag_grid::load(gfx)?);
+        shaders.insert("frag_floor_grid", frag_floor_grid::load(gfx)?);
+        shaders.insert("vert_floor_samples", vert_floor_samples::load(gfx)?);
+        shaders.insert("frag_floor_samples", frag_floor_samples::load(gfx)?);
         shaders.insert("frag_screen", frag_screen::load(gfx)?);
+        shaders.insert("frag_nv12", frag_nv12::load(gfx)?);
         shaders.insert("frag_simple", frag_simple::load(gfx)?);
         shaders.insert("frag_wayland", frag_wayland::load(gfx)?);
 

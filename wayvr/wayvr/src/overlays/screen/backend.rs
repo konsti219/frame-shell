@@ -40,6 +40,67 @@ fn set_next_move(millis_from_now: u64) {
     );
 }
 
+/// Desktop mouse input for a screen-like overlay; `pos` is the hit in the HID provider's coordinates.
+pub(crate) fn screen_hover(app: &mut AppState, hit: &PointerHit, pos: Vec2) -> HoverResult {
+    #[cfg(debug_assertions)]
+    log::trace!("Hover: {:?}", hit.uv);
+
+    let pick_now = app.input_state.picking_focus.is_picking();
+    if pick_now {
+        app.input_state.stop_picking();
+        app.hid_provider
+            .set_input_focus(app.wvr_server.as_mut(), InputFocus::PhysicalScreen);
+    }
+
+    if can_move()
+        && (!app.session.config.focus_follows_mouse_mode
+            || app.input_state.pointers[hit.pointer].now.move_mouse)
+    {
+        app.hid_provider
+            .inner
+            .mouse_move(DVec2::new(pos.x as _, pos.y as _));
+        set_next_move(app.session.config.mouse_move_interval_ms as _);
+    }
+    HoverResult::consume()
+}
+
+pub(crate) fn screen_pointer(app: &mut AppState, hit: &PointerHit, pressed: bool, pos: Vec2) {
+    let mut btn = match hit.mode {
+        PointerMode::Right => MOUSE_RIGHT,
+        PointerMode::Middle => MOUSE_MIDDLE,
+        _ => MOUSE_LEFT,
+    };
+
+    // Swap left and right buttons if left-handed mode is enabled
+    if app.session.config.left_handed_mouse {
+        btn = match btn {
+            MOUSE_LEFT => MOUSE_RIGHT,
+            MOUSE_RIGHT => MOUSE_LEFT,
+            other => other,
+        };
+    }
+
+    if pressed {
+        set_next_move(app.session.config.click_freeze_time_ms as _);
+    }
+
+    app.hid_provider.inner.send_button(btn, pressed);
+
+    if !pressed {
+        return;
+    }
+    app.hid_provider
+        .inner
+        .mouse_move(DVec2::new(pos.x as _, pos.y as _));
+}
+
+pub(crate) fn screen_scroll(app: &mut AppState, mut delta: WheelDelta) {
+    // convert to v120 value; maximum deflect scrolls at half speed
+    delta.x *= 60.0;
+    delta.y *= 60.0;
+    app.hid_provider.inner.wheel(delta);
+}
+
 pub(super) enum CaptureType {
     PipeWire,
     ScreenCopy,
@@ -289,64 +350,19 @@ impl OverlayBackend for ScreenBackend {
     }
 
     fn on_hover(&mut self, app: &mut AppState, hit: &PointerHit) -> HoverResult {
-        #[cfg(debug_assertions)]
-        log::trace!("Hover: {:?}", hit.uv);
-
-        let pick_now = app.input_state.picking_focus.is_picking();
-        if pick_now {
-            app.input_state.stop_picking();
-            app.hid_provider
-                .set_input_focus(app.wvr_server.as_mut(), InputFocus::PhysicalScreen);
-        }
-
-        if can_move()
-            && (!app.session.config.focus_follows_mouse_mode
-                || app.input_state.pointers[hit.pointer].now.move_mouse)
-        {
-            let pos = self.mouse_transform.transform_point2(hit.uv);
-            app.hid_provider
-                .inner
-                .mouse_move(DVec2::new(pos.x as _, pos.y as _));
-            set_next_move(app.session.config.mouse_move_interval_ms as _);
-        }
-        HoverResult::consume()
+        screen_hover(app, hit, self.mouse_transform.transform_point2(hit.uv))
     }
     fn on_pointer(&mut self, app: &mut AppState, hit: &PointerHit, pressed: bool) {
-        let mut btn = match hit.mode {
-            PointerMode::Right => MOUSE_RIGHT,
-            PointerMode::Middle => MOUSE_MIDDLE,
-            _ => MOUSE_LEFT,
-        };
-
-        // Swap left and right buttons if left-handed mode is enabled
-        if app.session.config.left_handed_mouse {
-            btn = match btn {
-                MOUSE_LEFT => MOUSE_RIGHT,
-                MOUSE_RIGHT => MOUSE_LEFT,
-                other => other,
-            };
-        }
-
-        if pressed {
-            set_next_move(app.session.config.click_freeze_time_ms as _);
-        }
-
-        app.hid_provider.inner.send_button(btn, pressed);
-
-        if !pressed {
-            return;
-        }
-        let pos = self.mouse_transform.transform_point2(hit.uv);
-        app.hid_provider
-            .inner
-            .mouse_move(DVec2::new(pos.x as _, pos.y as _));
+        screen_pointer(
+            app,
+            hit,
+            pressed,
+            self.mouse_transform.transform_point2(hit.uv),
+        );
     }
 
-    fn on_scroll(&mut self, app: &mut AppState, _hit: &PointerHit, mut delta: WheelDelta) {
-        // convert to v120 value; maximum deflect scrolls at half speed
-        delta.x *= 60.0;
-        delta.y *= 60.0;
-        app.hid_provider.inner.wheel(delta);
+    fn on_scroll(&mut self, app: &mut AppState, _hit: &PointerHit, delta: WheelDelta) {
+        screen_scroll(app, delta);
     }
 
     fn on_left(&mut self, _app: &mut AppState, _hand: usize) {}

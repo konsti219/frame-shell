@@ -26,7 +26,7 @@ pub(super) struct ExtraExts {
 }
 
 pub(super) fn init_xr() -> Result<(xr::Instance, xr::SystemId, ExtraExts), anyhow::Error> {
-    let entry = xr::Entry::linked();
+    let entry = crate::frame_shell::openxr_entry()?;
     let mut extra_exts = ExtraExts::default();
 
     let Ok(available_extensions) = entry.enumerate_extensions() else {

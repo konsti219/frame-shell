@@ -3,6 +3,7 @@ pub mod custom;
 pub mod dashboard;
 pub mod drag_item;
 pub mod edit;
+pub mod floor;
 pub mod keyboard;
 pub mod passthrough;
 pub mod screen;

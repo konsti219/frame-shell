@@ -63,6 +63,9 @@ pub struct WvrPinLaunchParams {
 	pub name: String,
 	pub app_id: String,
 	pub icon: Option<String>,
+	/// PC the game is on (WiVRn server name), none for a local game
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub host: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -210,6 +213,17 @@ pub struct WlxOverlayListParams {
 	pub hidden: bool,
 }
 
+/// Current playback state of the watch's tracked media source (e.g. the
+/// YouTube Music tab via the wayvr-media-bridge native messaging host).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct WatchMediaState {
+	pub title: Option<String>,
+	pub artist: Option<String>,
+	pub album: Option<String>,
+	pub artwork: Option<String>,
+	pub playing: bool,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub enum PacketClient {
 	Handshake(Handshake),
@@ -231,6 +245,7 @@ pub enum PacketClient {
 	WlxWindowAttribGet(Serial, WlxWindowAttribGetParams),
 	WlxWindowAttribSet(Serial, WlxWindowAttribSetParams),
 	WlxOverlaySetVisible(String, bool),
+	WatchMediaState(WatchMediaState),
 	/// Receive `CustomEvent`s with these names, or all of them for an empty list
 	CustomEventSubscribe(Vec<String>),
 }

@@ -5,7 +5,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use glam::{Affine3A, Vec3};
+use glam::{Affine3A, Vec3, Vec3A};
 use input::OpenXrInputSource;
 use openxr as xr;
 use skybox::{Skybox, create_skybox};
@@ -33,7 +33,7 @@ use crate::{
     overlays::{toast::Toast, watch::WATCH_NAME},
     state::AppState,
     windowing::{
-        backend::{RenderResources, RenderTarget, ShouldRender},
+        backend::{OverlayEventData, RenderResources, RenderTarget, ShouldRender},
         manager::OverlayWindowManager,
     },
 };
@@ -313,8 +313,14 @@ pub fn openxr_run(args: &Args, params: RunParams) -> Result<(), BackendError> {
                 .front()
                 .map_or(0f32, |time| time.elapsed().as_secs_f32());
 
-            fps_counter.len() as f32 / total_elapsed
+            if total_elapsed > 0.001 {
+                fps_counter.len() as f32 / total_elapsed
+            } else {
+                0.0
+            }
         };
+        app.watch_data.fps_current = (1.0 / app.delta_time).clamp(0.0, 999.0);
+        app.watch_data.fps_average = xr_state.fps;
 
         if !xr_frame_state.should_render {
             log::trace!("xrEndFrame");
@@ -353,7 +359,24 @@ pub fn openxr_run(args: &Args, params: RunParams) -> Result<(), BackendError> {
                 .enqueue(TaskType::Overlay(OverlayTask::ToggleDashboard));
         }
 
+        if app
+            .input_state
+            .pointers
+            .iter()
+            .any(|p| p.now.reveal_watch && !p.before.reveal_watch)
+            && let Some(watch) = overlays.mut_by_id(watch_id)
+        {
+            let _ = watch
+                .config
+                .backend
+                .notify(&mut app, OverlayEventData::WatchReveal)
+                .inspect_err(|e| log::warn!("Error during Notify WatchReveal: {e:?}"));
+        }
+
         playspace_mover.update(&mut overlays, &mut app);
+        app.floor_from_stage = playspace_mover.floor_from_stage();
+        crate::frame_shell::update_drag_offset(app.floor_from_stage);
+        app.floor_from_raw = playspace_mover.floor_from_raw();
 
         for o in overlays.values_mut() {
             o.after_input(&mut app)?;
@@ -371,6 +394,11 @@ pub fn openxr_run(args: &Args, params: RunParams) -> Result<(), BackendError> {
         )?;
 
         let ipd = helpers::ipd_from_views(&views);
+        let eye_mid = (Vec3A::from(mint::Vector3::from(views[0].pose.position))
+            + Vec3A::from(mint::Vector3::from(views[1].pose.position)))
+            * 0.5;
+        app.input_state.eye_center = app.input_state.hmd.inverse().transform_point3a(eye_mid);
+        crate::eye_calibration::tick();
         if (app.input_state.ipd - ipd).abs() > 0.5 {
             log::info!("IPD changed: {} -> {}", app.input_state.ipd, ipd);
             app.input_state.ipd = ipd;
@@ -533,6 +561,8 @@ pub fn openxr_run(args: &Args, params: RunParams) -> Result<(), BackendError> {
         // End layer submit
 
         app.tick();
+        crate::frame_shell::poll_surfaces(&mut app);
+        crate::frame_shell::poll_desktop_visibility(&overlays);
         app.tasks.retrieve_due(&mut due_tasks);
         while let Some(task) = due_tasks.pop_front() {
             match task {

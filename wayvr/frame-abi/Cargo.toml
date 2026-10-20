@@ -1,0 +1,9 @@
+[package]
+name = "frame-abi"
+version = "0.1.0"
+edition = "2024"
+description = "Rust bindings of the frame shell's C ABI (include/frame_abi.h)"
+license = "MIT"
+
+[build-dependencies]
+bindgen = "0.72.1"

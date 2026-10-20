@@ -25,6 +25,9 @@ impl SerialGenerator {
 pub const PROTOCOL_VERSION: u32 = 6;
 pub const CONNECTION_MAGIC: &str = "wayvr_ipc";
 
+/// Abstract socket name of the IPC server
+pub const SOCKET_NAME: &str = "/tmp/wayvr_ipc.sock";
+
 pub fn data_encode<T>(data: &T) -> Vec<u8>
 where
 	T: serde::Serialize,

@@ -127,7 +127,7 @@ macro_rules! send_only {
 
 impl WayVRClient {
 	pub async fn new(client_name: &str) -> anyhow::Result<WayVRClientMutex> {
-		let printname = "/tmp/wayvr_ipc.sock";
+		let printname = ipc::SOCKET_NAME;
 
 		let name = printname
 			.to_ns_name::<local_socket::GenericNamespaced>()

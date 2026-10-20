@@ -47,16 +47,30 @@ impl OverlayList {
             let mut stop_clicks_to_reset = Vec::<String>::new();
 
             for (i, pin) in app.session.config.pinned_games.iter().enumerate() {
-                let running = steam::list_running_games()
-                    .unwrap_or_default()
-                    .iter()
-                    .any(|g| g.app_id == pin.app_id);
+                let running = pin.host.as_ref().map_or_else(
+                    || {
+                        steam::list_running_games()
+                            .unwrap_or_default()
+                            .iter()
+                            .any(|g| g.app_id == pin.app_id)
+                    },
+                    |host| crate::frame_shell::remote_game_running(host, &pin.app_id),
+                );
 
                 if !running {
-                    stop_clicks_to_reset.push(pin.app_id.clone());
+                    stop_clicks_to_reset.push(crate::frame_shell::pinned_stop_key(
+                        pin.host.as_deref(),
+                        &pin.app_id,
+                    ));
                 }
 
-                let stop_stage = stop_clicks.get(&pin.app_id).copied().unwrap_or(0);
+                let stop_stage = stop_clicks
+                    .get(&crate::frame_shell::pinned_stop_key(
+                        pin.host.as_deref(),
+                        &pin.app_id,
+                    ))
+                    .copied()
+                    .unwrap_or(0);
 
                 let mut params = TemplateParams::new();
                 params.insert_rc("idx", i.to_string().into());

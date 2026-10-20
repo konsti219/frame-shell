@@ -111,6 +111,10 @@ where
             }
         }
 
+        if crate::frame_shell::EMBEDDED.load(Ordering::Relaxed) {
+            app.hid_provider.inner = Box::new(crate::frame_shell::PcInput::default());
+        }
+
         let mut keyboard = OverlayWindowData::from_config(create_keyboard(app)?);
         keyboard.config.show_on_spawn = true;
         me.keyboard_id = me.add(keyboard, app);
@@ -269,12 +273,31 @@ where
                     o.config.activate(app, true);
                 }
                 self.visible_overlays_changed(app)?;
+                if crate::frame_shell::EMBEDDED.load(Ordering::Relaxed) {
+                    self.persist_layout(app);
+                    save_state(&app.session.config)?;
+                }
             }
             OverlayTask::ToggleKeepVisibleWhenHidden(sel) => {
                 self.toggle_keep_visible_when_hidden(&sel, app)?;
             }
             OverlayTask::ToggleEditMode => {
                 self.set_edit_mode(!self.edit_mode, app)?;
+            }
+            OverlayTask::SaveLayout => {
+                self.persist_layout(app);
+                if let Err(e) = save_state(&app.session.config) {
+                    log::error!("Could not save state: {e:?}");
+                }
+            }
+            OverlayTask::ShowDashboard => {
+                if let Some(overlay) =
+                    self.mut_by_selector(&OverlaySelector::Name(DASH_NAME.into()))
+                    && overlay.config.active_state.is_none()
+                {
+                    overlay.config.activate(app, true);
+                    self.visible_overlays_changed(app)?;
+                }
             }
             OverlayTask::ToggleDashboard => {
                 if let Some(overlay) =
@@ -1026,7 +1049,12 @@ impl<T> OverlayWindowManager<T> {
             .notify(app, OverlayEventData::IdAssigned(oid))
             .unwrap(); // IdAssigned not expected to fail
 
-        if !shown && show_on_spawn {
+        let saved_hidden = self.global_set.hidden_overlays.arc_get(&name).is_some()
+            || self
+                .sets
+                .iter()
+                .any(|set| set.hidden_overlays.arc_get(&name).is_some());
+        if !shown && show_on_spawn && !saved_hidden {
             log::debug!("activating {name} due to show_on_spawn");
             self.overlays[oid]
                 .config
@@ -1296,6 +1324,12 @@ impl<T> OverlayWindowManager<T> {
             self.switch_to_set(app, Some(self.restore_set), restore_in_place);
         } else {
             self.switch_to_set_inner(app, None, false, true);
+            if crate::frame_shell::EMBEDDED.load(Ordering::Relaxed) {
+                self.persist_layout(app);
+                if let Err(e) = save_state(&app.session.config) {
+                    log::error!("Could not save state: {e:?}");
+                }
+            }
         }
 
         let _ = self

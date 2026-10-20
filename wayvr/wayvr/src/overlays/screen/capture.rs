@@ -334,6 +334,85 @@ impl ScreenPipeline {
     }
 }
 
+/// Draws an NV12 image (luma and chroma planes as separate views) to the overlay, mono.
+pub struct Nv12ScreenPipeline {
+    pass: SmallVec<[BufPass; 2]>,
+    pipeline: Arc<WGfxPipeline<Vert2Uv>>,
+    extentf: [f32; 2],
+    fallback_image: Arc<ImageView>,
+}
+
+impl Nv12ScreenPipeline {
+    pub fn new(meta: &FrameMeta, app: &mut AppState) -> anyhow::Result<Self> {
+        let pipeline = app.gfx.create_pipeline(
+            app.gfx_extras.shaders.get("vert_quad").unwrap(), // want panic
+            app.gfx_extras.shaders.get("frag_nv12").unwrap(), // want panic
+            WPipelineCreateInfo::new(app.gfx.surface_format()).use_updatable_descriptors([0, 1]),
+        )?;
+        let mut cmd_xfer = app
+            .gfx
+            .create_xfer_command_buffer(CommandBufferUsage::OneTimeSubmit)?;
+        let fallback_image =
+            cmd_xfer.upload_image(1, 1, Format::R8G8B8A8_UNORM, &[0, 128, 128, 255])?;
+        cmd_xfer.build_and_execute_now()?;
+        let fallback_image = app.gfx.create_image_view(fallback_image)?;
+        Ok(Self {
+            pass: SmallVec::new(),
+            pipeline,
+            extentf: [meta.extent[0] as f32, meta.extent[1] as f32],
+            fallback_image,
+        })
+    }
+
+    pub fn render(
+        &mut self,
+        luma: Arc<ImageView>,
+        chroma: Arc<ImageView>,
+        app: &mut AppState,
+        rdr: &mut RenderResources,
+    ) -> anyhow::Result<()> {
+        while self.pass.len() < rdr.cmd_bufs.len() {
+            let eye = self.pass.len();
+            let filter = app.gfx.texture_filter();
+            let luma_set = self
+                .pipeline
+                .uniform_sampler(0, self.fallback_image.clone(), filter)?;
+            let chroma_set =
+                self.pipeline
+                    .uniform_sampler(1, self.fallback_image.clone(), filter)?;
+            let buf_vert = app
+                .gfx
+                .empty_buffer(BufferUsage::TRANSFER_DST | BufferUsage::VERTEX_BUFFER, 4)?;
+            buf_vert.write()?.copy_from_slice(&stereo_mode_to_verts(
+                StereoMode::None,
+                eye,
+                wlx_frame::Transform::Normal,
+            ));
+            let pass = self.pipeline.create_pass(
+                self.extentf,
+                [0., 0.],
+                buf_vert.clone(),
+                0..4,
+                0..1,
+                vec![luma_set, chroma_set],
+                Scissor::from_viewport(self.extentf, [0., 0.]),
+            )?;
+            self.pass.push(BufPass { pass, buf_vert });
+        }
+        for (eye, cmd_buf) in rdr.cmd_bufs.iter_mut().enumerate() {
+            let current = &mut self.pass[eye];
+            current
+                .pass
+                .update_sampler(0, luma.clone(), app.gfx.texture_filter())?;
+            current
+                .pass
+                .update_sampler(1, chroma.clone(), app.gfx.texture_filter())?;
+            cmd_buf.run_ref(&current.pass)?;
+        }
+        Ok(())
+    }
+}
+
 fn transform_uv(uv: [f32; 2], transform: wlx_frame::Transform) -> [f32; 2] {
     let [u, v] = uv;
     match transform {

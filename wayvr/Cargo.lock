@@ -1923,6 +1923,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "aa9a19cbb55df58761df49b23516a86d432839add4af60fc256da840f66ed35b"
 
 [[package]]
+name = "frame-abi"
+version = "0.1.0"
+dependencies = [
+ "bindgen",
+]
+
+[[package]]
 name = "fs_extra"
 version = "1.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5687,6 +5694,7 @@ dependencies = [
  "glam",
  "log",
  "rust-embed",
+ "serde_json",
  "tracing-subscriber",
  "ureq",
  "wgui",
@@ -6105,10 +6113,12 @@ dependencies = [
  "dash-frontend",
  "dbus",
  "evdev",
+ "frame-abi",
  "futures",
  "glam",
  "idmap",
  "idmap-derive",
+ "image",
  "image_dds",
  "input",
  "input-linux",
@@ -6175,6 +6185,16 @@ dependencies = [
  "slotmap",
  "smallvec",
  "smol",
+]
+
+[[package]]
+name = "wayvr-media-bridge"
+version = "0.1.0"
+dependencies = [
+ "interprocess",
+ "serde",
+ "serde_json",
+ "wayvr-ipc",
 ]
 
 [[package]]

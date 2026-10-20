@@ -468,6 +468,10 @@ pub struct GeneralConfig {
 	#[serde(default)]
 	pub space_gravity_floor_height: f32,
 
+	/// Estimate the floor height for 30 s after the shell starts
+	#[serde(default = "def_true")]
+	pub floor_calibration_on_start: bool,
+
 	#[serde(default)]
 	pub alt_click_down: Vec<String>,
 

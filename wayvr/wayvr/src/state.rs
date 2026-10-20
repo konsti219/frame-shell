@@ -60,6 +60,10 @@ pub struct AppState {
     pub input_state: InputState,
     pub screens: SmallVec<[ScreenMeta; 8]>,
     pub anchor: Affine3A,
+    /// Calibrated floor coordinates from the current dragged stage.
+    pub floor_from_stage: Affine3A,
+    pub floor_from_raw: Affine3A,
+    pub floor_calibration: crate::floor_estimate::FloorCalibration,
     pub anchor_grabbed: bool,
 
     pub wgui_globals: WguiGlobals,
@@ -87,6 +91,13 @@ pub struct AppState {
 
     #[cfg(feature = "pipewire")]
     pub screencast_manager: Option<ScreenCastManager>,
+
+    pub watch_data: WatchData,
+    #[cfg(feature = "feat-monado-metrics")]
+    pub remote_metrics: Option<(
+        std::time::Instant,
+        crate::backend::openxr::monado_state::MonadoWatchMetrics,
+    )>,
 
     pub delta_time: f32,
 }
@@ -209,6 +220,11 @@ impl AppState {
             input_state: InputState::new(),
             screens: smallvec![],
             anchor: Affine3A::IDENTITY,
+            floor_from_stage: Affine3A::IDENTITY,
+            floor_from_raw: Affine3A::IDENTITY,
+            floor_calibration: crate::floor_estimate::FloorCalibration::new(
+                session.config.floor_calibration_on_start,
+            ),
             anchor_grabbed: false,
             wgui_theme: Rc::new(theme),
             wgui_globals: params.wgui_globals,
@@ -232,6 +248,10 @@ impl AppState {
 
             #[cfg(feature = "pipewire")]
             screencast_manager,
+
+            watch_data: WatchData::default(),
+            #[cfg(feature = "feat-monado-metrics")]
+            remote_metrics: None,
 
             delta_time: 1.0 / 120.0,
             session,
@@ -274,6 +294,15 @@ impl AppState {
         toast_tick(self, self.delta_time);
 
         for toast in self.notifications.drain_pending(&self.session) {
+            if matches!(
+                toast.topic(),
+                ToastTopic::DesktopNotification | ToastTopic::XSNotification
+            ) {
+                self.watch_data.latest_notification = Some(WatchNotification {
+                    title: toast.title().to_owned(),
+                    body: toast.body().to_owned(),
+                });
+            }
             toast.submit(self);
         }
 
@@ -387,4 +416,21 @@ pub fn save_playspace_state(state: &PlayspaceState) -> anyhow::Result<()> {
     let json = serde_json5::to_string(state)?;
     std::fs::write(config_io::get_config_file_path("playspace.json5"), json)?;
     Ok(())
+}
+
+#[derive(Default, Clone)]
+pub struct WatchNotification {
+    pub title: String,
+    pub body: String,
+}
+
+#[derive(Default, Clone)]
+pub struct WatchData {
+    pub fps_current: f32,
+    pub fps_average: f32,
+    pub latest_notification: Option<WatchNotification>,
+    /// Latest media playback state pushed over IPC by the media bridge, and when
+    /// it arrived (used to fall back to "No media" once it goes stale).
+    pub media: Option<wayvr_ipc::packet_client::WatchMediaState>,
+    pub media_updated: Option<std::time::Instant>,
 }

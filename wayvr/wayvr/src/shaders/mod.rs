@@ -55,6 +55,19 @@ pub mod frag_grid {
     }
 }
 
+pub mod frag_floor_grid {
+    use super::{Arc, ShaderModule, ShaderStage, WGfx};
+
+    pub fn load(gfx: &WGfx) -> anyhow::Result<Arc<ShaderModule>> {
+        super::load(
+            gfx,
+            include_bytes!(concat!(env!("OUT_DIR"), "/floor-grid.frag.spv")),
+            ShaderStage::Fragment,
+            &[],
+        )
+    }
+}
+
 pub mod frag_screen {
     use super::{Arc, DescriptorBinding, DescriptorType, ShaderModule, ShaderStage, WGfx};
 
@@ -69,6 +82,32 @@ pub mod frag_screen {
                 DescriptorType::CombinedImageSampler,
                 ShaderStage::Fragment,
             )],
+        )
+    }
+}
+
+pub mod frag_nv12 {
+    use super::{Arc, DescriptorBinding, DescriptorType, ShaderModule, ShaderStage, WGfx};
+
+    pub fn load(gfx: &WGfx) -> anyhow::Result<Arc<ShaderModule>> {
+        super::load(
+            gfx,
+            include_bytes!(concat!(env!("OUT_DIR"), "/nv12.frag.spv")),
+            ShaderStage::Fragment,
+            &[
+                DescriptorBinding::new(
+                    0,
+                    0,
+                    DescriptorType::CombinedImageSampler,
+                    ShaderStage::Fragment,
+                ),
+                DescriptorBinding::new(
+                    1,
+                    0,
+                    DescriptorType::CombinedImageSampler,
+                    ShaderStage::Fragment,
+                ),
+            ],
         )
     }
 }
@@ -137,6 +176,34 @@ pub mod frag_sky {
         super::load(
             gfx,
             include_bytes!(concat!(env!("OUT_DIR"), "/sky.frag.spv")),
+            ShaderStage::Fragment,
+            &[],
+        )
+    }
+}
+
+pub mod vert_floor_samples {
+    use super::{Arc, DescriptorBinding, DescriptorType, ShaderModule, ShaderStage, WGfx};
+    pub fn load(gfx: &WGfx) -> anyhow::Result<Arc<ShaderModule>> {
+        super::load(
+            gfx,
+            include_bytes!(concat!(env!("OUT_DIR"), "/floor-samples.vert.spv")),
+            ShaderStage::Vertex,
+            &[DescriptorBinding::new(
+                0,
+                0,
+                DescriptorType::UniformBuffer,
+                ShaderStage::Vertex,
+            )],
+        )
+    }
+}
+pub mod frag_floor_samples {
+    use super::{Arc, ShaderModule, ShaderStage, WGfx};
+    pub fn load(gfx: &WGfx) -> anyhow::Result<Arc<ShaderModule>> {
+        super::load(
+            gfx,
+            include_bytes!(concat!(env!("OUT_DIR"), "/floor-samples.frag.spv")),
             ShaderStage::Fragment,
             &[],
         )

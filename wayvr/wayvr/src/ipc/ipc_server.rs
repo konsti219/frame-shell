@@ -1,6 +1,7 @@
 use crate::backend::wayvr::process::ProcessHandle;
 use crate::backend::wayvr::{self, WvrServerState};
 
+use crate::frame_host::IpcEvent;
 use crate::subsystem::input::{HidWrapper, InputFocus};
 use crate::{
     backend::input::InputState,
@@ -13,6 +14,7 @@ use smallvec::SmallVec;
 use std::cell::RefCell;
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicU64, Ordering};
+use wayvr_ipc::frame::ShellMessage;
 use wayvr_ipc::packet_client::HandsfreeParams;
 use wayvr_ipc::{
     ipc::{self},
@@ -28,11 +30,19 @@ pub struct AuthInfo {
 
 static NEXT_CONNECTION_ID: AtomicU64 = AtomicU64::new(0);
 
+/// A client on this machine, or one on the frame shell's PC whose packets come through its host services
+enum Transport {
+    Local {
+        conn: local_socket::Stream,
+        next_packet: Option<u32>,
+    },
+    Remote(u32),
+}
+
 pub struct Connection {
     id: u64,
     alive: bool,
-    conn: local_socket::Stream,
-    next_packet: Option<u32>,
+    transport: Transport,
     auth: Option<AuthInfo>,
     custom_events: Option<Vec<String>>,
 }
@@ -123,24 +133,33 @@ pub fn gen_env_vec(input: &[String]) -> Vec<(&str, &str)> {
 }
 
 impl Connection {
-    fn new(conn: local_socket::Stream) -> Self {
+    fn new(transport: Transport) -> Self {
         Self {
             id: NEXT_CONNECTION_ID.fetch_add(1, Ordering::Relaxed),
-            conn,
+            transport,
             alive: true,
             auth: None,
             custom_events: None,
-            next_packet: None,
+        }
+    }
+
+    fn send(&mut self, packet: &PacketServer) -> anyhow::Result<()> {
+        match &mut self.transport {
+            Transport::Local { conn, .. } => send_packet(conn, &ipc::data_encode(packet)),
+            Transport::Remote(id) => {
+                crate::frame_host::send(&ShellMessage::Ipc(*id, packet.clone()));
+                Ok(())
+            }
         }
     }
 
     fn kill(&mut self, reason: &str) {
-        let _dont_care = send_packet(
-            &mut self.conn,
-            &ipc::data_encode(&PacketServer::Disconnect(packet_server::Disconnect {
-                reason: String::from(reason),
-            })),
-        );
+        let _dont_care = self.send(&PacketServer::Disconnect(packet_server::Disconnect {
+            reason: String::from(reason),
+        }));
+        if let Transport::Remote(id) = self.transport {
+            crate::frame_host::send(&ShellMessage::IpcClose(id));
+        }
         self.alive = false;
     }
 
@@ -174,14 +193,11 @@ impl Connection {
         });
 
         // Send auth response
-        send_packet(
-            &mut self.conn,
-            &ipc::data_encode(&PacketServer::HandshakeSuccess(
-                packet_server::HandshakeSuccess {
-                    runtime: String::from("wayvr-server"),
-                },
-            )),
-        )?;
+        self.send(&PacketServer::HandshakeSuccess(
+            packet_server::HandshakeSuccess {
+                runtime: String::from("wayvr-server"),
+            },
+        ))?;
 
         Ok(())
     }
@@ -193,21 +209,18 @@ impl Connection {
     ) -> anyhow::Result<()> {
         let to_arr = |vec: &Vec3A| -> [f32; 3] { [vec.x, vec.y, vec.z] };
 
-        send_packet(
-            &mut self.conn,
-            &ipc::data_encode(&PacketServer::WlxInputStateResponse(
-                serial,
-                packet_server::WlxInputState {
-                    hmd_pos: to_arr(&params.input_state.hmd.translation),
-                    left: WlxInputStatePointer {
-                        pos: to_arr(&params.input_state.pointers[0].raw_pose.translation),
-                    },
-                    right: WlxInputStatePointer {
-                        pos: to_arr(&params.input_state.pointers[1].raw_pose.translation),
-                    },
+        self.send(&PacketServer::WlxInputStateResponse(
+            serial,
+            packet_server::WlxInputState {
+                hmd_pos: to_arr(&params.input_state.hmd.translation),
+                left: WlxInputStatePointer {
+                    pos: to_arr(&params.input_state.pointers[0].raw_pose.translation),
                 },
-            )),
-        )?;
+                right: WlxInputStatePointer {
+                    pos: to_arr(&params.input_state.pointers[1].raw_pose.translation),
+                },
+            },
+        ))?;
 
         Ok(())
     }
@@ -260,10 +273,7 @@ impl Connection {
 
         let res = res.map(ProcessHandle::as_packet).map_err(|e| e.to_string());
 
-        send_packet(
-            &mut self.conn,
-            &ipc::data_encode(&PacketServer::WvrProcessLaunchResponse(serial, res)),
-        )?;
+        self.send(&PacketServer::WvrProcessLaunchResponse(serial, res))?;
 
         Ok(())
     }
@@ -280,13 +290,10 @@ impl Connection {
             .map(|(handle, process)| process.to_packet(handle))
             .collect();
 
-        send_packet(
-            &mut self.conn,
-            &ipc::data_encode(&PacketServer::WvrProcessListResponse(
-                serial,
-                packet_server::WvrProcessList { list },
-            )),
-        )?;
+        self.send(&PacketServer::WvrProcessListResponse(
+            serial,
+            packet_server::WvrProcessList { list },
+        ))?;
 
         Ok(())
     }
@@ -321,10 +328,7 @@ impl Connection {
             .get(*native_handle)
             .map(|process| process.to_packet(*native_handle));
 
-        send_packet(
-            &mut self.conn,
-            &ipc::data_encode(&PacketServer::WvrProcessGetResponse(serial, process)),
-        )?;
+        self.send(&PacketServer::WvrProcessGetResponse(serial, process))?;
 
         Ok(())
     }
@@ -451,8 +455,14 @@ impl Connection {
     //        fix this after we're done with the webkit-based wayvr-dashboard
     #[allow(unused_variables)]
     fn process_payload(&mut self, params: &mut TickParams, payload: Payload) -> anyhow::Result<()> {
-        let packet: PacketClient = ipc::data_decode(&payload)?;
+        self.process_packet(params, ipc::data_decode(&payload)?)
+    }
 
+    fn process_packet(
+        &mut self,
+        params: &mut TickParams,
+        packet: PacketClient,
+    ) -> anyhow::Result<()> {
         if let PacketClient::Handshake(handshake) = &packet {
             self.process_handshake(handshake)?;
             return Ok(());
@@ -514,6 +524,9 @@ impl Connection {
             PacketClient::WlxOverlaySetVisible(overlay, visible) => {
                 Self::handle_wlx_overlay_set_visible(params, overlay, visible);
             }
+            PacketClient::WatchMediaState(state) => {
+                params.signals.send(WayVRSignal::WatchMediaState(state));
+            }
             PacketClient::CustomEventSubscribe(names) => {
                 self.custom_events = Some(names);
             }
@@ -527,7 +540,13 @@ impl Connection {
         params: &mut TickParams,
         payload: Payload,
     ) -> anyhow::Result<()> {
-        if let Err(e) = self.process_payload(params, payload) {
+        let result = self.process_payload(params, payload);
+        self.check(result)
+    }
+
+    /// Disconnects a client that sent something invalid
+    fn check(&mut self, result: anyhow::Result<()>) -> anyhow::Result<()> {
+        if let Err(e) = result {
             // send also error message directly to the client before disconnecting
             self.kill(format!("{e}").as_str());
             anyhow::bail!("Invalid payload from the client, closing connection: {e}");
@@ -536,18 +555,22 @@ impl Connection {
     }
 
     fn read_packet(&mut self, params: &mut TickParams) -> anyhow::Result<bool> {
-        if let Some(payload_size) = self.next_packet {
-            let Some(payload) = read_payload(&mut self.conn, payload_size)? else {
+        let Transport::Local { conn, next_packet } = &mut self.transport else {
+            return Ok(false);
+        };
+        if let Some(payload_size) = *next_packet {
+            let Some(payload) = read_payload(conn, payload_size)? else {
                 // still failed to read payload, try in the next tick
                 return Ok(false);
             };
 
+            *next_packet = None;
             self.process_check_payload(params, payload)?;
-            self.next_packet = None;
+            return Ok(true);
         }
 
         let mut buf_packet_header: [u8; 4] = [0; 4];
-        if !read_check(4, self.conn.read(&mut buf_packet_header))? {
+        if !read_check(4, conn.read(&mut buf_packet_header))? {
             return Ok(false);
         }
 
@@ -564,9 +587,9 @@ impl Connection {
             return Ok(false);
         }
 
-        let Some(payload) = read_payload(&mut self.conn, payload_size)? else {
+        let Some(payload) = read_payload(conn, payload_size)? else {
             // failed to read payload, try in next tick
-            self.next_packet = Some(payload_size);
+            *next_packet = Some(payload_size);
             return Ok(false);
         };
 
@@ -608,7 +631,7 @@ pub struct WayVRServer {
 
 impl WayVRServer {
     pub fn new() -> anyhow::Result<Self> {
-        let printname = "/tmp/wayvr_ipc.sock";
+        let printname = ipc::SOCKET_NAME;
         let name = printname.to_ns_name::<local_socket::GenericNamespaced>()?;
         let opts = local_socket::ListenerOptions::new()
             .name(name)
@@ -631,7 +654,10 @@ impl WayVRServer {
             return; // No new connection or other error
         };
 
-        self.connections.push(Connection::new(conn));
+        self.connections.push(Connection::new(Transport::Local {
+            conn,
+            next_packet: None,
+        }));
     }
 
     fn tick_connections(&mut self, params: &mut TickParams) {
@@ -643,8 +669,38 @@ impl WayVRServer {
         self.connections.retain(|c| c.alive);
     }
 
+    /// Clients of the frame shell's PC, through its host services
+    fn tick_remote(&mut self, params: &mut TickParams) {
+        for event in crate::frame_host::take_ipc_events() {
+            let is_remote =
+                |c: &Connection, id: u32| matches!(c.transport, Transport::Remote(r) if r == id);
+            match event {
+                IpcEvent::Open(id) => self
+                    .connections
+                    .push(Connection::new(Transport::Remote(id))),
+                IpcEvent::Packet(id, packet) => {
+                    if let Some(c) = self
+                        .connections
+                        .iter_mut()
+                        .find(|c| c.alive && is_remote(c, id))
+                    {
+                        let result = c.process_packet(params, packet);
+                        if let Err(e) = c.check(result) {
+                            log::debug!("Disconnecting remote client: {e:?}");
+                        }
+                    }
+                }
+                IpcEvent::Close(id) => self.connections.retain(|c| !is_remote(c, id)),
+                IpcEvent::Disconnected => self
+                    .connections
+                    .retain(|c| !matches!(c.transport, Transport::Remote(_))),
+            }
+        }
+    }
+
     pub fn tick(&mut self, params: &mut TickParams) {
         self.accept_connections();
+        self.tick_remote(params);
         self.tick_connections(params);
         for event in CUSTOM_EVENTS.take() {
             self.send_custom_event(&event);
@@ -652,7 +708,7 @@ impl WayVRServer {
     }
 
     fn send_custom_event(&mut self, event: &packet_server::CustomEvent) {
-        let data = ipc::data_encode(&PacketServer::CustomEvent(event.clone()));
+        let packet = PacketServer::CustomEvent(event.clone());
         for conn in &mut self.connections {
             if conn.alive
                 && conn
@@ -660,7 +716,7 @@ impl WayVRServer {
                     .as_ref()
                     .is_some_and(|names| names.is_empty() || names.contains(&event.name))
             {
-                let _ = send_packet(&mut conn.conn, &data);
+                let _ = conn.send(&packet);
             }
         }
     }
@@ -671,7 +727,7 @@ impl WayVRServer {
             .iter_mut()
             .find(|c| c.id == connection_id && c.alive)
         {
-            let _ = send_packet(&mut conn.conn, &ipc::data_encode(packet));
+            let _ = conn.send(packet);
         } else {
             log::debug!("Dropping IPC response, connection {connection_id} no longer exists");
         }

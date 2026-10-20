@@ -34,6 +34,11 @@ impl NotificationManager {
         }
     }
 
+    /// A notification from elsewhere (the frame shell's PC), shown like the local ones
+    pub fn push(&self, toast: BakedToast) {
+        let _ = self.tx_toast.try_send(toast);
+    }
+
     pub fn drain_pending(&self, session: &AppSession) -> Vec<BakedToast> {
         if session.config.notifications_enabled {
             self.rx_toast.try_iter().collect()

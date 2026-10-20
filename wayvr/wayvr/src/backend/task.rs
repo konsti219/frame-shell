@@ -130,6 +130,10 @@ pub enum OverlayTask {
     DeleteActiveSet,
     ToggleEditMode,
     ToggleDashboard,
+    /// Shows the dashboard if hidden (the frame shell opens it for the power menu and pairing)
+    ShowDashboard,
+    /// Saves the overlay layout (the frame shell, after overlays were moved)
+    SaveLayout,
     ShowHide,
     CleanupOverlays(OverlayCategory),
     GlobalChange(GlobalChange),

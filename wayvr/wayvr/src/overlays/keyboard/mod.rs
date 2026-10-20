@@ -250,6 +250,21 @@ impl KeyboardBackend {
     }
 
     fn get_initial_keymap(app: &AppState) -> anyhow::Result<XkbKeymap> {
+        if crate::frame_shell::EMBEDDED.load(Ordering::Relaxed) {
+            let configured = app
+                .session
+                .config
+                .keyboard_layouts
+                .first()
+                .map_or("us", |layout| layout.as_ref());
+            let (layout, variant) = configured
+                .split_once('(')
+                .map_or((configured, ""), |(layout, variant)| {
+                    (layout, variant.trim_end_matches(')'))
+                });
+            return XkbKeymap::from_layout_variant(layout, variant)
+                .context("Invalid headset keyboard layout");
+        }
         fn get_system_keymap(wayland: bool) -> anyhow::Result<XkbKeymap> {
             if wayland {
                 get_keymap_wl()

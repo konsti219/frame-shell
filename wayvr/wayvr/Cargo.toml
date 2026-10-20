@@ -22,6 +22,7 @@ categories = ["games"]
 [dependencies]
 dash-frontend = { path = "../dash-frontend/" }
 wayvr-ipc = { path = "../wayvr-ipc", default-features = false }
+frame-abi = { path = "../frame-abi" }
 wayvr-openxr-layer-common = { path = "../wayvr-openxr-layer-common" }
 wgui = { path = "../wgui" }
 wlx-capture = { path = "../wlx-capture" }
@@ -62,6 +63,7 @@ bytes = { workspace = true }
 chrono-tz = "0.10.4"
 config = "0.15.25"
 futures = "0.3.32"
+image = { version = "0.25.9", default-features = false, features = ["jpeg", "png"] }
 image_dds = { version = "0.7.2", default-features = false, features = [ "ddsfile"] }
 input-linux = "0.7.1"
 json = { version = "0.12.4", optional = true }
@@ -94,7 +96,7 @@ regex.workspace = true
 shaderc = "0.8"
 
 [features]
-default = ["openvr", "openxr", "osc", "wayland", "whisper", "x11"]
+default = ["feat-monado-metrics", "openvr", "openxr", "osc", "wayland", "whisper"]
 as-raw-xcb-connection = []
 feat-monado-metrics = []
 openvr = ["dep:json", "dep:ovr_overlay"]
@@ -111,3 +113,6 @@ whisper = [
 ]
 x11 = ["dep:xcb", "wlx-capture/xshm", "xkbcommon/x11"]
 xcb = ["dep:xcb"]
+
+[lib]
+crate-type = ["rlib", "cdylib"]

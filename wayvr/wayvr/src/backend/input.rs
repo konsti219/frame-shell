@@ -69,6 +69,8 @@ pub enum FocusPickState {
 
 pub struct InputState {
     pub hmd: Affine3A,
+    /// Midpoint between the eyes, in head space
+    pub eye_center: Vec3A,
     pub ipd: f32,
     pub eye_gaze: Option<Affine3A>,
     pub pointers: [Pointer; 2],
@@ -85,6 +87,7 @@ impl InputState {
     pub fn new() -> Self {
         Self {
             hmd: Affine3A::IDENTITY,
+            eye_center: Vec3A::ZERO,
             ipd: 0.0,
             eye_gaze: None,
             pointers: [Pointer::new(0), Pointer::new(1)],
@@ -296,6 +299,9 @@ fn debug_print_hand(hand: &Pointer) {
                 hand.now.toggle_dashboard
             );
         }
+        if hand.now.reveal_watch != hand.before.reveal_watch {
+            log::debug!("Hand {}: reveal_watch {}", hand.idx, hand.now.reveal_watch);
+        }
         if hand.now.space_drag != hand.before.space_drag {
             log::debug!("Hand {}: space_drag {}", hand.idx, hand.now.space_drag);
         }
@@ -404,9 +410,11 @@ pub struct PointerState {
     pub alt_click: bool,
     pub show_hide: bool,
     pub toggle_dashboard: bool,
+    pub reveal_watch: bool,
     pub space_drag: bool,
     pub space_rotate: bool,
     pub space_reset: bool,
+    pub recenter: bool,
     pub click_modifier_right: bool,
     pub click_modifier_middle: bool,
     pub move_mouse: bool,
@@ -690,9 +698,14 @@ where
 
     let mut click_haptics = None;
 
+    // The eye tracker calibrates from clicks: the user looks at what they click. Its gaze starts between the eyes
+    let target_in_head =
+        app.input_state.hmd.inverse().transform_point3a(raw_hit.global_pos) - app.input_state.eye_center;
+
     // click / release
     let pointer = &mut app.input_state.pointers[hit.pointer];
     if pointer.now.any_click() && !pointer.before.any_click() {
+        crate::eye_calibration::click(target_in_head);
         pointer.interaction.clicked_id = Some(hit.overlay);
         if hovered.config.category == OverlayCategory::Keyboard {
             pointer.interaction.kbd_block_activated = true;
@@ -1104,6 +1117,7 @@ where
     } else {
         // not now.grab
         pointer.interaction.grabbed = None;
+        crate::frame_shell::layout_changed();
         if grab_anchor {
             app.anchor_grabbed = false;
         } else {

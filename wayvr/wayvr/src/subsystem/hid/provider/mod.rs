@@ -21,4 +21,5 @@ pub trait HidProvider: Sync + Send {
 
     // Common Functions
     fn commit(&mut self);
+    fn release(&mut self) {}
 }

@@ -51,13 +51,20 @@ pub(crate) fn pinned_runtime_signature(app: &AppState) -> u64 {
     for pin in &app.session.config.pinned_games {
         pin.app_id.hash(&mut hasher);
 
-        let is_running = running.iter().any(|g| g.app_id == pin.app_id);
+        let is_running = pin.host.as_ref().map_or_else(
+            || running.iter().any(|g| g.app_id == pin.app_id),
+            |host| crate::frame_shell::remote_game_running(host, &pin.app_id),
+        );
+        pin.host.hash(&mut hasher);
         is_running.hash(&mut hasher);
 
         let stop_stage = app
             .session
             .pinned_stop_clicks
-            .get(&pin.app_id)
+            .get(&crate::frame_shell::pinned_stop_key(
+                pin.host.as_deref(),
+                &pin.app_id,
+            ))
             .copied()
             .unwrap_or(0);
         stop_stage.hash(&mut hasher);
@@ -585,6 +592,57 @@ pub(super) fn setup_custom_button<S: 'static>(
                             return Ok(EventResult::Consumed);
                         };
 
+                        // Games pinned from a PC start there through WiVRn
+                        if let Some(host) = &pin.host {
+                            if crate::frame_shell::remote_game_running(host, &pin.app_id) {
+                                let stage = app
+                                    .session
+                                    .pinned_stop_clicks
+                                    .get(&crate::frame_shell::pinned_stop_key(
+                                        pin.host.as_deref(),
+                                        &pin.app_id,
+                                    ))
+                                    .copied()
+                                    .unwrap_or(0);
+                                if stage == 0 {
+                                    app.session.pinned_stop_clicks.insert(
+                                        crate::frame_shell::pinned_stop_key(
+                                            pin.host.as_deref(),
+                                            &pin.app_id,
+                                        ),
+                                        1,
+                                    );
+                                } else {
+                                    crate::frame_shell::stop_remote_game(
+                                        host,
+                                        &pin.app_id,
+                                        stage >= 2,
+                                    );
+                                    app.session.pinned_stop_clicks.insert(
+                                        crate::frame_shell::pinned_stop_key(
+                                            pin.host.as_deref(),
+                                            &pin.app_id,
+                                        ),
+                                        2,
+                                    );
+                                }
+                            } else {
+                                app.session.pinned_stop_clicks.remove(
+                                    &crate::frame_shell::pinned_stop_key(
+                                        pin.host.as_deref(),
+                                        &pin.app_id,
+                                    ),
+                                );
+                                crate::frame_shell::launch_remote(
+                                    app,
+                                    host,
+                                    &pin.app_id,
+                                    &pin.name,
+                                );
+                            }
+                            return Ok(EventResult::Consumed);
+                        }
+
                         let running = steam::list_running_games()
                             .unwrap_or_default()
                             .iter()
@@ -594,17 +652,32 @@ pub(super) fn setup_custom_button<S: 'static>(
                             let stage = app
                                 .session
                                 .pinned_stop_clicks
-                                .get(&pin.app_id)
+                                .get(&crate::frame_shell::pinned_stop_key(
+                                    pin.host.as_deref(),
+                                    &pin.app_id,
+                                ))
                                 .copied()
                                 .unwrap_or(0);
 
                             let res = match stage {
                                 0 => {
-                                    app.session.pinned_stop_clicks.insert(pin.app_id, 1);
+                                    app.session.pinned_stop_clicks.insert(
+                                        crate::frame_shell::pinned_stop_key(
+                                            pin.host.as_deref(),
+                                            &pin.app_id,
+                                        ),
+                                        1,
+                                    );
                                     Ok(())
                                 }
                                 1 => {
-                                    app.session.pinned_stop_clicks.insert(pin.app_id.clone(), 2);
+                                    app.session.pinned_stop_clicks.insert(
+                                        crate::frame_shell::pinned_stop_key(
+                                            pin.host.as_deref(),
+                                            &pin.app_id,
+                                        ),
+                                        2,
+                                    );
                                     steam::stop(&pin.app_id, false)
                                 }
                                 _ => steam::stop(&pin.app_id, true),
@@ -619,9 +692,9 @@ pub(super) fn setup_custom_button<S: 'static>(
                                     )),
                                     Translation::from_raw_text_string(pin.name),
                                 )
-                                    .with_timeout(3.0)
-                                    .with_sound(true)
-                                    .submit(app);
+                                .with_timeout(3.0)
+                                .with_sound(true)
+                                .submit(app);
                             }
 
                             app.tasks
@@ -632,20 +705,22 @@ pub(super) fn setup_custom_button<S: 'static>(
                             return Ok(EventResult::Consumed);
                         }
 
-                        app.session.pinned_stop_clicks.remove(&pin.app_id);
+                        app.session.pinned_stop_clicks.remove(
+                            &crate::frame_shell::pinned_stop_key(pin.host.as_deref(), &pin.app_id),
+                        );
 
                         if let Err(e) = steam::launch(&pin.app_id) {
                             log::error!("Could not launch pinned app: {e:?}");
                             Toast::new(
-                                    ToastTopic::System,
-                                    Some(Translation::from_translation_key(
-                                        "TOAST.FAILED_TO_LAUNCH_APP",
-                                    )),
-                                    Translation::from_raw_text_string(pin.name),
-                                )
-                                .with_timeout(3.0)
-                                .with_sound(true)
-                                .submit(app);
+                                ToastTopic::System,
+                                Some(Translation::from_translation_key(
+                                    "TOAST.FAILED_TO_LAUNCH_APP",
+                                )),
+                                Translation::from_raw_text_string(pin.name),
+                            )
+                            .with_timeout(3.0)
+                            .with_sound(true)
+                            .submit(app);
                         }
 
                         Ok(EventResult::Consumed)
@@ -761,6 +836,27 @@ pub(super) fn setup_custom_button<S: 'static>(
                         .enqueue(TaskType::Playspace(PlayspaceTask::Recenter));
                     Ok(EventResult::Consumed)
                 }),
+                "::FrameShellScreen" => {
+                    let screen = args.collect::<Vec<_>>().join(" ");
+                    Box::new(move |_common, data, app, _| {
+                        if !test_button(data) || !test_duration(&button, app) {
+                            return Ok(EventResult::Pass);
+                        }
+                        crate::frame_shell::toggle_screen_host(app, &screen);
+                        Ok(EventResult::Consumed)
+                    })
+                }
+                "::FrameShell" => {
+                    // A command line for the WiVRn client (frame_shell::send_command)
+                    let line = args.collect::<Vec<_>>().join(" ");
+                    Box::new(move |_common, data, app, _| {
+                        if !test_button(data) || !test_duration(&button, app) {
+                            return Ok(EventResult::Pass);
+                        }
+                        crate::frame_shell::send_command(&line);
+                        Ok(EventResult::Consumed)
+                    })
+                }
                 "::PlayspaceFixFloor" => Box::new(move |_common, data, app, _| {
                     if !test_button(data) || !test_duration(&button, app) {
                         return Ok(EventResult::Pass);
