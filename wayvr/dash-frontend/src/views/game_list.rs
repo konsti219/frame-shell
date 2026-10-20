@@ -43,6 +43,8 @@ pub struct Params<'a> {
 	pub layout: &'a mut Layout,
 	pub parent_id: WidgetID,
 	pub steam_utils: &'a SteamUtils,
+	/// A PC's applications (WiVRn server name and its list) instead of the local Steam library
+	pub remote: Option<(Rc<str>, Vec<steam_utils::AppManifest>)>,
 }
 
 const MAX_GAMES_PER_PAGE: u32 = 30;
@@ -67,6 +69,7 @@ pub struct View {
 	id_label_page: WidgetID,
 	view_launcher: PopupHolder<views::game_launcher::View>,
 	steam_utils: SteamUtils,
+	remote: Option<(Rc<str>, Vec<steam_utils::AppManifest>)>,
 }
 
 impl ViewTrait for View {
@@ -77,8 +80,9 @@ impl ViewTrait for View {
 					Task::LoadManifests => self.load_manifests(),
 					Task::FillPage(page_idx) => self.fill_page(par.layout, par.executor, page_idx)?,
 					Task::AppManifestClicked(manifest) => {
+						let host = self.remote.as_ref().map(|(host, _)| host.clone());
 						let is_pinned =
-							pinning::is_pinned(&par.general_config.pinned_games, &manifest.app_id);
+							pinning::is_pinned(&par.general_config.pinned_games, &manifest.app_id, host.as_deref());
 						self.action_app_manifest_clicked(manifest, is_pinned)?;
 					}
 					Task::SetCoverArt(app_id, cover_art) => self.set_cover_art(par.layout, app_id, cover_art),
@@ -134,6 +138,7 @@ impl View {
 			id_label_page,
 			view_launcher: Default::default(),
 			steam_utils: params.steam_utils.clone(),
+			remote: params.remote,
 		})
 	}
 }
@@ -179,6 +184,12 @@ fn fill_game_list(
 
 impl View {
 	fn load_manifests(&mut self) {
+		if let Some((_, manifests)) = &self.remote {
+			self.page_count = (manifests.len() as u32 + MAX_GAMES_PER_PAGE) / MAX_GAMES_PER_PAGE;
+			self.all_manifests = manifests.clone();
+			self.tasks.push(Task::FillPage(0));
+			return;
+		}
 		match self
 			.steam_utils
 			.list_installed_games(steam_utils::GameSortMethod::PlayDateDesc)
@@ -282,6 +293,7 @@ impl View {
 			manifest,
 			self.view_launcher.clone(),
 			is_pinned,
+			self.remote.as_ref().map(|(host, _)| host.clone()),
 		);
 
 		Ok(())

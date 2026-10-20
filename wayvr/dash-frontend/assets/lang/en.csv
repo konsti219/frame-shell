@@ -336,6 +336,7 @@ HIDE,Hide,Used in the double-press tutorial context for hiding the set.
 HOME_SCREEN,Home,Tab label in the dashboard sidebar for the Home tab.
 MODIFICATION_DATE,Modification date,Column label in the remote skymap downloader showing file metadata.
 MONADO_RUNTIME,Monado runtime,Tab label in the dashboard sidebar for the Monado runtime tab.
+WIVRN,WiVRn,Tab label in the dashboard sidebar for the WiVRn (PC streaming) tab.
 LOADING,Loading...,Label in the loading spinner template used across the UI.
 POPUP_ADD_DISPLAY.RESOLUTION,Resolution,Label for the resolution field in the add display popup.
 POWER_OPTIONS.TITLE,"Power options","A button which allows the user to perform a specific power action"

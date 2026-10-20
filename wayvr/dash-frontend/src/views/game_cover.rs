@@ -29,8 +29,7 @@ use wlx_common::async_executor::AsyncExecutor;
 
 use crate::util::{
 	cached_fetcher::{self, CoverArt},
-	steam_utils::{self, AppID},
-	wgui_simple,
+	steam_utils, wgui_simple,
 };
 
 pub struct ViewCommon {
@@ -51,7 +50,7 @@ pub struct View {
 	id_image_parent: WidgetID,
 	id_loading: WidgetID,
 	app_name: String,
-	app_id: AppID,
+	image_key: String,
 }
 
 const BORDER_COLOR_DEFAULT: drawing::Color = drawing::Color::new(0.0, 0.0, 0.0, 0.35);
@@ -62,6 +61,17 @@ const GAME_COVER_SIZE_Y: f32 = 210.0;
 
 impl View {
 	async fn request_cover_image(manifest: steam_utils::AppManifest, on_loaded: Box<dyn FnOnce(CoverArt)>) {
+		if let Some(path) = &manifest.icon_path {
+			match std::fs::read(path) {
+				Ok(data) => {
+					on_loaded(CoverArt {
+						compressed_image_data: data,
+					});
+					return;
+				}
+				Err(e) => log::warn!("Could not read PC application icon: {e}"),
+			}
+		}
 		let cover_art = match cached_fetcher::request_cover_art(manifest.app_id.clone()).await {
 			Ok(cover_art) => cover_art,
 			Err(e) => {
@@ -91,7 +101,9 @@ impl View {
 				..Default::default()
 			},
 		)?;
-		a.widget.state().flags.new_pass = true;
+		// No new pass: within a pass images draw after rectangles, so the cover is above the button's background
+		// anyway; the shine and gradients above it have their own pass. Each pass costs ~0.25 ms on the Frame.
+		let _ = a;
 
 		Ok(())
 	}
@@ -151,15 +163,17 @@ impl View {
 			self.mount_placeholder_text(layout, self.id_image_parent, &self.app_name)?;
 		} else {
 			// mount image
-			let path = format!("app:{:?}", self.app_id);
-			let glyph =
-				match CustomGlyphData::from_bytes_raster(&view_common.globals, &path, &cover_art.compressed_image_data) {
-					Ok(c) => c,
-					Err(e) => {
-						log::warn!("failed to decode cover art image: {:?}", e);
-						return Ok(());
-					}
-				};
+			let glyph = match CustomGlyphData::from_bytes_raster(
+				&view_common.globals,
+				&self.image_key,
+				&cover_art.compressed_image_data,
+			) {
+				Ok(c) => c,
+				Err(e) => {
+					log::warn!("failed to decode cover art image: {:?}", e);
+					return Ok(());
+				}
+			};
 			self.mount_image(layout, &glyph)?;
 		}
 
@@ -295,7 +309,7 @@ impl View {
 			button,
 			id_image_parent: image_parent.id,
 			app_name: params.manifest.name.clone(),
-			app_id: params.manifest.app_id.clone(),
+			image_key: format!("app:{}:{:?}", params.manifest.app_id, params.manifest.icon_path),
 			id_loading,
 		})
 	}
@@ -311,7 +325,8 @@ impl ViewCommon {
 
 	fn get_placeholder_image(&mut self) -> anyhow::Result<&CustomGlyphData> {
 		if self.img_placeholder.is_none() {
-			let c = CustomGlyphData::from_assets(&self.globals, AssetPathRef::BuiltIn("dashboard/placeholder_cover.png"))?;
+			let c =
+				CustomGlyphData::from_assets(&self.globals, AssetPathRef::BuiltIn("dashboard/placeholder_cover.png"))?;
 			self.img_placeholder = Some(c);
 		}
 

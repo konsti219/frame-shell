@@ -4,12 +4,13 @@ use wlx_common::cache_dir;
 
 use crate::util::steam_utils::{self, AppManifest};
 
-pub fn is_pinned(pinned: &[WvrPinLaunchParams], app_id: &str) -> bool {
-	pinned.iter().any(|p| p.app_id == app_id)
+/// Pins are identified by app id and host (the PC it runs on, none for local)
+pub fn is_pinned(pinned: &[WvrPinLaunchParams], app_id: &str, host: Option<&str>) -> bool {
+	pinned.iter().any(|p| p.app_id == app_id && p.host.as_deref() == host)
 }
 
 pub fn upsert_pin(pinned: &mut Vec<WvrPinLaunchParams>, params: WvrPinLaunchParams) -> bool {
-	if is_pinned(pinned, &params.app_id) {
+	if is_pinned(pinned, &params.app_id, params.host.as_deref()) {
 		return false;
 	}
 
@@ -17,9 +18,9 @@ pub fn upsert_pin(pinned: &mut Vec<WvrPinLaunchParams>, params: WvrPinLaunchPara
 	true
 }
 
-pub fn remove_pin_by_id(pinned: &mut Vec<WvrPinLaunchParams>, app_id: &str) -> bool {
+pub fn remove_pin_by_id(pinned: &mut Vec<WvrPinLaunchParams>, app_id: &str, host: Option<&str>) -> bool {
 	let old_len = pinned.len();
-	pinned.retain(|p| p.app_id != app_id);
+	pinned.retain(|p| !(p.app_id == app_id && p.host.as_deref() == host));
 	old_len != pinned.len()
 }
 
@@ -69,10 +70,11 @@ fn get_game_pin_icon_path(app_id: &str) -> Option<String> {
 	steam_utils::get_game_icon_path(app_id).or_else(|| get_cropped_cover_icon_path(app_id))
 }
 
-pub fn build_game_pin(manifest: &AppManifest) -> WvrPinLaunchParams {
+pub fn build_game_pin(manifest: &AppManifest, host: Option<&str>) -> WvrPinLaunchParams {
 	WvrPinLaunchParams {
 		name: manifest.name.clone(),
 		app_id: manifest.run_game_id.clone(),
 		icon: get_game_pin_icon_path(&manifest.app_id),
+		host: host.map(str::to_owned),
 	}
 }

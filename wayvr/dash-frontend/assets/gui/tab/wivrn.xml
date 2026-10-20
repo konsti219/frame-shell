@@ -1,0 +1,99 @@
+<layout version="2">
+  <include src="@/gui/t_group_box.xml" />
+
+  <!-- One per known PC (WiVRn server) -->
+  <template name="HostButton">
+    <Button id="btn" sticky="1" padding="8" gap="8" align_items="center" tooltip_str="${detail}" tooltip_side="bottom">
+      <sprite src_builtin="@/dashboard/display.svg" width="24" height="24" />
+      <label text="${name}" weight="bold" size="16" />
+    </Button>
+  </template>
+
+  <template name="HostPage">
+    <GroupBox>
+      <div flex_direction="column" gap="4" width="100%">
+        <label text="${name}" weight="bold" size="22" />
+        <label text="${hostname}" size="14" color="on_background_variant" />
+        <label text="${status}" size="16" wrap="1" width="100%" />
+      </div>
+      <div gap="8" flex_wrap="wrap">
+        <Button id="btn_connect" padding="8" gap="8" align_items="center" display="${show_connect}">
+          <sprite src_builtin="@/dashboard/wivrn_head_symbolic.svg" width="24" height="24" />
+          <label text="Connect" size="16" />
+        </Button>
+        <Button id="btn_disconnect" padding="8" gap="8" align_items="center" display="${show_disconnect}">
+          <sprite src_builtin="@/dashboard/close.svg" width="24" height="24" />
+          <label text="${disconnect_label}" size="16" />
+        </Button>
+        <Button id="btn_auto" padding="8" align_items="center" tooltip_str="Connect to this PC on its own when it appears" tooltip_side="bottom">
+          <label text="${auto_label}" size="16" />
+        </Button>
+        <Button id="btn_forget" padding="8" align_items="center" tooltip_str="Forget this PC (hold)" tooltip_side="bottom">
+          <label text="Forget" size="16" />
+        </Button>
+      </div>
+    </GroupBox>
+  </template>
+
+  <template name="PinKey">
+    <Button id="btn" width="72" height="56" align_items="center" justify_content="center">
+      <label text="${label}" weight="bold" size="20" />
+    </Button>
+  </template>
+
+  <template name="StreamSettings">
+    <GroupBox>
+      <label text="Headset stream settings · all PCs" weight="bold" size="20" />
+      <label text="These settings belong to the headset and apply to every PC." size="14" wrap="1" width="100%" />
+      <label text="Bitrate (Mbit/s)" size="16" />
+      <Slider id="bitrate" min_value="5" max_value="${max_bitrate}" step="5" show_value="1" width="100%" height="24" />
+      <label id="network_status" text="" size="14" wrap="1" width="100%" />
+      <label text="Error correction (% extra packets, 0 = off; repairs small losses)" size="16" wrap="1" width="100%" />
+      <Slider id="fec" min_value="0" max_value="30" step="5" show_value="1" width="100%" height="24" />
+      <label text="Frame margin (ms; more = fewer jumps from late frames, more latency)" size="16" wrap="1" width="100%" />
+      <Slider id="frame_margin" min_value="0" max_value="15" step="1" show_value="1" width="100%" height="24" />
+      <label text="Render resolution (%)" size="16" />
+      <Slider id="resolution" min_value="50" max_value="200" step="5" show_value="1" width="100%" height="24" />
+      <label text="Foveated stream size (%, 100 = no foveation)" size="16" />
+      <Slider id="foveation" min_value="20" max_value="${max_foveation}" step="5" show_value="1" width="100%" height="24" />
+      <label text="Codec" size="16" />
+      <div gap="8" flex_wrap="wrap">
+        <Button id="codec_auto" sticky="1" padding="8"><label text="Auto" size="16" /></Button>
+        <Button id="codec_h264" sticky="1" padding="8"><label text="H.264" size="16" /></Button>
+        <Button id="codec_h265" sticky="1" padding="8"><label text="HEVC" size="16" /></Button>
+        <Button id="codec_av1" sticky="1" padding="8"><label text="AV1" size="16" /></Button>
+      </div>
+      <label text="PC desktop bitrate (Mbit/s per 1080p, scaled per monitor)" size="16" />
+      <Slider id="desktop_bitrate" min_value="2" max_value="80" step="2" show_value="1" width="100%" height="24" />
+      <label text="PC desktop codec" size="16" />
+      <div gap="8" flex_wrap="wrap">
+        <Button id="desktop_codec_h264" sticky="1" padding="8"><label text="H.264" size="16" /></Button>
+        <Button id="desktop_codec_h265" sticky="1" padding="8"><label text="HEVC" size="16" /></Button>
+      </div>
+      <label id="video_debug" text="" size="14" wrap="1" width="100%" />
+      <CheckBox id="foveation_debug" text="Tint the PC stream by resolution (green full, yellow half, red less)" />
+      <label id="vr_debug" text="" size="14" wrap="1" width="100%" />
+      <label id="eyes_debug" text="" size="14" wrap="1" width="100%" />
+      <label text="Stream settings apply while connected. Close the VR app to change render resolution." size="14" wrap="1" width="100%" />
+    </GroupBox>
+  </template>
+
+  <template name="PinPad">
+    <GroupBox>
+      <label text="Enter the PIN shown on the PC" size="16" />
+      <label text="${pin}" weight="bold" size="32" color="primary" />
+      <div id="rows" flex_direction="column" gap="6" />
+    </GroupBox>
+  </template>
+
+  <template name="PinRow">
+    <div id="row" gap="6" />
+  </template>
+
+  <elements>
+    <div flex_direction="column" gap="8" width="100%">
+      <div id="hosts_root" gap="6" flex_wrap="wrap" />
+      <div id="content" flex_direction="column" gap="8" width="100%" />
+    </div>
+  </elements>
+</layout>

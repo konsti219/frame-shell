@@ -39,6 +39,8 @@ pub struct Params<'a> {
 	pub frontend_tasks: &'a FrontendTasks,
 	pub is_pinned: bool,
 	pub on_launched: Box<dyn FnOnce()>,
+	/// PC the game is on (WiVRn server name), none for a local game
+	pub host: Option<Rc<str>>,
 }
 
 pub struct View {
@@ -54,6 +56,7 @@ pub struct View {
 	app_name: String,
 	id_label_pin: WidgetID,
 	pinned: bool,
+	host: Option<Rc<str>>,
 }
 
 impl ViewTrait for View {
@@ -144,6 +147,7 @@ impl View {
 			app_name: params.manifest.name,
 			id_label_pin,
 			pinned: params.is_pinned,
+			host: params.host,
 		};
 
 		out.set_pin_button_label(params.layout)?;
@@ -160,7 +164,7 @@ impl View {
 
 	fn action_toggle_pinned(&mut self, par: &mut ViewUpdateParams) {
 		let changed = if self.pinned {
-			pinning::remove_pin_by_id(&mut par.general_config.pinned_games, &self.app_id)
+			pinning::remove_pin_by_id(&mut par.general_config.pinned_games, &self.app_id, self.host.as_deref())
 		} else {
 			let manifest = AppManifest {
 				app_id: self.app_id.clone(),
@@ -168,10 +172,11 @@ impl View {
 				name: self.app_name.clone(),
 				raw_state_flags: 0,
 				last_played: None,
+				icon_path: None,
 			};
 			pinning::upsert_pin(
 				&mut par.general_config.pinned_games,
-				pinning::build_game_pin(&manifest),
+				pinning::build_game_pin(&manifest, self.host.as_deref()),
 			)
 		};
 
@@ -183,8 +188,7 @@ impl View {
 			} else {
 				"Unpinned from keyboard"
 			};
-			self
-				.frontend_tasks
+			self.frontend_tasks
 				.push(FrontendTask::PushToast(Translation::from_raw_text(message)));
 		}
 
@@ -226,18 +230,28 @@ impl View {
 	}
 
 	fn action_launch(&mut self) {
+		if let Some(host) = &self.host {
+			self.frontend_tasks.push(FrontendTask::WivrnLaunch {
+				host: host.clone(),
+				app_id: self.app_id.clone().into(),
+				name: self.app_name.clone().into(),
+			});
+			self.frontend_tasks.push(FrontendTask::PlaySound(SoundType::Launch));
+			if let Some(on_launched) = self.on_launched.take() {
+				on_launched();
+			}
+			return;
+		}
 		match steam_utils::launch(&self.app_id) {
 			Ok(_) => {
-				self
-					.frontend_tasks
+				self.frontend_tasks
 					.push(FrontendTask::PushToast(Translation::from_translation_key(
 						"GAME_LAUNCHED",
 					)));
 				self.frontend_tasks.push(FrontendTask::PlaySound(SoundType::Launch));
 			}
 			Err(e) => {
-				self
-					.frontend_tasks
+				self.frontend_tasks
 					.push(FrontendTask::PushToast(Translation::from_raw_text_string(format!(
 						"Failed to launch: {:?}",
 						e
@@ -258,6 +272,7 @@ pub fn mount_popup(
 	manifest: AppManifest,
 	popup: PopupHolder<View>,
 	is_pinned: bool,
+	host: Option<Rc<str>>,
 ) {
 	frontend_tasks
 		.clone()
@@ -274,6 +289,7 @@ pub fn mount_popup(
 					frontend_tasks: &frontend_tasks,
 					is_pinned,
 					on_launched,
+					host: host.clone(),
 				})?;
 
 				popup.set_view(data.handle, view, None);

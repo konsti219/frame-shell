@@ -1,7 +1,6 @@
 use wlx_common::{async_executor::AsyncExecutor, config::GeneralConfig, dash_interface::ConfigChangeKind};
 
 pub mod app_launcher;
-pub mod audio_settings;
 pub mod bindings;
 pub mod color_palettes;
 pub mod dialog_box;

@@ -3,7 +3,7 @@ use wayvr_ipc::{
 	packet_server::{WvrProcess, WvrProcessHandle, WvrWindow, WvrWindowHandle},
 };
 
-use crate::{DesktopBackend, XrBackend, config::GeneralConfig, desktop_finder::DesktopFinder};
+use crate::{config::GeneralConfig, desktop_finder::DesktopFinder, DesktopBackend, XrBackend};
 
 #[derive(Clone)]
 pub struct MonadoClient {
@@ -78,7 +78,66 @@ pub struct HmdStats {
 	pub ipd: f32,
 }
 
+/// Something the frame shell wants the dashboard to show
+#[derive(Clone, Copy)]
+pub enum ShellRequest {
+	PowerMenu,
+	/// A PC asks for its pairing PIN
+	Pairing,
+}
+
+#[derive(Default)]
+pub struct FloorStatus {
+	pub remaining_seconds: Option<u32>,
+	pub debug_visible: bool,
+}
+
+#[derive(Clone, Copy)]
+pub struct AudioEndpoint {
+	pub volume: f32,
+	pub muted: bool,
+}
+
+#[derive(Clone, Copy, Default)]
+pub struct HeadsetAudioState {
+	pub output: Option<AudioEndpoint>,
+	pub microphone: Option<AudioEndpoint>,
+}
+
+#[derive(Clone, Copy)]
+pub enum AudioControl {
+	OutputVolume(f32),
+	OutputMute(bool),
+	MicrophoneVolume(f32),
+	MicrophoneMute(bool),
+}
+
 pub trait DashInterface<T> {
+	fn headset_audio(&mut self, _data: &mut T) -> HeadsetAudioState {
+		HeadsetAudioState::default()
+	}
+	fn headset_audio_control(&mut self, _data: &mut T, _control: AudioControl) {}
+
+	fn floor_status(&mut self, _data: &mut T) -> FloorStatus {
+		FloorStatus::default()
+	}
+	fn floor_detect(&mut self, _data: &mut T) {}
+	fn floor_debug_set(&mut self, _data: &mut T, _visible: bool) {}
+
+	/// Frame shell: the WiVRn client's state (change counter, lobby JSON, stream JSON), see `frame_shell.rs`
+	fn wivrn_state(&mut self, _data: &mut T) -> Option<(u64, String, String)> {
+		None
+	}
+	/// Frame shell: a command for the WiVRn client (`client-shell.h` lists them)
+	fn wivrn_command(&mut self, _data: &mut T, _command: &str) {}
+	/// Frame shell: start an application on a PC, connecting first if needed
+	fn wivrn_launch(&mut self, _data: &mut T, _host: &str, _app_id: &str, _name: &str) {}
+	/// Frame shell: "sleep", "restart_stack", "restart", "poweroff" or "steamvr"
+	fn power_action(&mut self, _data: &mut T, _action: &str) {}
+	fn shell_request(&mut self, _data: &mut T) -> Option<ShellRequest> {
+		None
+	}
+
 	fn window_list(&mut self, data: &mut T) -> anyhow::Result<Vec<WvrWindow>>;
 	fn window_set_visible(&mut self, data: &mut T, handle: WvrWindowHandle, visible: bool) -> anyhow::Result<()>;
 	fn window_request_close(&mut self, data: &mut T, handle: WvrWindowHandle) -> anyhow::Result<()>;

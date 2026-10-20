@@ -1,6 +1,43 @@
 <layout version="2">
+  <include src="@/gui/t_group_box.xml" />
+  <template name="RunningHeading">
+    <label text="Running games / VR sessions" weight="bold" />
+  </template>
+  <template name="RunningSteamGame">
+    <GroupBox>
+      <Button id="btn_stop" sprite_src_builtin="@/dashboard/remove_circle.svg" tooltip="PROCESS.STOP" />
+      <Button id="btn_other" sprite_src_builtin="@/dashboard/knife.svg" tooltip="PROCESS.FORCE_KILL" />
+      <label text="${name}" weight="bold" />
+    </GroupBox>
+  </template>
+  <template name="RunningVrSession">
+    <GroupBox>
+      <Button id="btn_stop" sprite_src_builtin="@/dashboard/remove_circle.svg" tooltip="PROCESS.STOP" />
+      <Button id="btn_other" sprite_src_builtin="@/dashboard/games.svg" tooltip_str="Focus VR session" />
+      <label text="VR: ${name}" />
+    </GroupBox>
+  </template>
+  <!-- Host selector (the headset and each PC), only in the frame shell -->
+  <template name="HostButton">
+    <Button id="btn" sticky="1" padding="8" gap="8" align_items="center">
+      <sprite src_builtin="${icon}" width="24" height="24" />
+      <label text="${name}" weight="bold" size="16" />
+    </Button>
+  </template>
+
+  <template name="NotConnected">
+    <div flex_direction="column" align_items="center" gap="8">
+      <label text="${text}" size="16" />
+      <Button id="btn_connect" padding="8" gap="8" align_items="center" display="${show_connect}">
+        <sprite src_builtin="@/dashboard/wivrn_head_symbolic.svg" width="24" height="24" />
+        <label text="Connect" size="16" />
+      </Button>
+    </div>
+  </template>
+
   <elements>
-    <div id="running_games_list_parent" align_self="center" />
+    <div id="hosts_root" gap="6" flex_wrap="wrap" align_self="center" />
+    <div id="running_games_list_parent" align_self="center" flex_direction="column" gap="8" />
     <div id="game_list_parent" align_items="center" flex_direction="column" gap="8" />
   </elements>
 </layout>

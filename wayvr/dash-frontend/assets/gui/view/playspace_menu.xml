@@ -1,0 +1,10 @@
+<layout version="2">
+  <elements>
+    <div flex_direction="column" width="100%" padding="8" gap="12">
+      <label id="status" text="Floor height is fixed." size="14" />
+      <Button id="detect_floor" text="Fix floor (10 seconds)" sprite_src_builtin="@/dashboard/fix_floor.svg" width="100%" />
+      <label text="Look toward clear floor while collecting." size="12" />
+      <CheckBox id="debug_floor" text="Show floor debug visualization" />
+    </div>
+  </elements>
+</layout>

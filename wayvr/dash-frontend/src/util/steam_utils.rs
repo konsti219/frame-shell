@@ -16,6 +16,8 @@ pub struct AppManifest {
 	pub name: String,
 	pub raw_state_flags: u64, // documentation: https://github.com/lutris/lutris/blob/master/docs/steam.rst
 	pub last_played: Option<u64>, // unix timestamp
+	#[serde(default)]
+	pub icon_path: Option<PathBuf>,
 }
 
 // TODO @oo8dev: game sort methods
@@ -64,8 +66,7 @@ fn vdf_parse_libraryfolders<'a>(vdf_root: &'a Vdf<'a>) -> Option<Vec<AppEntry>> 
 		//log::trace!("path: {}", path);
 
 		res.extend(
-			apps
-				.iter()
+			apps.iter()
 				.filter_map(|item| item.0.parse::<u64>().ok())
 				.map(|app_id| AppEntry {
 					app_id: app_id.to_string(),
@@ -102,6 +103,7 @@ fn vdf_parse_appstate<'a>(app_id: AppID, vdf_root: &'a Vdf<'a>) -> Option<AppMan
 		name: String::from(name),
 		raw_state_flags,
 		last_played,
+		icon_path: None,
 	})
 }
 

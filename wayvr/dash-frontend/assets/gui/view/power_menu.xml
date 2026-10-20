@@ -1,0 +1,11 @@
+<layout version="2">
+  <elements>
+    <div flex_direction="column" width="100%" padding="8" gap="8">
+      <Button id="sleep" text="Sleep" sprite_src_builtin="@/dashboard/sleep.svg" width="100%" />
+      <Button id="restart_stack" text="Restart VR stack" sprite_src_builtin="@/dashboard/refresh.svg" width="100%" />
+      <Button id="restart" text="Restart" sprite_src_builtin="@/dashboard/refresh.svg" width="100%" />
+      <Button id="poweroff" text="Power off" sprite_src_builtin="@/dashboard/power.svg" width="100%" />
+      <Button id="steamvr" text="Switch to SteamVR" sprite_src_builtin="@/dashboard/wivrn_head_symbolic.svg" width="100%" />
+    </div>
+  </elements>
+</layout>

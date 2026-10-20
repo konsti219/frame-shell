@@ -55,6 +55,7 @@
           <SideButton id="btn_side_apps" src_builtin="@/dashboard/apps.svg" tooltip="APPLICATIONS" tooltip_side="right" />
           <SideButton id="btn_side_games" src_builtin="@/dashboard/games.svg" tooltip="GAMES" tooltip_side="right" />
           <SideButton id="btn_side_monado" src_builtin="@/dashboard/monado.svg" tooltip="MONADO_RUNTIME" tooltip_side="right" />
+          <SideButton id="btn_side_wivrn" src_builtin="@/dashboard/wivrn_head_symbolic.svg" tooltip="WIVRN" tooltip_side="right" />
           <rectangle height="2" color="outline" width="~side_sprite_size" />
           <SideButton id="btn_side_settings" src_builtin="@/dashboard/settings.svg" tooltip="SETTINGS" tooltip_side="right" />
         </rectangle>
@@ -154,6 +155,9 @@
             </Button>
             <Button id="btn_recenter" color="background(transparent)" border_color="background(transparent)" tooltip="ACTIONS.RECENTER_PLAYSPACE" tooltip_side="top">
               <sprite src_builtin="@/dashboard/recenter.svg" width="24" height="24" margin="8" />
+            </Button>
+            <Button id="btn_playspace" color="background(transparent)" border_color="background(transparent)" tooltip_str="Floor / playspace" tooltip_side="top">
+              <sprite src_builtin="@/dashboard/fix_floor.svg" width="24" height="24" margin="8" />
             </Button>
           </div>
 

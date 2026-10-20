@@ -395,6 +395,48 @@ impl DashInterface<AppState> for DashInterfaceLive {
         data.gfx.enumerate_devices()
     }
 
+    fn wivrn_state(&mut self, _: &mut AppState) -> Option<(u64, String, String)> {
+        crate::frame_shell::dashboard_state()
+    }
+
+    fn wivrn_command(&mut self, _: &mut AppState, command: &str) {
+        crate::frame_shell::send_command(command);
+    }
+
+    fn wivrn_launch(&mut self, app: &mut AppState, host: &str, app_id: &str, name: &str) {
+        crate::frame_shell::launch_remote(app, host, app_id, name);
+    }
+
+    fn headset_audio(&mut self, _: &mut AppState) -> dash_interface::HeadsetAudioState {
+        crate::headset_audio::snapshot()
+    }
+    fn headset_audio_control(&mut self, _: &mut AppState, control: dash_interface::AudioControl) {
+        crate::headset_audio::control(control);
+    }
+
+    fn floor_status(&mut self, app: &mut AppState) -> dash_interface::FloorStatus {
+        dash_interface::FloorStatus {
+            remaining_seconds: app.floor_calibration.remaining_seconds(),
+            debug_visible: crate::frame_shell::floor_visible(),
+        }
+    }
+
+    fn floor_detect(&mut self, app: &mut AppState) {
+        app.floor_calibration.start(10);
+    }
+
+    fn floor_debug_set(&mut self, _: &mut AppState, visible: bool) {
+        crate::frame_shell::set_floor_visible(visible);
+    }
+
+    fn power_action(&mut self, _: &mut AppState, action: &str) {
+        crate::frame_shell::power_action(action);
+    }
+
+    fn shell_request(&mut self, _: &mut AppState) -> Option<dash_interface::ShellRequest> {
+        crate::frame_shell::take_shell_request()
+    }
+
     fn window_list(&mut self, app: &mut AppState) -> anyhow::Result<Vec<WvrWindow>> {
         let wvr_server = app.wvr_server.as_mut().unwrap();
         Ok(wvr_server
@@ -677,6 +719,9 @@ impl DashInterface<AppState> for DashInterfaceLive {
     fn monado_metrics_set_enabled(&mut self, app: &mut AppState, enabled: bool) -> bool {
         #[cfg(feature = "feat-monado-metrics")]
         {
+            if crate::frame_shell::remote_connected() {
+                return true;
+            }
             let Some(monado) = &mut app.monado_state else {
                 return false;
             };
@@ -704,15 +749,23 @@ impl DashInterface<AppState> for DashInterfaceLive {
     ) -> Vec<dash_interface::MonadoDumpSessionFrame> {
         #[cfg(feature = "feat-monado-metrics")]
         {
-            let Some(monado) = &mut app.monado_state else {
-                return Vec::new();
-            };
-            let Some(metrics) = &mut monado.metrics else {
-                return Vec::new(); // metrics not enabled or not available
+            let metrics = if crate::frame_shell::remote_connected() {
+                let Some((_, metrics)) = app.remote_metrics.as_mut() else {
+                    return Vec::new();
+                };
+                metrics
+            } else {
+                let Some(monado) = &mut app.monado_state else {
+                    return Vec::new();
+                };
+                if monado.metrics.is_none() {
+                    return Vec::new();
+                }
+                &mut monado.watch_metrics
             };
 
             metrics
-                .dump_records()
+                .take_dashboard_records()
                 .iter()
                 .filter_map(|record| {
                     use crate::subsystem::monado_metrics::proto::record;

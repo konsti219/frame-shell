@@ -1,11 +1,11 @@
-use std::{path::PathBuf, process::Command, rc::Rc};
+use std::{cell::Cell, path::PathBuf, process::Command, rc::Rc};
 
 use chrono::Timelike;
 use glam::Vec2;
 use strum::EnumCount;
 use wgui::{
 	assets::{AssetPathRef, AssetProvider},
-	components::{ComponentTrait, button::ComponentButton},
+	components::{button::ComponentButton, checkbox::ComponentCheckbox, slider::ComponentSlider},
 	event::{CallbackDataCommon, StyleSetRequest},
 	font_config::WguiFontConfig,
 	globals::WguiGlobals,
@@ -25,7 +25,7 @@ use wgui::{
 use wlx_common::{
 	async_executor::AsyncExecutor,
 	audio,
-	dash_interface::{BoxDashInterface, ConfigChangeKind, DashBackendTask, DashPlayspaceTask},
+	dash_interface::{AudioControl, BoxDashInterface, ConfigChangeKind, DashPlayspaceTask, ShellRequest},
 	locale::WayVRLangProvider,
 	palette::load_palette,
 	timestep::{self, Timestep},
@@ -35,7 +35,7 @@ use crate::{
 	assets,
 	tab::{
 		Tab, TabType, apps::TabApps, donate::TabDonate, games::TabGames, home::TabHome, monado::TabMonado,
-		settings::TabSettings, welcome::TabWelcome,
+		settings::TabSettings, welcome::TabWelcome, wivrn::TabWivrn,
 	},
 	util::{
 		is_exec_installed,
@@ -79,10 +79,16 @@ pub struct Frontend<T> {
 	timestep: Timestep,
 	sounds_to_play: Vec<SoundType>,
 	context_menu_power: ContextMenu,
+	popup_dialog_box: PopupHolder<views::dialog_box::View>,
 
 	window_audio_settings: WguiWindow,
-	view_audio_settings: Option<views::audio_settings::View>,
-	popup_dialog_box: PopupHolder<views::dialog_box::View>,
+	menu_audio: Option<ParserState>,
+	audio_syncing: Rc<Cell<bool>>,
+
+	window_power: WguiWindow,
+	menu_power: Option<ParserState>,
+	window_playspace: WguiWindow,
+	menu_playspace: Option<ParserState>,
 }
 
 pub struct FrontendUpdateParams<'a, T> {
@@ -122,8 +128,7 @@ pub enum FrontendTask {
 	MountPopupOnce(MountPopupOnceParams),
 	RefreshPopupManager,
 	ShowAudioSettings,
-	ShowPowerSettings(WidgetID /* source widget */),
-	UpdateAudioSettingsView,
+	AudioControl(AudioControl),
 	RecenterPlayspace,
 	PushToast(Translation),
 	PlaySound(SoundType),
@@ -131,7 +136,18 @@ pub enum FrontendTask {
 	RunCommand(String /* program */, Vec<String> /* args */),
 	HideDashboard,
 	MarkTutorialGraduated,
-	BackendTask(DashBackendTask),
+	WivrnCommand(Rc<str>),
+	WivrnLaunch {
+		host: Rc<str>,
+		app_id: Rc<str>,
+		name: Rc<str>,
+	},
+	ShowPowerMenu,
+	ShowPlayspaceMenu,
+	DetectFloor,
+	DebugFloor(bool),
+	PowerAction(&'static str),
+	BackendTask(wlx_common::dash_interface::DashBackendTask),
 }
 
 impl<T: 'static> Frontend<T> {
@@ -211,8 +227,13 @@ impl<T: 'static> Frontend<T> {
 			popup_manager,
 			toast_manager,
 			window_audio_settings: WguiWindow::default(),
+			menu_audio: None,
+			audio_syncing: Rc::new(Cell::new(false)),
 			context_menu_power: Default::default(),
-			view_audio_settings: None,
+			window_power: WguiWindow::default(),
+			menu_power: None,
+			window_playspace: WguiWindow::default(),
+			menu_playspace: None,
 			executor: params.executor,
 			sounds_to_play: Vec::new(),
 			popup_dialog_box: Default::default(),
@@ -252,6 +273,12 @@ impl<T: 'static> Frontend<T> {
 	}
 
 	pub fn update(&mut self, mut params: FrontendUpdateParams<T>) -> anyhow::Result<FrontendUpdateResult> {
+		match self.interface.shell_request(params.data) {
+			Some(ShellRequest::PowerMenu) => self.tasks.push(FrontendTask::ShowPowerMenu),
+			Some(ShellRequest::Pairing) => self.tasks.push(FrontendTask::SetTab(TabType::Wivrn)),
+			None => {}
+		}
+
 		let mut tasks = self.tasks.drain();
 
 		while let Some(task) = tasks.pop_front() {
@@ -265,6 +292,9 @@ impl<T: 'static> Frontend<T> {
 
 			self.current_tab = Some(tab);
 		}
+
+		self.update_playspace_menu(params.data)?;
+		self.update_audio_menu(params.data)?;
 
 		let res = self.tick(params)?;
 		self.ticks += 1;
@@ -438,8 +468,7 @@ impl<T: 'static> Frontend<T> {
 			FrontendTask::MountPopupOnce(popup_params) => self.mount_popup_once(popup_params, params.data)?,
 			FrontendTask::RefreshPopupManager => self.refresh_popup_manager()?,
 			FrontendTask::ShowAudioSettings => self.action_show_audio_settings()?,
-			FrontendTask::ShowPowerSettings(pos) => self.action_show_power_settings(pos)?,
-			FrontendTask::UpdateAudioSettingsView => self.action_update_audio_settings()?,
+			FrontendTask::AudioControl(control) => self.interface.headset_audio_control(params.data, control),
 			FrontendTask::RecenterPlayspace => self.action_recenter_playspace(params.data)?,
 			FrontendTask::PushToast(content) => self.toast_manager.push(content),
 			FrontendTask::PlaySound(sound_type) => self.queue_play_sound(sound_type),
@@ -447,6 +476,18 @@ impl<T: 'static> Frontend<T> {
 			FrontendTask::OpenURL(url) => self.action_open_url(url),
 			FrontendTask::RunCommand(program, args) => self.action_run_command(program, args),
 			FrontendTask::MarkTutorialGraduated => self.action_tutorial_graduated(params.data),
+			FrontendTask::WivrnCommand(command) => self.interface.wivrn_command(params.data, &command),
+			FrontendTask::WivrnLaunch { host, app_id, name } => {
+				self.interface.wivrn_launch(params.data, &host, &app_id, &name)
+			}
+			FrontendTask::ShowPowerMenu => self.action_show_power_menu()?,
+			FrontendTask::ShowPlayspaceMenu => self.action_show_playspace_menu(params.data)?,
+			FrontendTask::DetectFloor => self.interface.floor_detect(params.data),
+			FrontendTask::DebugFloor(visible) => self.interface.floor_debug_set(params.data, visible),
+			FrontendTask::PowerAction(action) => {
+				self.window_power.close();
+				self.interface.power_action(params.data, action);
+			}
 			FrontendTask::BackendTask(task) => self.interface.backend_task(params.data, task)?,
 		};
 		Ok(())
@@ -497,6 +538,7 @@ impl<T: 'static> Frontend<T> {
 			TabType::Apps => ("APPLICATIONS", "dashboard/apps.svg"),
 			TabType::Games => ("GAMES", "dashboard/games.svg"),
 			TabType::Monado => ("MONADO_RUNTIME", "dashboard/monado.svg"),
+			TabType::Wivrn => ("WIVRN", "dashboard/wivrn_head_symbolic.svg"),
 			TabType::Settings => ("SETTINGS", "dashboard/settings.svg"),
 			TabType::Donate => ("DONATE.SUPPORT_US", "dashboard/opencollective.svg"),
 		};
@@ -509,6 +551,7 @@ impl<T: 'static> Frontend<T> {
 			TabType::Apps => Box::new(TabApps::new(self, widget_content.id, data)?),
 			TabType::Games => Box::new(TabGames::new(self, widget_content.id)?),
 			TabType::Monado => Box::new(TabMonado::new(self, widget_content.id)?),
+			TabType::Wivrn => Box::new(TabWivrn::new(self, widget_content.id)?),
 			TabType::Settings => Box::new(TabSettings::new(self, widget_content.id, data)?),
 			TabType::Donate => Box::new(TabDonate::new(self, widget_content.id, data)?),
 		};
@@ -558,6 +601,11 @@ impl<T: 'static> Frontend<T> {
 		self.tasks.handle_button(&btn, FrontendTask::SetTab(TabType::Monado));
 		self.side_buttons.push((TabType::Monado, btn));
 
+		// "WiVRn" side button
+		let btn = self.state.fetch_component_as::<ComponentButton>("btn_side_wivrn")?;
+		self.tasks.handle_button(&btn, FrontendTask::SetTab(TabType::Wivrn));
+		self.side_buttons.push((TabType::Wivrn, btn));
+
 		// "Settings" side button
 		let btn = self.state.fetch_component_as::<ComponentButton>("btn_side_settings")?;
 		self.tasks.handle_button(&btn, FrontendTask::SetTab(TabType::Settings));
@@ -573,15 +621,21 @@ impl<T: 'static> Frontend<T> {
 			FrontendTask::ShowAudioSettings,
 		);
 
-		let btn_power = self.state.fetch_component_as::<ComponentButton>("btn_power")?;
-		self
-			.tasks
-			.handle_button(&btn_power, FrontendTask::ShowPowerSettings(btn_power.base().get_id()));
-
 		// "Recenter playspace" bottom bar button
 		self.tasks.handle_button(
 			&self.state.fetch_component_as::<ComponentButton>("btn_recenter")?,
 			FrontendTask::RecenterPlayspace,
+		);
+
+		self.tasks.handle_button(
+			&self.state.fetch_component_as::<ComponentButton>("btn_playspace")?,
+			FrontendTask::ShowPlayspaceMenu,
+		);
+
+		// "Power" bottom bar button
+		self.tasks.handle_button(
+			&self.state.fetch_component_as::<ComponentButton>("btn_power")?,
+			FrontendTask::ShowPowerMenu,
 		);
 
 		Ok(())
@@ -600,42 +654,165 @@ impl<T: 'static> Frontend<T> {
 	}
 
 	fn action_show_audio_settings(&mut self) -> anyhow::Result<()> {
-		self.window_audio_settings.open(&mut WguiWindowParams {
+		let state = self.open_shell_menu(
+			&self.window_audio_settings.clone(),
+			"Audio",
+			"gui/view/audio_settings.xml",
+		)?;
+		for (id, microphone) in [("output_volume", false), ("mic_volume", true)] {
+			let tasks = self.tasks.clone();
+			let syncing = self.audio_syncing.clone();
+			state
+				.fetch_component_as::<ComponentSlider>(id)?
+				.on_value_changed(Box::new(move |_, event| {
+					if !syncing.get() {
+						tasks.push(FrontendTask::AudioControl(if microphone {
+							AudioControl::MicrophoneVolume(event.value)
+						} else {
+							AudioControl::OutputVolume(event.value)
+						}));
+					}
+				}));
+		}
+		for (id, microphone) in [("output_mute", false), ("mic_mute", true)] {
+			let tasks = self.tasks.clone();
+			let syncing = self.audio_syncing.clone();
+			state
+				.fetch_component_as::<ComponentCheckbox>(id)?
+				.on_toggle(Box::new(move |_, event| {
+					if syncing.get() {
+						return Ok(());
+					}
+					tasks.push(FrontendTask::AudioControl(if microphone {
+						AudioControl::MicrophoneMute(event.checked)
+					} else {
+						AudioControl::OutputMute(event.checked)
+					}));
+					Ok(())
+				}));
+		}
+		self.menu_audio = Some(state);
+		// Controls only act once they show PipeWire's values (see update_audio_menu)
+		self.audio_syncing.set(true);
+		Ok(())
+	}
+
+	fn update_audio_menu(&mut self, data: &mut T) -> anyhow::Result<()> {
+		let Some(state) = &mut self.menu_audio else {
+			return Ok(());
+		};
+		if state.fetch_widget(&self.layout.state, "output_value").is_err() {
+			return Ok(());
+		}
+		let audio = self.interface.headset_audio(data);
+		self.audio_syncing.set(true);
+		let result = (|| -> anyhow::Result<()> {
+			for (prefix, endpoint) in [("output", audio.output), ("mic", audio.microphone)] {
+				let label = state.fetch_widget(&self.layout.state, &format!("{prefix}_value"))?;
+				let text = endpoint.map_or_else(
+					|| "Unavailable".to_owned(),
+					|endpoint| format!("{} %", endpoint.volume.round()),
+				);
+				label
+					.widget
+					.cast::<WidgetLabel>()?
+					.set_text(&mut self.layout.common(), Translation::from_raw_text(&text));
+				if let Some(endpoint) = endpoint {
+					state
+						.fetch_component_as::<ComponentSlider>(&format!("{prefix}_volume"))?
+						.set_value_primary(&mut self.layout.common(), endpoint.volume);
+					state
+						.fetch_component_as::<ComponentCheckbox>(&format!("{prefix}_mute"))?
+						.set_checked(&mut self.layout.common(), endpoint.muted);
+				}
+			}
+			Ok(())
+		})();
+		// Until both endpoints were read, the controls still show their defaults and must not apply them
+		self
+			.audio_syncing
+			.set(audio.output.is_none() || audio.microphone.is_none());
+		result
+	}
+
+	fn open_shell_menu(&mut self, window: &WguiWindow, title: &str, path: &'static str) -> anyhow::Result<ParserState> {
+		self.window_audio_settings.close();
+		self.window_power.close();
+		self.window_playspace.close();
+		window.open(&mut WguiWindowParams {
 			position: Vec2::new(64.0, 64.0),
 			layout: &mut self.layout,
 			extra: WguiWindowParamsExtra {
 				fixed_width: Some(400.0),
 				placement: WguiWindowPlacement::BottomLeft,
 				close_if_clicked_outside: true,
-				title: Some(Translation::from_translation_key("AUDIO.SETTINGS")),
+				title: Some(Translation::from_raw_text(title)),
 				..Default::default()
 			},
 		})?;
-
-		let content = self.window_audio_settings.get_content();
-
-		self.view_audio_settings = Some(views::audio_settings::View::new(views::audio_settings::Params {
-			globals: self.globals.clone(),
-			frontend_tasks: self.tasks.clone(),
-			layout: &mut self.layout,
-			parent_id: content.id,
-			on_update: {
-				let tasks = self.tasks.clone();
-				Rc::new(move || {
-					tasks.push(FrontendTask::UpdateAudioSettingsView);
-				})
+		wgui::parser::parse_from_assets(
+			&ParseDocumentParams {
+				globals: self.globals.clone(),
+				path: AssetPathRef::BuiltIn(path),
+				extra: Default::default(),
 			},
-		})?);
+			&mut self.layout,
+			window.get_content().id,
+		)
+	}
+
+	fn action_show_power_menu(&mut self) -> anyhow::Result<()> {
+		let state = self.open_shell_menu(&self.window_power.clone(), "Power", "gui/view/power_menu.xml")?;
+		for action in ["sleep", "restart_stack", "restart", "poweroff", "steamvr"] {
+			self.tasks.handle_button(
+				&state.fetch_component_as::<ComponentButton>(action)?,
+				FrontendTask::PowerAction(action),
+			);
+		}
+		self.menu_power = Some(state);
 		Ok(())
 	}
 
-	fn action_update_audio_settings(&mut self) -> anyhow::Result<()> {
-		let Some(view) = &mut self.view_audio_settings else {
+	fn action_show_playspace_menu(&mut self, data: &mut T) -> anyhow::Result<()> {
+		let state = self.open_shell_menu(
+			&self.window_playspace.clone(),
+			"Floor / playspace",
+			"gui/view/playspace_menu.xml",
+		)?;
+		self.tasks.handle_button(
+			&state.fetch_component_as::<ComponentButton>("detect_floor")?,
+			FrontendTask::DetectFloor,
+		);
+		let tasks = self.tasks.clone();
+		state
+			.fetch_component_as::<ComponentCheckbox>("debug_floor")?
+			.on_toggle(Box::new(move |_, event| {
+				tasks.push(FrontendTask::DebugFloor(event.checked));
+				Ok(())
+			}));
+		self.menu_playspace = Some(state);
+		self.update_playspace_menu(data)
+	}
+
+	fn update_playspace_menu(&mut self, data: &mut T) -> anyhow::Result<()> {
+		let Some(state) = &mut self.menu_playspace else {
 			return Ok(());
 		};
-
-		view.update(&mut self.layout)?;
-
+		let Ok(label) = state.fetch_widget(&self.layout.state, "status") else {
+			return Ok(());
+		};
+		let status = self.interface.floor_status(data);
+		let text = match status.remaining_seconds {
+			Some(seconds) => format!("Collecting floor samples: {seconds} s remaining"),
+			None => "Floor height is fixed.".to_owned(),
+		};
+		label
+			.widget
+			.cast::<WidgetLabel>()?
+			.set_text(&mut self.layout.common(), Translation::from_raw_text(&text));
+		state
+			.fetch_component_as::<ComponentCheckbox>("debug_floor")?
+			.set_checked(&mut self.layout.common(), status.debug_visible);
 		Ok(())
 	}
 

@@ -9,6 +9,7 @@ pub mod home;
 pub mod monado;
 pub mod settings;
 pub mod welcome;
+pub mod wivrn;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, EnumCount)]
 pub enum TabType {
@@ -16,6 +17,7 @@ pub enum TabType {
 	Apps,
 	Games,
 	Monado,
+	Wivrn,
 	Settings,
 	Welcome,
 	Donate,
