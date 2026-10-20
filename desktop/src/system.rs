@@ -1,28 +1,14 @@
 use crate::Output;
-use std::{process::Command, sync::mpsc::Receiver, time::Duration};
+use std::time::Duration;
 use sysinfo::{Components, System};
 use wayvr_ipc::frame::{HostMessage, SystemStats};
 
-pub fn run(output: &Output, power: &Receiver<u8>) {
+pub fn run(output: &Output) {
     let mut system = System::new_all();
     let mut components = Components::new_with_refreshed_list();
     let device = find_amdgpu_device();
     let hwmon = find_amdgpu_hwmon();
     loop {
-        if let Some(profile) = power.try_iter().last() {
-            if let Some((_, maximum)) = lact_get_power_range() {
-                let watts = [230, 304, maximum][usize::from(profile)].min(maximum);
-                if !lact_set_power_limit(watts) {
-                    output.send(&HostMessage::Error(
-                        "PC GPU power limit could not be changed".into(),
-                    ));
-                }
-            } else {
-                output.send(&HostMessage::Error(
-                    "PC GPU power controls are unavailable".into(),
-                ));
-            }
-        }
         system.refresh_cpu_usage();
         system.refresh_memory();
         components.refresh(false);
@@ -30,7 +16,6 @@ pub fn run(output: &Output, power: &Receiver<u8>) {
             .as_deref()
             .and_then(query_gpu_power_sysfs)
             .unwrap_or_default();
-        let range = lact_get_power_range();
         let vram = query_vram_sysfs(device.as_deref());
         output.send(&HostMessage::System(SystemStats {
             cpu_usage: system.global_cpu_usage(),
@@ -44,16 +29,6 @@ pub fn run(output: &Output, power: &Receiver<u8>) {
             core_usage: cpu_usage_buckets(system.cpus(), 32),
             power_draw_watts: (draw != 0).then_some(draw),
             power_cap_watts: (cap != 0).then_some(cap),
-            power_max_watts: range.map(|(_, maximum)| maximum),
-            power_profile: range.map(|(current, maximum)| {
-                if current <= 230 {
-                    0
-                } else if current >= maximum {
-                    2
-                } else {
-                    1
-                }
-            }),
         }));
         if !output.sleep(Duration::from_secs(1)) {
             return;
@@ -179,40 +154,5 @@ fn query_vram_sysfs(device: Option<&std::path::Path>) -> Option<(Option<f32>, f3
     Some((Some(used_bytes as f32 / gib), total_bytes as f32 / gib))
 }
 
-fn command_output(program: &str, args: &[&str]) -> Option<String> {
-    let output = Command::new(program).args(args).output().ok()?;
-    output
-        .status
-        .success()
-        .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
-}
 
-fn lact_get_power_range() -> Option<(u32, u32)> {
-    // "Current power limit: 304W (Configurable Range: 212W to 374W)"
-    let output = command_output("lact", &["cli", "power-limit", "get"])?;
-    let current: u32 = output
-        .split("Current power limit: ")
-        .nth(1)?
-        .split('W')
-        .next()?
-        .trim()
-        .parse()
-        .ok()?;
-    let max: u32 = output
-        .split(" to ")
-        .nth(1)?
-        .split('W')
-        .next()?
-        .trim()
-        .parse()
-        .ok()?;
-    Some((current, max))
-}
 
-fn lact_set_power_limit(watts: u32) -> bool {
-    Command::new("lact")
-        .args(["cli", "power-limit", "set", &watts.to_string()])
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-}

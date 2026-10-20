@@ -31,7 +31,10 @@ Do not copy tokens into separate test directories: portal restore tokens are sin
 
 Nix supplies host dependencies; Podman supplies the ARM cross-compilation SDK. No NixOS rebuild is needed.
 All sources and compilation stay on the PC. `FRAME_HEADSET` overrides the default SSH target `steamos@frame`.
-For everyday installation, `nix build .#server` builds the tracked server with its host services as a package.
+For everyday installation, the flake packages the server with its host services (`server`, for
+`services.wivrn.package`), xrizer with the Frame's controller patches (`xrizer`), and the PC-side WayVR IPC
+clients built from this tree: `wayvrctl`, the Firefox media bridge and its extension (`media-bridge`,
+`ytmusic-extension`). Patches for upstream packages are in `nix/`.
 
 ## Source map
 
@@ -52,7 +55,7 @@ are defined once in `frame_abi.h`; Rust gets them through bindgen at build time.
 
 `desktop/` builds `libframe_host.a`, which the server links and starts per headset connection. `capture.rs`
 streams monitors; `ipc_proxy.rs` tunnels WayVR IPC clients such as the browser media bridge; `notifications.rs`
-forwards VRCX and desktop notifications; `music.rs`, `metrics.rs`, `system.rs` and `games.rs` cover the watch.
+forwards VRCX and desktop notifications; `metrics.rs`, `system.rs` and `games.rs` cover the watch.
 Host messages and commands travel through WiVRn's authenticated connection as opaque bytes.
 
 `out/` contains ignored build products, caches and private pairing state. The build scripts

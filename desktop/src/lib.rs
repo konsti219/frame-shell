@@ -7,7 +7,6 @@ mod games;
 mod ipc_proxy;
 mod metrics;
 mod metrics_proto;
-mod music;
 mod notifications;
 mod notify;
 mod system;
@@ -139,9 +138,7 @@ impl Shared {
 struct Host {
     output: Output,
     shared: Arc<Shared>,
-    power: Sender<u8>,
     games: Sender<(String, bool)>,
-    music: Sender<u32>,
     proxy: Arc<ipc_proxy::Proxy>,
     threads: Vec<JoinHandle<()>>,
 }
@@ -155,9 +152,7 @@ impl Host {
             open: Arc::new(RwLock::new(true)),
         };
         let shared = Arc::new(Shared::default());
-        let (power, power_rx) = mpsc::channel();
         let (games, games_rx) = mpsc::channel();
-        let (music, music_rx) = mpsc::channel();
         let proxy = Arc::new(ipc_proxy::Proxy::default());
         let mut threads = Vec::new();
         let mut spawn = |name: &str, body: Box<dyn FnOnce() + Send>| {
@@ -169,11 +164,9 @@ impl Host {
             );
         };
         let worker = output.clone();
-        spawn("system", Box::new(move || system::run(&worker, &power_rx)));
+        spawn("system", Box::new(move || system::run(&worker)));
         let worker = output.clone();
         spawn("games", Box::new(move || games::run(&worker, &games_rx)));
-        let worker = output.clone();
-        spawn("music", Box::new(move || music::run(&worker, &music_rx)));
         let worker = output.clone();
         spawn("metrics", Box::new(move || metrics::run(&worker)));
         let worker = output.clone();
@@ -196,9 +189,7 @@ impl Host {
         Ok(Self {
             output,
             shared,
-            power,
             games,
-            music,
             proxy,
             threads,
         })
@@ -219,14 +210,6 @@ impl Host {
                 if app_id.parse::<u64>().is_ok() {
                     let _ = self.games.send((app_id, force));
                 }
-            }
-            ShellMessage::PowerProfile(profile) => {
-                if profile <= 2 {
-                    let _ = self.power.send(profile);
-                }
-            }
-            ShellMessage::MusicVolume(percent) => {
-                let _ = self.music.send(percent.min(100));
             }
             ShellMessage::Ipc(connection, packet) => self.proxy.send(connection, &packet),
             ShellMessage::IpcClose(connection) => self.proxy.close(connection),
