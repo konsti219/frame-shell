@@ -11,7 +11,7 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 use wayvr_ipc::frame::{DesktopSettings, HostMessage};
 use wlx_capture::pipewire::{ScreenCastManager, ScreenCastParams, ScreenCastResult};
@@ -142,7 +142,8 @@ fn capture(output: &Output, shared: &Shared) -> Result<()> {
             });
             let Some((expected, token)) = next else { break };
             let wanted = expected.map_or("a monitor", |index| monitors[index].name.as_str());
-            if token.is_none() {
+            let restoring = token.is_some();
+            if !restoring {
                 eprintln!("Pick {wanted} in the screen sharing dialog");
             }
             let request = portal.request(ScreenCastParams {
@@ -152,8 +153,10 @@ fn capture(output: &Output, shared: &Shared) -> Result<()> {
                 persist: true,
                 allow_multiple: false,
             })?;
-            // Shown while the portal's dialog waits, closed when this request is done
+            // Shown while the portal's dialog waits, closed when this request is done. A restore token
+            // usually answers without a dialog, so only a request still waiting after a while has one.
             let mut notification = None;
+            let requested = Instant::now();
             let response = loop {
                 if output.stopped() {
                     break None;
@@ -164,7 +167,10 @@ fn capture(output: &Output, shared: &Shared) -> Result<()> {
                         eprintln!("Desktop selection: {error}");
                         break None;
                     }
-                    ScreenCastResult::WaitingForUser if notification.is_none() => {
+                    ScreenCastResult::WaitingForUser
+                        if notification.is_none()
+                            && (!restoring || requested.elapsed() > Duration::from_secs(2)) =>
+                    {
                         notification = Some(
                             notify::Notification::show(
                                 &format!("Pick {wanted} to share"),
