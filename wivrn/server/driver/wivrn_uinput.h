@@ -1,3 +1,4 @@
+#pragma once
 #include "wivrn_packets.h"
 #include "wivrn_sockets.h"
 

@@ -14,9 +14,9 @@ if { [ ! -f "$build/config/wivrn/cookie" ] || [ ! -f "$build/config/wivrn/known_
     done
 fi
 was_active=false
-if systemctl --user is-active --quiet wivrn.service; then
+if systemctl --user is-active --quiet frame-shell.service; then
     was_active=true
-    systemctl --user stop wivrn.service
+    systemctl --user stop frame-shell.service
 fi
 # Games launched normally (xrizer, OpenXR apps) use the development runtime while this runs
 runtime_dir="${XDG_CONFIG_HOME:-$HOME/.config}/openxr/1"
@@ -39,7 +39,7 @@ cleanup() {
     fi
     rm -f -- "$runtime_dir/active_runtime.json"
     if [ -n "$saved_runtime" ]; then mv -fT -- "$saved_runtime" "$runtime_dir/active_runtime.json"; fi
-    if "$was_active"; then systemctl --user start wivrn.service; fi
+    if "$was_active"; then systemctl --user start frame-shell.service; fi
 }
 trap cleanup EXIT
 trap 'exit 130' INT

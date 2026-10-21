@@ -23,6 +23,7 @@
 #include "application.h"
 #include "audio/audio.h"
 #include "configuration.h"
+#include "decoder/frame_sink.h"
 #include "decoder/shard_accumulator.h"
 #include "render/imgui_impl.h"
 #include "scene.h"
@@ -35,6 +36,7 @@
 #include "xr/frame_foveated_projection.h"
 #include "xr/space.h"
 #ifndef __ANDROID__
+#include "linux/desktop_receiver.h"
 #include "linux/frame_shell.h"
 #endif
 #if WIVRN_FRAME_EYES
@@ -44,6 +46,7 @@
 #include <deque>
 #include <map>
 #include <mutex>
+#include <atomic>
 #include <optional>
 #include <queue>
 #include <shared_mutex>
@@ -52,7 +55,7 @@
 
 namespace scenes
 {
-class stream : public scene_impl<stream>, public std::enable_shared_from_this<stream>
+class stream : public scene_impl<stream>, public std::enable_shared_from_this<stream>, public wivrn::frame_sink
 {
 public:
 	enum class state
@@ -111,43 +114,23 @@ private:
 
 	std::shared_mutex decoder_mutex;
 
-	// Frame shell: each PC monitor's H.264, decoded by its own V4L2 decoder sized for it, whose frames go to
-	// WayVR. A stream's address is the accumulator tag push_blit_handle recognises.
-	struct desktop_stream
-	{
-		uint32_t surface;
-		uint16_t width, height;
-		video_codec codec = video_codec::h264;
-		std::shared_ptr<wivrn::decoder> decoder;
-		uint64_t frame_index = 0;
-		std::string name;
-		// Until a frame with SPS (a keyframe) arrives, after a loss or a decoder failure
-		bool wait_keyframe = true;
-		std::chrono::steady_clock::time_point keyframe_requested{};
-		// Frames after the last one decoded, still arriving or waiting for an earlier one (desktop_video)
-		struct pending_frame
-		{
-			std::vector<std::vector<uint8_t>> shards;
-			std::vector<std::vector<uint8_t>> parity;
-			size_t received = 0;
-			uint32_t size = 0;
-			bool complete = false;
-			// Asked to be sent again (from_headset::desktop_nack): how often, when first
-			int requests = 0;
-			std::chrono::steady_clock::time_point requested{};
-		};
-		std::map<uint32_t, pending_frame> pending;
-		std::optional<uint32_t> last_frame;
-		// Recent decoder failures, to stop recreating a decoder that keeps failing
-		std::deque<std::chrono::steady_clock::time_point> failures;
-	};
-	void desktop_frame_lost(desktop_stream &);
-	void deliver_desktop_frames(std::map<uint32_t, std::unique_ptr<desktop_stream>>::iterator);
-	bool decode_desktop_frame(std::map<uint32_t, std::unique_ptr<desktop_stream>>::iterator, desktop_stream::pending_frame &);
-	// Written only by the network thread
-	std::shared_mutex desktop_mutex;
-	std::map<uint32_t, std::unique_ptr<desktop_stream>> desktop_streams;
-	std::unique_ptr<desktop_stream> make_desktop_stream(uint32_t surface, uint16_t width, uint16_t height, const std::string & name, video_codec codec) noexcept;
+	// Frame shell: this PC's monitors, and its number for the shell
+	const uint32_t shell_source = frame_shell::next_source();
+	std::shared_ptr<frame_shell::desktop_receiver> desktop;
+	// Whether this PC presents VR. On standby it keeps its session, monitors and applications, but has no video
+	// decoders or audio and sends no tracking; the descriptions wait here for when it is made active.
+	std::atomic<bool> video_active = true;
+	// Asked for by the lobby, applied on the network thread
+	std::atomic<bool> wanted_active = true;
+	std::optional<to_headset::video_stream_description> standby_video;
+	std::optional<to_headset::audio_stream_description> standby_audio;
+	std::chrono::steady_clock::time_point standby_keepalive{};
+	// A VR (non-overlay) application runs on this PC: since when
+	std::atomic<int64_t> vr_app_since = 0;
+	// The first application list: what runs already when connecting counts as started long ago
+	bool running_apps_seen = false;
+	void apply_video_active();
+	void teardown_video();
 	std::optional<to_headset::video_stream_description> video_stream_description;
 	std::array<accumulator_images, decoder_count> decoders; // Locked by decoder_mutex
 
@@ -279,7 +262,27 @@ public:
 	        std::unique_ptr<wivrn_session> session,
 	        float guessed_fps,
 	        std::string server_name,
-	        scene & parent_scene);
+	        scene & parent_scene,
+	        bool video_active = true);
+
+	// Frame shell: present this PC's VR or put it on standby (other PCs connected)
+	void set_video_active(bool active)
+	{
+		wanted_active = active;
+	}
+	bool is_video_active() const
+	{
+		return wanted_active;
+	}
+	uint32_t shell_source_id() const
+	{
+		return shell_source;
+	}
+	// Steady clock nanoseconds since a VR application started on this PC, 0 without one
+	int64_t vr_app_started() const
+	{
+		return vr_app_since;
+	}
 
 	void render(const XrFrameState &) override;
 	void on_focused() override;
@@ -316,7 +319,7 @@ public:
 	void operator()(to_headset::shell_message &&);
 	void operator()(audio_data &&);
 
-	void push_blit_handle(wivrn::shard_accumulator * decoder, std::shared_ptr<wivrn::shard_accumulator::blit_handle> handle);
+	void push_blit_handle(wivrn::shard_accumulator * decoder, std::shared_ptr<wivrn::shard_accumulator::blit_handle> handle) override;
 
 	void send_feedback(const wivrn::from_headset::feedback & feedback);
 	void send_nack(wivrn::from_headset::video_nack &&);

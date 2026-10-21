@@ -11,7 +11,7 @@
 extern "C" {
 #endif
 
-#define FRAME_SHELL_ABI_VERSION 2
+#define FRAME_SHELL_ABI_VERSION 3
 
 // ---- Headset: WiVRn client <-> WayVR ----
 
@@ -47,8 +47,8 @@ typedef struct frame_shell_host
 	void * user;
 	// The shell no longer reads a desktop frame
 	void (*release_desktop_frame)(void * user, uint64_t id);
-	// A wayvr_ipc::frame::ShellMessage for the connected PC
-	void (*send_host_message)(void * user, const uint8_t * data, size_t size);
+	// A wayvr_ipc::frame::ShellMessage for a connected PC (source)
+	void (*send_host_message)(void * user, uint32_t source, const uint8_t * data, size_t size);
 } frame_shell_host;
 
 // The shell's entry points, from frame_shell_api() in libwayvr.so
@@ -61,12 +61,16 @@ typedef struct frame_shell_api
 	bool (*input_poll)(frame_shell_input * event);
 	void (*desktop_surface)(const frame_shell_desktop_surface * info);
 	void (*desktop_frame)(const frame_shell_desktop_frame * frame);
-	void (*connected)(bool connected);
+	// A PC (source) connected or went away, or changed role; vr: it presents VR, else it is on standby
+	void (*connected)(uint32_t source, bool connected, bool vr);
 	// Lobby (servers, connection, pairing) and stream (connected server, PC apps) state for the UI, as JSON
 	void (*lobby_state)(const char * json);
 	void (*stream_state)(const char * json);
-	// A wayvr_ipc::frame::HostMessage from the connected PC
-	void (*host_message)(const uint8_t * data, size_t size);
+	// A wayvr_ipc::frame::HostMessage from a connected PC (source)
+	void (*host_message)(uint32_t source, const uint8_t * data, size_t size);
+	// PCs connected besides the one presenting VR (on standby, or being connected), as JSON:
+	// [{"cookie", "name", "state", "detail", "source"}]
+	void (*hosts_state)(const char * json);
 	// Next command line for the client ("connect <cookie>", "setting <key> <value>", ...); false when there is none
 	bool (*command_poll)(char * buffer, size_t size);
 	// The shell's temporary space drag as floor-from-stage: qx, qy, qz, qw, x, y, z

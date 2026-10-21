@@ -113,6 +113,8 @@ private:
 	using status_type = std::atomic_int8_t;
 #endif
 	status_type encode_request{-1}; // id of the image to encode
+	// Frame shell: the headset shows this PC's VR video (from_headset::video_active)
+	std::atomic<bool> video_active{true};
 	std::jthread encoder_thread;
 
 	struct
@@ -206,6 +208,8 @@ public:
 	void on_feedback(const from_headset::feedback &, const clock_offset &);
 	void on_nack(const from_headset::video_nack &);
 	void set_frame_margin(float ms);
+	// Activating restarts the encoders and sends the stream description again, as on resume
+	void set_video_active(bool active);
 };
 
 } // namespace wivrn

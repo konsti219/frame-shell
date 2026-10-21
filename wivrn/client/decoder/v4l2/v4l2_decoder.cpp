@@ -11,7 +11,7 @@
 #include "v4l2_decoder.h"
 
 #include "application.h"
-#include "scenes/stream.h"
+#include "decoder/frame_sink.h"
 #include "spdlog/spdlog.h"
 
 #include <algorithm>
@@ -249,7 +249,7 @@ decoder::decoder(vk::raii::Device & device,
                  uint32_t vk_queue_family_index,
                  const wivrn::to_headset::video_stream_description & description,
                  uint8_t stream_index,
-                 std::weak_ptr<scenes::stream> scene,
+                 std::weak_ptr<wivrn::frame_sink> scene,
                  shard_accumulator * accumulator) :
         device(device),
         physical_device(physical_device),

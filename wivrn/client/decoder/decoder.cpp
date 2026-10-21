@@ -22,6 +22,7 @@
 #include "decoder/android/android_decoder.h"
 #elif WIVRN_USE_V4L2
 #include "decoder/v4l2/v4l2_decoder.h"
+#include "scenes/stream.h"
 #else
 #include "decoder/ffmpeg/ffmpeg_decoder.h"
 #endif

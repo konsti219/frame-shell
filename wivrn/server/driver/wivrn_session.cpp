@@ -494,34 +494,7 @@ void wivrn_session::resume_session()
 	{
 		char hostname[256] = "PC";
 		gethostname(hostname, sizeof(hostname) - 1);
-		desktop = std::make_unique<frame_host_session>(frame_host_session::callbacks{
-		        .surface = [this, source = std::string(hostname)](const frame_host_surface & surface) {
-			        {
-				        std::scoped_lock lock(desktop_mutex);
-				        desktop_regions[surface.id] = {surface.region[0], surface.region[1], surface.region[2], surface.region[3]};
-			        }
-			        send_control(to_headset::desktop_surface{
-			                .surface = surface.id,
-			                .width = uint16_t(surface.width),
-			                .height = uint16_t(surface.height),
-			                .name = surface.name ? surface.name : "",
-			                .source = source,
-			                .removed = false,
-			                .codec = surface.codec == 1 ? video_codec::h265 : video_codec::h264,
-			        });
-		        },
-		        .surface_removed = [this](uint32_t id) {
-			        {
-				        std::scoped_lock lock(desktop_mutex);
-				        desktop_regions.erase(id);
-			        }
-			        send_control(to_headset::desktop_surface{.surface = id, .removed = true});
-		        },
-		        .video = [this](uint32_t surface, std::span<const uint8_t> data) { send_desktop_video(surface, data); },
-		        .message = [this](std::span<const uint8_t> data) {
-			        send_control(to_headset::shell_message{.payload = {data.begin(), data.end()}});
-		        },
-		});
+		desktop = std::make_unique<desktop_link<wivrn_session>>(*this, uinput_handler);
 	}
 	catch (const std::exception & e)
 	{
@@ -1557,36 +1530,35 @@ void wivrn_session::destroy()
 
 void wivrn::wivrn_session::operator()(from_headset::shell_input && event)
 {
-	if (event.kind == 2)
-	{
-		// Pointer position on one streamed monitor: map it into the whole desktop
-		std::scoped_lock lock(desktop_mutex);
-		auto region = desktop_regions.find(event.surface);
-		if (region == desktop_regions.end())
-			return;
-		event.x = region->second[0] + event.x * region->second[2];
-		event.y = region->second[1] + event.y * region->second[3];
-	}
-	if (uinput_handler)
-		uinput_handler->handle_shell_input(event);
+	if (desktop)
+		(*desktop)(std::move(event));
 }
 
 void wivrn::wivrn_session::operator()(from_headset::shell_message && event)
 {
 	if (desktop)
-		desktop->receive(event.payload);
+		(*desktop)(std::move(event));
 }
 
 void wivrn::wivrn_session::operator()(from_headset::link_settings && event)
 {
-	U_LOG_I("Link: %u%% parity, %u ms frame margin", event.fec_percent, event.frame_margin_ms);
+	// Sent again as keepalive by a headset with this PC on standby
+	if (std::min<uint8_t>(event.fec_percent, 50) != fec_percent)
+		U_LOG_I("Link: %u%% parity, %u ms frame margin", event.fec_percent, event.frame_margin_ms);
 	fec_percent = std::min<uint8_t>(event.fec_percent, 50);
+	if (desktop)
+		desktop->fec_percent = fec_percent.load();
 	compositor.set_frame_margin(std::min<uint8_t>(event.frame_margin_ms, 20));
 }
 
 void wivrn::wivrn_session::operator()(from_headset::video_nack && nack)
 {
 	compositor.on_nack(nack);
+}
+
+void wivrn::wivrn_session::operator()(from_headset::video_active && event)
+{
+	compositor.set_video_active(event.active);
 }
 
 void wivrn::wivrn_session::operator()(from_headset::frame_eyes && eyes)
@@ -1598,86 +1570,11 @@ void wivrn::wivrn_session::operator()(from_headset::frame_eyes && eyes)
 void wivrn::wivrn_session::operator()(from_headset::desktop_keyframe && event)
 {
 	if (desktop)
-		desktop->request_keyframe(event.surface);
-}
-
-// Shards an access unit for the stream socket (UDP when available): the headset drops incomplete frames and asks
-// for a keyframe, instead of video holding up control messages
-void wivrn::wivrn_session::send_desktop_video(uint32_t surface, std::span<const uint8_t> data)
-{
-	const uint8_t percent = has_stream() ? fec_percent.load() : 0;
-	const size_t shard_size = percent ? fec::block_size : to_headset::desktop_video::max_payload_size;
-	const size_t count = std::max<size_t>(1, (data.size() + shard_size - 1) / shard_size);
-	const auto parity_count = fec::parity_count(count, percent);
-	if (count + parity_count > std::numeric_limits<uint16_t>::max())
-		throw std::logic_error("Desktop frame exceeds the shard index range");
-	std::vector<to_headset::desktop_video> shards;
-	shards.reserve(count + parity_count);
-	std::vector<std::vector<uint8_t>> blocks;
-	{
-		std::scoped_lock lock(desktop_mutex);
-		uint32_t frame = desktop_frames[surface]++;
-		for (size_t shard = 0; shard < count; ++shard)
-		{
-			auto begin = data.begin() + std::min(data.size(), shard * shard_size);
-			auto end = data.begin() + std::min(data.size(), (shard + 1) * shard_size);
-			std::vector<uint8_t> payload(begin, end);
-			if (percent)
-			{
-				payload.resize(fec::block_size);
-				blocks.push_back(payload);
-			}
-			shards.push_back({.surface = surface, .frame = frame, .shard = uint16_t(shard), .shard_count = uint16_t(count), .parity_count = parity_count, .frame_size = uint32_t(data.size()), .payload = std::move(payload)});
-		}
-		if (percent)
-		{
-			auto parity = fec::encode(blocks, parity_count);
-			for (size_t i = 0; i < parity.size(); ++i)
-				shards.push_back({.surface = surface, .frame = frame, .shard = uint16_t(count + i), .shard_count = uint16_t(count), .parity_count = parity_count, .frame_size = uint32_t(data.size()), .payload = std::move(parity[i])});
-		}
-		auto & sent = sent_desktop[surface][frame % 8];
-		sent.frame = frame;
-		sent.shards = shards;
-	}
-	// Sending encrypts the payloads in place: these are copies of what's kept
-	for (auto & shard: shards)
-	{
-		try
-		{
-			send_stream(std::move(shard));
-		}
-		catch (const std::system_error &)
-		{
-		}
-	}
+		(*desktop)(std::move(event));
 }
 
 void wivrn::wivrn_session::operator()(from_headset::desktop_nack && nack)
 {
-	std::vector<to_headset::desktop_video> shards;
-	{
-		std::scoped_lock lock(desktop_mutex);
-		auto it = sent_desktop.find(nack.surface);
-		if (it == sent_desktop.end())
-			return;
-		const auto & sent = it->second[nack.frame % 8];
-		if (sent.frame != nack.frame)
-			return;
-		if (nack.shards.empty())
-			shards = sent.shards;
-		else
-			for (auto index: nack.shards)
-				if (index < sent.shards.size())
-					shards.push_back(sent.shards[index]);
-	}
-	for (auto & shard: shards)
-	{
-		try
-		{
-			send_stream(std::move(shard));
-		}
-		catch (const std::system_error &)
-		{
-		}
-	}
+	if (desktop)
+		(*desktop)(std::move(nack));
 }

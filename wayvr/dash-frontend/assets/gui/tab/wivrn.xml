@@ -19,7 +19,7 @@
       <div gap="8" flex_wrap="wrap">
         <Button id="btn_connect" padding="8" gap="8" align_items="center" display="${show_connect}">
           <sprite src_builtin="@/dashboard/wivrn_head_symbolic.svg" width="24" height="24" />
-          <label text="Connect" size="16" />
+          <label text="${connect_label}" size="16" />
         </Button>
         <Button id="btn_disconnect" padding="8" gap="8" align_items="center" display="${show_disconnect}">
           <sprite src_builtin="@/dashboard/close.svg" width="24" height="24" />

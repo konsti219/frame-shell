@@ -43,6 +43,8 @@ pub struct Host {
 	pub visible: bool,
 	pub compatible: bool,
 	pub autoconnect: bool,
+	/// Added by address rather than discovered: never shows as visible
+	pub manual: bool,
 }
 
 /// The WiVRn client's lobby and stream state, parsed
@@ -58,6 +60,8 @@ pub struct WivrnState {
 	pub stream: Value,
 	pub settings: Value,
 	pub game_running: bool,
+	/// PCs connected besides the one presenting VR: cookie, state ("connecting", "pin", "connected", "error"), detail
+	pub standby: Vec<(Rc<str>, String, String)>,
 }
 
 fn text(value: &Value, key: &str) -> String {
@@ -84,6 +88,7 @@ impl WivrnState {
 				visible: flag(server, "visible"),
 				compatible: flag(server, "compatible"),
 				autoconnect: flag(server, "autoconnect"),
+				manual: flag(server, "manual"),
 			})
 			.collect();
 		Self {
@@ -103,6 +108,13 @@ impl WivrnState {
 			detail: text(&lobby, "detail"),
 			hosts,
 			pin_typed: lobby.get("pin_typed").and_then(Value::as_u64).unwrap_or(0) as usize,
+			standby: lobby
+				.get("hosts")
+				.and_then(Value::as_array)
+				.into_iter()
+				.flatten()
+				.map(|pc| (text(pc, "cookie").into(), text(pc, "state"), text(pc, "detail")))
+				.collect(),
 			stream,
 		}
 	}
@@ -114,6 +126,15 @@ impl WivrnState {
 
 	pub fn connected_to(&self, host: &Host) -> bool {
 		self.is_active(host) && self.state == "connected"
+	}
+
+	/// This PC's connection while another presents VR, if any: (state, detail)
+	pub fn standby_host(&self, host: &Host) -> Option<(&str, &str)> {
+		self
+			.standby
+			.iter()
+			.find(|(cookie, _, _)| *cookie == host.cookie)
+			.map(|(_, state, detail)| (state.as_str(), detail.as_str()))
 	}
 }
 
@@ -316,14 +337,22 @@ impl<T> TabWivrn<T> {
 			return Ok(());
 		};
 		let active = wivrn.is_active(host);
-		let status = if active {
+		let standby = wivrn.standby_host(host);
+		let status = if let Some((state, detail)) = standby {
+			match state {
+				"connected" => "Connected, on standby: presents VR once a VR application runs on it".to_owned(),
+				"connecting" => format!("Connecting: {detail}"),
+				"pin" => "Pairing: enter the PIN shown on the PC".to_owned(),
+				_ => format!("Not connected: {detail}"),
+			}
+		} else if active {
 			match wivrn.state.as_str() {
 				"connected" => "Connected".to_owned(),
 				"connecting" => format!("Connecting: {}", wivrn.detail),
 				"pin" => "Pairing: enter the PIN shown on the PC".to_owned(),
 				_ => wivrn.state.clone(),
 			}
-		} else if !host.visible {
+		} else if !host.visible && !host.manual {
 			"Not found on the network".to_owned()
 		} else if !host.compatible {
 			"Incompatible WiVRn version".to_owned()
@@ -332,20 +361,31 @@ impl<T> TabWivrn<T> {
 		} else {
 			"Not connected".to_owned()
 		};
-		let can_connect = !active && host.visible && host.compatible && wivrn.state != "connected";
+		let can_connect = !active
+			&& (host.visible || host.manual)
+			&& host.compatible
+			&& standby.is_none_or(|(state, _)| state == "error");
 
 		let mut params = TemplateParams::new();
 		params.insert("name", &host.name);
 		params.insert("hostname", &host.hostname);
 		params.insert("status", &status);
 		params.insert("show_connect", if can_connect { "flex" } else { "none" });
-		params.insert("show_disconnect", if active { "flex" } else { "none" });
+		params.insert("connect_label", "Connect");
+		params.insert(
+			"show_disconnect",
+			if active || standby.is_some_and(|(state, _)| state != "error") {
+				"flex"
+			} else {
+				"none"
+			},
+		);
 		params.insert(
 			"disconnect_label",
-			if wivrn.state == "connected" {
-				"Disconnect"
-			} else {
+			if standby.is_some_and(|(state, _)| state != "connected") || (active && wivrn.state != "connected") {
 				"Cancel"
+			} else {
+				"Disconnect"
 			},
 		);
 		params.insert(
@@ -362,9 +402,14 @@ impl<T> TabWivrn<T> {
 				.tasks
 				.get_button_click_callback(Task::Command(format!("connect {}", host.cookie))),
 		);
+		let disconnect = if standby.is_some() {
+			format!("disconnect {}", host.cookie)
+		} else {
+			"disconnect".to_owned()
+		};
 		self
 			.button(page, "btn_disconnect")?
-			.on_click(self.tasks.get_button_click_callback(Task::Command("disconnect".into())));
+			.on_click(self.tasks.get_button_click_callback(Task::Command(disconnect)));
 		self
 			.button(page, "btn_auto")?
 			.on_click(self.tasks.get_button_click_callback(Task::Command(format!(
@@ -381,7 +426,7 @@ impl<T> TabWivrn<T> {
 		}
 		forget.on_click(self.tasks.get_button_click_callback(Task::Forget(host.cookie.clone())));
 
-		if active && wivrn.state == "pin" {
+		if (active && wivrn.state == "pin") || standby.is_some_and(|(state, _)| state == "pin") {
 			let shown: String = (0..6).map(|i| if i < wivrn.pin_typed { '•' } else { '-' }).collect();
 			let mut params = TemplateParams::new();
 			params.insert("pin", &shown);

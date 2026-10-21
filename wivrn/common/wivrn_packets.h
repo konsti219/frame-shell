@@ -803,6 +803,13 @@ struct shell_input
 	uint32_t surface;
 };
 
+// Frame shell: whether this PC presents VR. Connected to several PCs, the headset shows one; the others don't
+// encode VR video until made active (they keep their sessions, monitors and applications).
+struct video_active
+{
+	bool active;
+};
+
 struct stop_application
 {
 	uint32_t id;
@@ -847,7 +854,8 @@ using packets = std::variant<
         stream_settings,
         video_nack,
         desktop_nack,
-        frame_eyes>;
+        frame_eyes,
+        video_active>;
 } // namespace from_headset
 
 namespace to_headset

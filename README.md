@@ -31,10 +31,21 @@ Do not copy tokens into separate test directories: portal restore tokens are sin
 
 Nix supplies host dependencies; Podman supplies the ARM cross-compilation SDK. No NixOS rebuild is needed.
 All sources and compilation stay on the PC. `FRAME_HEADSET` overrides the default SSH target `steamos@frame`.
-For everyday installation, the flake packages the server with its host services (`server`, for
-`services.wivrn.package`), xrizer with the Frame's controller patches (`xrizer`), and the PC-side WayVR IPC
-clients built from this tree: `wayvrctl`, the Firefox media bridge and its extension (`media-bridge`,
+For everyday installation, NixOS PCs import the flake's `nixosModules.host` and set
+`services.frame-shell.enable`: the server with its host services as a user service (`frame-shell.service`), its
+port, mDNS publishing and uinput (`inputUsers`). VR extras stay outside: `settings.openvr-compat-path` with the
+flake's `xrizer` (the Frame's controller patches), `steamPackage` to start Steam games. The flake also builds the
+PC-side WayVR IPC clients from this tree: `wayvrctl`, the Firefox media bridge and its extension (`media-bridge`,
 `ytmusic-extension`). Patches for upstream packages are in `nix/`.
+
+## Several PCs
+
+The headset connects to every PC marked auto-connect (and any connected from the WiVRn tab), all with the same
+server and protocol. Each streams its monitors; one presents VR. The others stand by: their sessions,
+applications and monitors stay up, but they encode no VR video, get no tracking, and the headset holds no VR
+decoders for them (`video_active`). The PC whose VR application started last presents; when that application
+ends or the PC goes away, one still running an application takes over. Starting an application on a PC on
+standby from the shell starts it there (`on <source> start_app`), which then switches.
 
 ## Source map
 

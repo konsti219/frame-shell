@@ -281,8 +281,9 @@ xrt_result_t compositor::layer_commit(xrt_graphics_sync_handle_t sync_handle)
 	// Move waited frame to rendering frame, clear waited.
 	comp_frame_move_and_clear_locked(&frame.rendering, &frame.waited);
 
+	// On standby (the headset shows another PC) frames go nowhere: once handed to the encoders they must be encoded
 	if (encode_request >= 0 // encoders have not picked up the previous frame
-	    or not session.connected() or not session.get_offset())
+	    or not session.connected() or not session.get_offset() or not video_active)
 	{
 		comp_frame_clear_locked(&frame.rendering);
 		return XRT_SUCCESS;
@@ -880,6 +881,15 @@ void compositor::reconfigure() noexcept
 	lock.unlock();
 	pacer.reset();
 	send_video_stream_description();
+}
+
+void compositor::set_video_active(bool active)
+{
+	if (video_active.exchange(active) == active)
+		return;
+	U_LOG_I("VR video %s", active ? "active" : "on standby");
+	if (active)
+		resume();
 }
 
 void compositor::set_frame_margin(float ms)

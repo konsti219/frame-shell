@@ -36,6 +36,7 @@ class stream;
 namespace wivrn
 {
 class shard_accumulator;
+class frame_sink;
 }
 
 namespace wivrn::v4l2
@@ -149,7 +150,7 @@ private:
 	bool output_streaming = false;
 	bool capture_streaming = false;
 
-	std::weak_ptr<scenes::stream> weak_scene;
+	std::weak_ptr<wivrn::frame_sink> weak_scene;
 	shard_accumulator * accumulator;
 	const vk::Extent2D extent;
 	const wivrn::video_codec codec_type;
@@ -182,7 +183,7 @@ public:
 	        uint32_t vk_queue_family_index,
 	        const wivrn::to_headset::video_stream_description & description,
 	        uint8_t stream_index,
-	        std::weak_ptr<scenes::stream> scene,
+	        std::weak_ptr<wivrn::frame_sink> scene,
 	        shard_accumulator * accumulator);
 	~decoder() override;
 

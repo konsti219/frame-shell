@@ -38,23 +38,59 @@ using desktop_frame_info = frame_shell_desktop_frame;
 
 inline bool input_poll(input * event) { return api->input_poll(event); }
 inline void desktop_surface(const desktop_surface_info * info) { api->desktop_surface(info); }
-inline void connected(bool value) { api->connected(value); }
+inline void connected(uint32_t source, bool value, bool vr) { api->connected(source, value, vr); }
 inline void lobby_state(const char * json) { api->lobby_state(json); }
 inline void stream_state(const char * json) { api->stream_state(json); }
-inline void host_message(std::span<const uint8_t> data) { api->host_message(data.data(), data.size()); }
+inline void host_message(uint32_t source, std::span<const uint8_t> data) { api->host_message(source, data.data(), data.size()); }
+inline void hosts_state(const char * json) { api->hosts_state(json); }
+
+// A PC on standby started a VR application: the presenting stream gives way so the lobby can switch
+inline std::atomic<bool> switch_wanted{false};
 inline bool command_poll(char * buffer, size_t size) { return api->command_poll(buffer, size); }
 inline void drag_offset(float * out) { api->drag_offset(out); }
 
-// Messages from the shell for the connected PC, sent by the stream's network thread
+// Messages from the shell for each connected PC (source), sent by that connection's network thread
 inline std::mutex host_messages_mutex;
-inline std::deque<std::vector<uint8_t>> host_messages;
+inline std::map<uint32_t, std::deque<std::vector<uint8_t>>> host_messages;
 
-inline std::vector<std::vector<uint8_t>> take_host_messages()
+inline std::vector<std::vector<uint8_t>> take_host_messages(uint32_t source)
 {
     std::scoped_lock lock(host_messages_mutex);
-    std::vector<std::vector<uint8_t>> taken(std::make_move_iterator(host_messages.begin()), std::make_move_iterator(host_messages.end()));
-    host_messages.clear();
+    auto it = host_messages.find(source);
+    if (it == host_messages.end()) return {};
+    std::vector<std::vector<uint8_t>> taken(std::make_move_iterator(it->second.begin()), std::make_move_iterator(it->second.end()));
+    host_messages.erase(it);
     return taken;
+}
+
+// PC input from the shell, sorted by PC (source) by whichever connection polls first
+inline std::mutex input_mutex;
+inline std::map<uint32_t, std::deque<input>> inputs;
+
+inline std::vector<input> take_input(uint32_t source)
+{
+    std::scoped_lock lock(input_mutex);
+    input event;
+    for (int count = 0; count < 256 && input_poll(&event); ++count) {
+        auto & queue = inputs[event.source];
+        if (queue.size() < 512) queue.push_back(event);
+    }
+    auto it = inputs.find(source);
+    if (it == inputs.end()) return {};
+    std::vector<input> taken(it->second.begin(), it->second.end());
+    inputs.erase(it);
+    return taken;
+}
+
+// A PC went away: what was queued for it is moot
+inline void forget_source(uint32_t source)
+{
+    {
+        std::scoped_lock lock(host_messages_mutex);
+        host_messages.erase(source);
+    }
+    std::scoped_lock lock(input_mutex);
+    inputs.erase(source);
 }
 
 // Exported buffers outlive their decoder until the shell releases them after GPU use.
@@ -177,11 +213,10 @@ inline void clear_stream_commands()
     std::erase_if(command_queue, [](const auto & command) {
         return command.starts_with("stop_app ") || command.starts_with("set_active_app ");
     });
-    std::scoped_lock messages(host_messages_mutex);
-    host_messages.clear();
 }
 
-inline std::optional<std::string> take_command(bool (*accept)(std::string_view))
+template <typename Accept>
+std::optional<std::string> take_command(Accept && accept)
 {
     std::scoped_lock lock(command_mutex);
     auto & queue = command_queue;
@@ -216,10 +251,11 @@ class runtime
                     held_frames.erase(it);
                 }
             },
-            .send_host_message = [](void *, const uint8_t * data, size_t size) {
+            .send_host_message = [](void *, uint32_t source, const uint8_t * data, size_t size) {
                 std::scoped_lock lock(host_messages_mutex);
-                if (host_messages.size() < 256)
-                    host_messages.emplace_back(data, data + size);
+                auto & queue = host_messages[source];
+                if (queue.size() < 256)
+                    queue.emplace_back(data, data + size);
             },
     };
 public:

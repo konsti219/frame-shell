@@ -146,9 +146,18 @@ void scenes::stream::process_packets()
 		{
 			#ifndef __ANDROID__
             if (frame_shell::enabled()) {
-                frame_shell::input event;
-                for (int count = 0; count < 256 && frame_shell::input_poll(&event); ++count) {
+                apply_video_active();
+                for (auto & event: frame_shell::take_input(shell_source)) {
                     if (hid_forwarding) network_session->send_control(from_headset::shell_input{event.kind, event.code, event.x, event.y, event.surface});
+                }
+                // The PC ends a session after a second without packets on the stream socket; tracking sends them
+                // while active
+                if (auto now = std::chrono::steady_clock::now(); not video_active and now - standby_keepalive > std::chrono::milliseconds(250)) {
+                    standby_keepalive = now;
+                    network_session->send_stream(from_headset::link_settings{
+                            .fec_percent = uint8_t(std::min<uint32_t>(application::get_config().fec_percent, 50)),
+                            .frame_margin_ms = uint8_t(std::min<uint32_t>(application::get_config().frame_margin_ms, 20)),
+                    });
                 }
                 // Here rather than in render: while no PC app runs the stream scene is stalled behind the lobby and
                 // doesn't render, but the shell still needs the PC's application list
@@ -193,21 +202,7 @@ void scenes::stream::operator()(to_headset::server_message && message)
 	}
 }
 
-// Testing (simulated_loss_percent): whether to drop this video shard, losing runs like Wi-Fi does
-static bool simulated_loss()
-{
-	const auto & config = application::get_config();
-	if (config.simulated_loss_percent <= 0)
-		return false;
-	thread_local std::minstd_rand random{std::random_device{}()};
-	thread_local bool losing = false;
-	float burst = std::max(1u, config.simulated_loss_burst);
-	std::uniform_real_distribution<float> uniform;
-	// Two-state model: runs average `burst` shards, and the share lost matches the setting
-	float enter = config.simulated_loss_percent / 100 / burst / (1 - config.simulated_loss_percent / 100);
-	losing = losing ? uniform(random) >= 1 / burst : uniform(random) < enter;
-	return losing;
-}
+using frame_shell::simulated_loss;
 
 void scenes::stream::operator()(to_headset::video_stream_data_shard && shard)
 {
@@ -272,20 +267,27 @@ void scenes::stream::operator()(to_headset::feature_control && control)
 
 void scenes::stream::operator()(to_headset::audio_stream_description && desc)
 {
+	if (not video_active)
+	{
+		standby_audio = std::move(desc);
+		return;
+	}
 	audio_handle.emplace(desc, *network_session, instance);
 }
 
 void scenes::stream::operator()(to_headset::video_stream_description && desc)
 {
+	if (not video_active)
+	{
+		standby_video = std::move(desc);
+		return;
+	}
 #ifndef __ANDROID__
     shell_encoded_width = desc.width;
     shell_encoded_height = desc.height;
     shell_video_debug = "null";
 #endif
 	setup(desc);
-#ifndef __ANDROID__
-	if (frame_shell::enabled()) frame_shell::connected(true);
-#endif
 
 	if (not tracking_thread)
 	{
@@ -297,7 +299,7 @@ void scenes::stream::operator()(to_headset::video_stream_description && desc)
 		        xdg_data_home() / "frame-shell" / "eye_split96_uncapped_fp16.pte",
 		        application::get_config().eye_expressions_divisor,
 		        [this](from_headset::frame_eyes && eyes) {
-			        if (state_ == state::shutdown)
+			        if (state_ == state::shutdown or not video_active)
 				        return;
 			        try
 			        {
@@ -386,7 +388,50 @@ void scenes::stream::operator()(to_headset::application_icon && icon)
 
 void scenes::stream::operator()(to_headset::running_applications && apps)
 {
+	bool vr = std::ranges::any_of(apps.applications, [](const auto & app) { return not app.overlay; });
+	bool first = not std::exchange(running_apps_seen, true);
+	if (not vr)
+		vr_app_since = 0;
+	else if (first)
+		vr_app_since = 1;
+	else if (vr_app_since == 0)
+	{
+		vr_app_since = std::chrono::steady_clock::now().time_since_epoch().count();
+#ifndef __ANDROID__
+		if (not video_active)
+			frame_shell::switch_wanted = true;
+#endif
+	}
 	*running_applications.lock() = std::move(apps);
+}
+
+// Frame shell: the lobby made this PC present VR or put it on standby. Activating asks the PC for its video, whose
+// description then sets up the decoders and tracking as on connection.
+void scenes::stream::apply_video_active()
+{
+	bool active = wanted_active;
+	if (active == video_active)
+		return;
+	spdlog::info("{}: VR {}", apps.server(), active ? "active" : "on standby");
+	video_active = active;
+	if (not active)
+		teardown_video();
+	network_session->send_control(from_headset::video_active{.active = active});
+	if (active and standby_audio)
+	{
+		audio_handle.emplace(*standby_audio, *network_session, instance);
+		standby_audio.reset();
+	}
+	if (active and standby_video)
+	{
+		auto desc = std::move(*standby_video);
+		standby_video.reset();
+		(*this)(std::move(desc));
+	}
+#ifndef __ANDROID__
+	if (frame_shell::enabled())
+		frame_shell::connected(shell_source, true, active);
+#endif
 }
 
 void scenes::stream::start_application(std::string appid)
@@ -398,245 +443,19 @@ void scenes::stream::start_application(std::string appid)
 
 void scenes::stream::operator()(to_headset::desktop_surface && surface)
 {
-#if WIVRN_USE_V4L2
-	if (!frame_shell::enabled())
-		return;
-	// One WiVRn connection for now; more PCs get their own source numbers
-	frame_shell::desktop_surface_info info{
-	        .source = 0,
-	        .surface = surface.surface,
-	        .width = surface.width,
-	        .height = surface.height,
-	        .removed = surface.removed,
-	};
-	std::snprintf(info.name, sizeof(info.name), "%s", surface.name.c_str());
-	std::snprintf(info.source_name, sizeof(info.source_name), "%s", surface.source.c_str());
-
-	std::unique_ptr<desktop_stream> old;
-	auto it = desktop_streams.find(surface.surface);
-	if (it != desktop_streams.end() &&
-	    (surface.removed || it->second->width != surface.width || it->second->height != surface.height ||
-	     it->second->codec != surface.codec))
-	{
-		std::unique_lock lock(desktop_mutex);
-		old = std::move(it->second);
-		desktop_streams.erase(it);
-		it = desktop_streams.end();
-	}
-	// Destroy outside the lock: the decoder joins threads that may be waiting for it in push_blit_handle
-	old.reset();
-	if (!surface.removed && it == desktop_streams.end())
-	{
-		auto stream = make_desktop_stream(surface.surface, surface.width, surface.height, surface.name, surface.codec);
-		spdlog::info("Desktop surface {} ({} on {}): {}x{}", surface.surface, surface.name, surface.source, surface.width, surface.height);
-		std::unique_lock lock(desktop_mutex);
-		desktop_streams.emplace(surface.surface, std::move(stream));
-	}
-	frame_shell::desktop_surface(&info);
+#ifndef __ANDROID__
+	if (desktop)
+		(*desktop)(std::move(surface));
 #endif
-}
-
-std::unique_ptr<scenes::stream::desktop_stream> scenes::stream::make_desktop_stream(uint32_t surface, uint16_t width, uint16_t height, const std::string & name, video_codec codec) noexcept
-{
-	auto stream = std::make_unique<desktop_stream>();
-	stream->surface = surface;
-	stream->width = width;
-	stream->height = height;
-	stream->name = name;
-	stream->codec = codec;
-#if WIVRN_USE_V4L2
-	to_headset::video_stream_description description{
-	        .width = width,
-	        .height = height,
-	        .codec = {codec, codec, codec},
-	};
-	stream->decoder = std::make_shared<wivrn::v4l2::decoder>(
-	        device, physical_device, queue_family_index, description, 0, shared_from_this(),
-	        reinterpret_cast<shard_accumulator *>(stream.get()));
-#endif
-	return stream;
-}
-
-// A desktop video frame went missing: decoding resumes at the next keyframe, which the PC is asked for
-void scenes::stream::desktop_frame_lost(desktop_stream & stream)
-{
-	stream.wait_keyframe = true;
-	auto now = std::chrono::steady_clock::now();
-	if (now - stream.keyframe_requested < std::chrono::milliseconds(250))
-		return;
-	stream.keyframe_requested = now;
-	try
-	{
-		network_session->send_control(from_headset::desktop_keyframe{.surface = stream.surface});
-	}
-	catch (...)
-	{
-	}
 }
 
 void scenes::stream::operator()(to_headset::desktop_video && video)
 {
-#if WIVRN_USE_V4L2
-	if (simulated_loss())
-		return;
-	auto it = desktop_streams.find(video.surface);
-	if (it == desktop_streams.end() || !it->second->decoder)
-		return;
-	auto & stream = *it->second;
-	if (video.shard_count == 0 or video.parity_count > video.shard_count or
-	    uint32_t(video.shard_count) + video.parity_count > 65535 or
-	    video.shard >= uint32_t(video.shard_count) + video.parity_count or
-	    video.frame_size == 0 or video.payload.empty() or
-	    (video.parity_count and (video.payload.size() != fec::block_size or
-	        video.frame_size > size_t(video.shard_count) * fec::block_size or
-	        video.frame_size <= size_t(video.shard_count - 1) * fec::block_size)))
-		return;
-	if (stream.last_frame and int32_t(video.frame - *stream.last_frame) <= 0)
-		return;
-
-	auto & frame = stream.pending[video.frame];
-	if (frame.shards.empty())
-	{
-		frame.shards.assign(video.shard_count, {});
-		frame.parity.assign(video.parity_count, {});
-		frame.size = video.frame_size;
-	}
-	if (video.shard_count != frame.shards.size() or video.parity_count != frame.parity.size() or video.frame_size != frame.size)
-		return;
-	if (not frame.complete)
-	{
-		if (video.shard < video.shard_count)
-		{
-			if (frame.shards[video.shard].empty())
-			{
-				frame.shards[video.shard] = std::move(video.payload);
-				++frame.received;
-			}
-		}
-		else
-			frame.parity[video.shard - video.shard_count] = std::move(video.payload);
-		if (frame.received == frame.shards.size() or fec::decode(frame.shards, frame.parity))
-		{
-			if (not frame.parity.empty())
-				frame.shards.back().resize(frame.size - (frame.shards.size() - 1) * fec::block_size);
-			frame.complete = true;
-		}
-	}
-	deliver_desktop_frames(it);
+#ifndef __ANDROID__
+	if (desktop)
+		(*desktop)(std::move(video));
 #endif
 }
-
-#if WIVRN_USE_V4L2
-// Decodes a monitor's complete frames in order. Once a later frame arrives, an incomplete one asks for what it lacks
-// (from_headset::desktop_nack) and later frames wait; if that doesn't come back in time it's given up and decoding
-// resumes at the next keyframe.
-void scenes::stream::deliver_desktop_frames(std::map<uint32_t, std::unique_ptr<desktop_stream>>::iterator it)
-{
-	auto & stream = *it->second;
-	const bool retransmit = application::get_config().retransmit;
-	while (not stream.pending.empty())
-	{
-		uint32_t expected = stream.last_frame ? *stream.last_frame + 1 : stream.pending.begin()->first;
-		if (auto first = stream.pending.find(expected); first != stream.pending.end() and first->second.complete)
-		{
-			auto frame = std::move(first->second);
-			stream.pending.erase(first);
-			stream.last_frame = expected;
-			if (not decode_desktop_frame(it, frame))
-				return;
-			continue;
-		}
-		// Nothing later yet: it may still be arriving
-		if (std::prev(stream.pending.end())->first == expected)
-			return;
-		// A frame missing altogether gets an empty entry, which asks for all its shards
-		auto & missing = stream.pending[expected];
-		auto now = std::chrono::steady_clock::now();
-		if (retransmit and (missing.requests == 0 or (missing.requests == 1 and now - missing.requested > std::chrono::milliseconds(10))))
-		{
-			if (missing.requests++ == 0)
-				missing.requested = now;
-			from_headset::desktop_nack nack{.surface = stream.surface, .frame = expected};
-			for (size_t i = 0; i < missing.shards.size(); ++i)
-				if (missing.shards[i].empty())
-					nack.shards.push_back(i);
-			try
-			{
-				network_session->send_stream(std::move(nack));
-			}
-			catch (std::exception &)
-			{
-			}
-			return;
-		}
-		if (retransmit and now - missing.requested < std::chrono::milliseconds(40) and stream.pending.size() < 8)
-			return;
-		stream.pending.erase(expected);
-		stream.last_frame = expected;
-		desktop_frame_lost(stream);
-	}
-}
-
-// False if the decoder failed and the stream was replaced
-bool scenes::stream::decode_desktop_frame(std::map<uint32_t, std::unique_ptr<desktop_stream>>::iterator it, desktop_stream::pending_frame & frame)
-{
-	auto & stream = *it->second;
-	if (stream.wait_keyframe)
-	{
-		if (not wivrn::decoder::has_sps(frame.shards.front(), stream.codec))
-		{
-			desktop_frame_lost(stream);
-			return true;
-		}
-		stream.wait_keyframe = false;
-	}
-
-	try
-	{
-		std::vector<std::span<const uint8_t>> chunks(frame.shards.begin(), frame.shards.end());
-		stream.decoder->push_data(chunks, stream.frame_index, false);
-		// iris sometimes stops taking input of one session when several start together
-		if (auto v4l2 = std::dynamic_pointer_cast<wivrn::v4l2::decoder>(stream.decoder); v4l2 and v4l2->stalled(std::chrono::seconds(1)))
-			throw std::runtime_error("iris decoder stopped taking input");
-		stream.decoder->frame_completed({.frame_index = stream.frame_index, .stream_index = 255}, {});
-		++stream.frame_index;
-	}
-	catch (const std::exception & e)
-	{
-		// iris sometimes puts a fresh session in its error state (seen while several decoders start together):
-		// replace the decoder and resume at the next keyframe, unless it keeps failing
-		auto now = std::chrono::steady_clock::now();
-		auto failures = std::move(stream.failures);
-		std::erase_if(failures, [&](auto when) { return now - when > std::chrono::seconds(30); });
-		failures.push_back(now);
-		bool retry = failures.size() <= 5;
-		spdlog::error("Desktop decoder for {}: {}{}", stream.name, e.what(), retry ? ", recreating it" : ", giving up");
-		if (not retry)
-			std::terminate();
-
-		std::unique_ptr<desktop_stream> failed;
-		{
-			std::unique_lock lock(desktop_mutex);
-			failed = std::move(it->second);
-		}
-		// Destroy outside the lock (the decoder joins its threads); its held frames go first
-		auto surface = failed->surface;
-		auto width = failed->width;
-		auto height = failed->height;
-		auto name = failed->name;
-		auto codec = failed->codec;
-		failed.reset();
-
-		auto replacement = make_desktop_stream(surface, width, height, name, codec);
-		replacement->failures = std::move(failures);
-		desktop_frame_lost(*replacement);
-		std::unique_lock lock(desktop_mutex);
-		it->second = std::move(replacement);
-		return false;
-	}
-	return true;
-}
-#endif
 
 #ifndef __ANDROID__
 static bool is_stream_command(std::string_view command)
@@ -646,8 +465,15 @@ static bool is_stream_command(std::string_view command)
 
 void scenes::stream::poll_shell()
 {
-	while (auto command = frame_shell::take_command(is_stream_command))
+	// Commands for this PC: "on <source> <command>", and unprefixed ones while it presents VR
+	const std::string prefix = fmt::format("on {} ", shell_source);
+	const bool active = video_active;
+	while (auto command = frame_shell::take_command([&](std::string_view command) {
+		       return command.starts_with(prefix) or (active and is_stream_command(command));
+	       }))
 	{
+		if (command->starts_with(prefix))
+			command->erase(0, prefix.size());
 		spdlog::info("Shell command: {}", *command);
 		if (command->starts_with("setting "))
 		{
@@ -704,12 +530,12 @@ void scenes::stream::poll_shell()
 		network_session->send_control(from_headset::get_running_applications{});
 	}
 
-	for (auto & message: frame_shell::take_host_messages())
+	for (auto & message: frame_shell::take_host_messages(shell_source))
 		network_session->send_control(from_headset::shell_message{.payload = std::move(message)});
 
-	// This runs per received packet batch: the state for the shell only every 100 ms
+	// This runs per received packet batch: the state for the shell only every 100 ms, from the PC presenting VR
 	auto now = std::chrono::steady_clock::now();
-	if (now < shell_next_state)
+	if (now < shell_next_state or not active)
 		return;
 	shell_next_state = now + std::chrono::milliseconds(100);
 #if WIVRN_FRAME_EYES
@@ -755,6 +581,6 @@ void scenes::stream::operator()(to_headset::shell_message && message)
 {
 #ifndef __ANDROID__
 	if (frame_shell::enabled())
-		frame_shell::host_message(message.payload);
+		frame_shell::host_message(shell_source, message.payload);
 #endif
 }

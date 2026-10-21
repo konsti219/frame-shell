@@ -36,7 +36,8 @@ enum Transport {
         conn: local_socket::Stream,
         next_packet: Option<u32>,
     },
-    Remote(u32),
+    /// A client on a PC (source), by that PC's connection number
+    Remote(u32, u32),
 }
 
 pub struct Connection {
@@ -146,8 +147,8 @@ impl Connection {
     fn send(&mut self, packet: &PacketServer) -> anyhow::Result<()> {
         match &mut self.transport {
             Transport::Local { conn, .. } => send_packet(conn, &ipc::data_encode(packet)),
-            Transport::Remote(id) => {
-                crate::frame_host::send(&ShellMessage::Ipc(*id, packet.clone()));
+            Transport::Remote(source, id) => {
+                crate::frame_host::send(*source, &ShellMessage::Ipc(*id, packet.clone()));
                 Ok(())
             }
         }
@@ -157,8 +158,8 @@ impl Connection {
         let _dont_care = self.send(&PacketServer::Disconnect(packet_server::Disconnect {
             reason: String::from(reason),
         }));
-        if let Transport::Remote(id) = self.transport {
-            crate::frame_host::send(&ShellMessage::IpcClose(id));
+        if let Transport::Remote(source, id) = self.transport {
+            crate::frame_host::send(source, &ShellMessage::IpcClose(id));
         }
         self.alive = false;
     }
@@ -672,17 +673,18 @@ impl WayVRServer {
     /// Clients of the frame shell's PC, through its host services
     fn tick_remote(&mut self, params: &mut TickParams) {
         for event in crate::frame_host::take_ipc_events() {
-            let is_remote =
-                |c: &Connection, id: u32| matches!(c.transport, Transport::Remote(r) if r == id);
+            let is_remote = |c: &Connection, source: u32, id: u32| {
+                matches!(c.transport, Transport::Remote(s, r) if s == source && r == id)
+            };
             match event {
-                IpcEvent::Open(id) => self
+                IpcEvent::Open(source, id) => self
                     .connections
-                    .push(Connection::new(Transport::Remote(id))),
-                IpcEvent::Packet(id, packet) => {
+                    .push(Connection::new(Transport::Remote(source, id))),
+                IpcEvent::Packet(source, id, packet) => {
                     if let Some(c) = self
                         .connections
                         .iter_mut()
-                        .find(|c| c.alive && is_remote(c, id))
+                        .find(|c| c.alive && is_remote(c, source, id))
                     {
                         let result = c.process_packet(params, packet);
                         if let Err(e) = c.check(result) {
@@ -690,10 +692,12 @@ impl WayVRServer {
                         }
                     }
                 }
-                IpcEvent::Close(id) => self.connections.retain(|c| !is_remote(c, id)),
-                IpcEvent::Disconnected => self
+                IpcEvent::Close(source, id) => {
+                    self.connections.retain(|c| !is_remote(c, source, id));
+                }
+                IpcEvent::Disconnected(source) => self
                     .connections
-                    .retain(|c| !matches!(c.transport, Transport::Remote(_))),
+                    .retain(|c| !matches!(c.transport, Transport::Remote(s, _) if s == source)),
             }
         }
     }

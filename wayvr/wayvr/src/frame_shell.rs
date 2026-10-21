@@ -57,6 +57,8 @@ static POINTER_SURFACE: AtomicU64 = AtomicU64::new(0);
 /// The WiVRn client's lobby (servers, connection) and stream (PC apps) state as JSON, with a change counter
 pub static LOBBY_STATE: Mutex<(u64, String, String)> =
     Mutex::new((0, String::new(), String::new()));
+/// PCs connected besides the one presenting VR (the client's hosts_state), as JSON
+static HOSTS: Mutex<String> = Mutex::new(String::new());
 /// Commands for the WiVRn client (`client-shell.h` lists them)
 static COMMANDS: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
 /// PIN digits typed on the PC panel so far
@@ -125,15 +127,12 @@ fn release_frame(id: u64) {
     }
 }
 
-/// A wayvr_ipc::frame::ShellMessage for the connected PC; false without one
-pub fn send_host_message(data: &[u8]) -> bool {
-    if !CONNECTED.load(Ordering::Relaxed) {
-        return false;
-    }
+/// A wayvr_ipc::frame::ShellMessage for a connected PC (use frame_host::send)
+pub fn send_host_message(source: u32, data: &[u8]) -> bool {
     if let Some(Host(host)) = host().as_ref()
         && let Some(send) = host.send_host_message
     {
-        unsafe { send(host.user, data.as_ptr(), data.len()) };
+        unsafe { send(host.user, source, data.as_ptr(), data.len()) };
         return true;
     }
     false
@@ -159,7 +158,7 @@ fn surfaces() -> std::sync::MutexGuard<'static, BTreeMap<u64, Surface>> {
 }
 
 fn enqueue(event: ShellInput) {
-    if !CONNECTED.load(Ordering::Relaxed) {
+    if !crate::frame_host::is_connected(event.source) {
         return;
     }
     let mut queue = INPUT
@@ -340,9 +339,13 @@ pub fn dashboard_state() -> Option<(u64, String, String)> {
     let mut lobby: serde_json::Value =
         serde_json::from_str(&lobby).unwrap_or_else(|_| serde_json::json!({}));
     lobby["pin_typed"] = typed.into();
+    lobby["hosts"] = hosts();
     let mut stream: serde_json::Value =
         serde_json::from_str(&stream).unwrap_or_else(|_| serde_json::json!({}));
-    stream["steam_running"] = crate::frame_host::games().unwrap_or_default().into();
+    stream["steam_running"] = crate::frame_host::vr_source()
+        .and_then(crate::frame_host::games)
+        .unwrap_or_default()
+        .into();
     Some((version, lobby.to_string(), stream.to_string()))
 }
 
@@ -360,9 +363,14 @@ fn connected_host() -> Option<String> {
 }
 
 /// Starts an application on a PC; connects first (and starts it once connected) when needed
+/// Starts an application on a connected PC; one on standby then presents VR
+fn start_app_on(source: u32, app_id: &str) {
+    send_command(&format!("on {source} start_app {app_id}"));
+}
+
 pub fn launch_remote(app: &mut AppState, host: &str, app_id: &str, name: &str) {
-    if connected_host().as_deref() == Some(host) {
-        send_command(&format!("start_app {app_id}"));
+    if let Some(source) = source_for_host(host) {
+        start_app_on(source, app_id);
         toast(app, format!("Starting {name} on {host}"));
         return;
     }
@@ -380,9 +388,7 @@ pub fn launch_remote(app: &mut AppState, host: &str, app_id: &str, name: &str) {
         toast(app, format!("{host} is not a known PC"));
         return;
     };
-    if connected_host().is_some() {
-        send_command("disconnect");
-    }
+    // Connected besides a PC already presenting VR, it presents once the application runs
     send_command(&format!("connect {cookie}"));
     *PENDING_LAUNCH
         .lock()
@@ -748,29 +754,44 @@ pub(crate) fn bump_lobby_state() {
         .0 += 1;
 }
 
-extern "C" fn connected(connected: bool) {
-    CONNECTED.store(connected, Ordering::Relaxed);
-    if !connected {
-        INPUT
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clear();
-        for (_, surface) in std::mem::take(&mut *surfaces()) {
-            if let Some((frame, _)) = surface.frame {
-                release_frame(frame.id);
-            }
+extern "C" fn connected(source: u32, connected: bool, vr: bool) {
+    if connected {
+        crate::frame_host::connected(source, vr);
+        CONNECTED.store(crate::frame_host::vr_source().is_some(), Ordering::Relaxed);
+        crate::frame_host::resync_desktop_settings();
+        bump_lobby_state();
+        return;
+    }
+    INPUT
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .retain(|event| event.source != source);
+    let mut released = Vec::new();
+    surfaces().retain(|&key, surface| {
+        if (key >> 32) as u32 != source {
+            return true;
         }
+        if let Some((frame, _)) = surface.frame.take() {
+            released.push(frame.id);
+        }
+        false
+    });
+    for id in released {
+        release_frame(id);
+    }
+    crate::frame_host::disconnected(source);
+    CONNECTED.store(crate::frame_host::vr_source().is_some(), Ordering::Relaxed);
+    let mut state = LOBBY_STATE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    state.0 += 1;
+    if vr {
         COMMANDS
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .retain(|command| {
                 !(command.starts_with("stop_app ") || command.starts_with("set_active_app "))
             });
-        crate::frame_host::disconnected();
-        let mut state = LOBBY_STATE
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        state.0 += 1;
         state.2.clear();
     }
 }
@@ -793,7 +814,6 @@ extern "C" fn desktop_surface(info: *const DesktopSurface) {
         .into();
     log::info!("Desktop {name}: {}x{}", info.width, info.height);
     remember_screen(&name);
-    CONNECTED.store(true, Ordering::Relaxed);
     surfaces().entry(key).or_insert(Surface {
         visible: None,
         name,
@@ -826,7 +846,7 @@ extern "C" fn desktop_frame(frame: *const DesktopFrame) {
 pub fn poll_desktop_visibility<T: Default>(
     overlays: &crate::windowing::manager::OverlayWindowManager<T>,
 ) {
-    if !EMBEDDED.load(Ordering::Relaxed) || !CONNECTED.load(Ordering::Relaxed) {
+    if !EMBEDDED.load(Ordering::Relaxed) {
         return;
     }
     for (&key, surface) in surfaces().iter_mut() {
@@ -840,10 +860,13 @@ pub fn poll_desktop_visibility<T: Default>(
         });
         if surface.visible != Some(visible) {
             surface.visible = Some(visible);
-            crate::frame_host::send(&wayvr_ipc::frame::ShellMessage::DesktopVisibility {
-                surface: key as u32,
-                visible,
-            });
+            crate::frame_host::send(
+                (key >> 32) as u32,
+                &wayvr_ipc::frame::ShellMessage::DesktopVisibility {
+                    surface: key as u32,
+                    visible,
+                },
+            );
         }
     }
 }
@@ -920,13 +943,13 @@ pub fn poll_surfaces(app: &mut AppState) {
         .as_ref()
         .map(|(host, _, _)| host.clone());
     if let Some(waiting) = waiting
-        && connected_host().as_deref() == Some(waiting.as_str())
+        && let Some(source) = source_for_host(&waiting)
         && let Some((host, app_id, name)) = PENDING_LAUNCH
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take()
     {
-        send_command(&format!("start_app {app_id}"));
+        start_app_on(source, &app_id);
         toast(app, format!("Starting {name} on {host}"));
     }
     let run = RUN.load(Ordering::Relaxed);
@@ -957,7 +980,14 @@ pub fn poll_surfaces(app: &mut AppState) {
 
 extern "C" fn stop() {
     crate::RUNNING.store(false, Ordering::Relaxed);
-    connected(false);
+    disconnect_all();
+}
+
+/// The shell stops: every PC is gone for it
+fn disconnect_all() {
+    for (source, vr) in crate::frame_host::sources() {
+        connected(source, false, vr);
+    }
 }
 
 extern "C" fn run(callbacks: *const frame_shell_host) -> i32 {
@@ -989,6 +1019,7 @@ static API: frame_shell_api = frame_shell_api {
     lobby_state: Some(lobby_state),
     stream_state: Some(stream_state),
     host_message: Some(host_message),
+    hosts_state: Some(hosts_state),
     command_poll: Some(command_poll),
     drag_offset: Some(drag_offset),
 };
@@ -1000,10 +1031,17 @@ pub extern "C" fn frame_shell_api() -> *const frame_shell_api {
 }
 const _: frame_abi::frame_shell_api_fn = Some(frame_shell_api);
 
-extern "C" fn host_message(data: *const u8, size: usize) {
+extern "C" fn host_message(source: u32, data: *const u8, size: usize) {
     if !data.is_null() {
-        crate::frame_host::receive(unsafe { std::slice::from_raw_parts(data, size) });
+        crate::frame_host::receive(source, unsafe { std::slice::from_raw_parts(data, size) });
     }
+}
+
+extern "C" fn hosts_state(json: *const std::ffi::c_char) {
+    *HOSTS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = c_str(json);
+    bump_lobby_state();
 }
 
 fn run_embedded() -> anyhow::Result<()> {
@@ -1031,7 +1069,7 @@ fn run_embedded() -> anyhow::Result<()> {
         }
         std::thread::sleep(std::time::Duration::from_millis(250));
     }
-    connected(false);
+    disconnect_all();
     Ok(())
 }
 
@@ -1040,6 +1078,8 @@ fn run_embedded() -> anyhow::Result<()> {
 pub struct PcInput {
     modifiers: u8,
     held: BTreeSet<u16>,
+    /// PC the pointer is on: buttons and keys go there
+    source: u32,
 }
 
 impl PcInput {
@@ -1048,12 +1088,14 @@ impl PcInput {
             enqueue(ShellInput {
                 kind: 0,
                 code: code.into(),
+                source: self.source,
                 ..Default::default()
             });
         }
         self.modifiers = 0;
         enqueue(ShellInput {
             kind: 4,
+            source: self.source,
             ..Default::default()
         });
     }
@@ -1062,6 +1104,11 @@ impl PcInput {
 impl HidProvider for PcInput {
     fn mouse_move(&mut self, pos: DVec2) {
         let key = POINTER_SURFACE.load(Ordering::Relaxed);
+        // Moving to another PC lets go of what is held on the previous one
+        if (key >> 32) as u32 != self.source {
+            PcInput::release(self);
+            self.source = (key >> 32) as u32;
+        }
         enqueue(ShellInput {
             kind: 2,
             x: pos.x.clamp(0., 1.) as f32,
@@ -1077,6 +1124,7 @@ impl HidProvider for PcInput {
             kind: 1,
             code: button.saturating_sub(0x110).into(),
             x: f32::from(down),
+            source: self.source,
             ..Default::default()
         });
     }
@@ -1085,6 +1133,7 @@ impl HidProvider for PcInput {
             kind: 3,
             x: delta.x,
             y: delta.y,
+            source: self.source,
             ..Default::default()
         });
     }
@@ -1113,6 +1162,7 @@ impl HidProvider for PcInput {
             kind: 0,
             code: code.into(),
             x: f32::from(down),
+            source: self.source,
             ..Default::default()
         });
     }
@@ -1418,17 +1468,47 @@ pub fn host_system() -> Option<wayvr_ipc::frame::SystemStats> {
 
 
 pub fn remote_game_running(host: &str, app_id: &str) -> bool {
-    connected_host().as_deref() == Some(host)
-        && crate::frame_host::games().is_some_and(|games| games.iter().any(|game| game == app_id))
+    source_for_host(host)
+        .and_then(crate::frame_host::games)
+        .is_some_and(|games| games.iter().any(|game| game == app_id))
 }
 
 pub fn stop_remote_game(host: &str, app_id: &str, force: bool) {
-    if connected_host().as_deref() == Some(host) {
-        crate::frame_host::send(&wayvr_ipc::frame::ShellMessage::StopGame {
-            app_id: app_id.to_owned(),
-            force,
-        });
+    if let Some(source) = source_for_host(host) {
+        crate::frame_host::send(
+            source,
+            &wayvr_ipc::frame::ShellMessage::StopGame {
+                app_id: app_id.to_owned(),
+                force,
+            },
+        );
     }
+}
+
+/// The PCs connected besides the one presenting VR: [{"cookie", "name", "state", "detail", "source"}]
+fn hosts() -> serde_json::Value {
+    let json = HOSTS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    serde_json::from_str(&json).unwrap_or_else(|_| serde_json::json!([]))
+}
+
+/// A connected PC's source number, by WiVRn server name
+fn source_for_host(host: &str) -> Option<u32> {
+    if connected_host().as_deref() == Some(host) {
+        return crate::frame_host::vr_source();
+    }
+    hosts()
+        .as_array()?
+        .iter()
+        .find(|pc| {
+            pc.get("name").and_then(serde_json::Value::as_str) == Some(host)
+                && pc.get("state").and_then(serde_json::Value::as_str) == Some("connected")
+        })
+        .and_then(|pc| pc.get("source"))
+        .and_then(serde_json::Value::as_u64)
+        .map(|source| source as u32)
 }
 
 pub fn pinned_stop_key(host: Option<&str>, app_id: &str) -> String {

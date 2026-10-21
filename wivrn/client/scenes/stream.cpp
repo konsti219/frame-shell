@@ -277,10 +277,20 @@ from_headset::stream_settings scenes::stream::stream_settings()
 	return res;
 }
 
-std::shared_ptr<scenes::stream> scenes::stream::create(std::unique_ptr<wivrn_session> network_session, float guessed_fps, std::string server_name, scene & parent_scene)
+std::shared_ptr<scenes::stream> scenes::stream::create(std::unique_ptr<wivrn_session> network_session, float guessed_fps, std::string server_name, scene & parent_scene, bool video_active)
 {
 	std::shared_ptr<stream> self{new stream{std::move(server_name), parent_scene}};
+	self->video_active = video_active;
+	self->wanted_active = video_active;
 	self->network_session = std::move(network_session);
+#ifndef __ANDROID__
+	self->desktop = std::make_shared<frame_shell::desktop_receiver>(
+	        self->shell_source, self->device, self->physical_device, self->queue_family_index,
+	        frame_shell::desktop_receiver::link{
+	                .keyframe = [s = self.get()](from_headset::desktop_keyframe && packet) { s->network_session->send_control(std::move(packet)); },
+	                .nack = [s = self.get()](from_headset::desktop_nack && packet) { s->network_session->send_stream(std::move(packet)); },
+	        });
+#endif
 	self->display_time_period = XrDuration(1'000'000'000.0 / std::max(guessed_fps, 1.0f));
 
 	self->network_session->send_control([&]() {
@@ -380,6 +390,13 @@ std::shared_ptr<scenes::stream> scenes::stream::create(std::unique_ptr<wivrn_ses
 
 		return info;
 	}());
+
+	if (not video_active)
+		self->network_session->send_control(from_headset::video_active{.active = false});
+#ifndef __ANDROID__
+	if (frame_shell::enabled())
+		frame_shell::connected(self->shell_source, true, video_active);
+#endif
 
 	self->network_session->send_control(from_headset::session_state_changed{
 	        .state = application::get_session_state(),
@@ -629,7 +646,12 @@ void scenes::stream::on_unfocused()
 scenes::stream::~stream()
 {
 #ifndef __ANDROID__
-	if (frame_shell::enabled()) { frame_shell::clear_stream_commands(); frame_shell::connected(false); }
+	if (frame_shell::enabled())
+	{
+		frame_shell::clear_stream_commands();
+		frame_shell::forget_source(shell_source);
+		frame_shell::connected(shell_source, false, video_active);
+	}
 #endif
 	exit();
 
@@ -651,32 +673,6 @@ scenes::stream::~stream()
 void scenes::stream::push_blit_handle(shard_accumulator * decoder, std::shared_ptr<shard_accumulator::blit_handle> handle)
 {
 	assert(handle);
-#if WIVRN_USE_V4L2
-	std::shared_lock desktop_lock(desktop_mutex);
-	auto it = std::ranges::find_if(desktop_streams, [&](auto & entry) {
-		return reinterpret_cast<shard_accumulator *>(entry.second.get()) == decoder;
-	});
-	if (it != desktop_streams.end())
-	{
-		auto & stream = *it->second;
-		if (handle->dmabuf_fd >= 0)
-		{
-			frame_shell::desktop_frame_info info{
-			        .source = 0,
-			        .surface = stream.surface,
-			        .fd = handle->dmabuf_fd,
-			        .width = handle->visible_extent.width,
-			        .height = handle->visible_extent.height,
-			        .stride = handle->dmabuf_stride,
-			        .chroma_offset = handle->dmabuf_chroma_offset,
-			        .id = handle->dmabuf_id,
-			};
-			frame_shell::present_desktop(std::move(handle), info);
-		}
-		return;
-	}
-	desktop_lock.unlock();
-#endif
 	if (!application::is_visible())
 		return;
 
@@ -897,6 +893,16 @@ void scenes::stream::render(const XrFrameState & frame_state)
 {
 	if (state_ == state::shutdown)
 		application::pop_scene();
+#ifndef __ANDROID__
+	// Back to the lobby when on standby, or for it to present the PC that started a VR application
+	else if (not video_active or frame_shell::switch_wanted)
+	{
+		application::pop_scene();
+		session.begin_frame();
+		session.end_frame(frame_state.predictedDisplayTime, {});
+		return;
+	}
+#endif
 
 	display_time_phase = frame_state.predictedDisplayPeriod ? frame_state.predictedDisplayTime % frame_state.predictedDisplayPeriod : 0;
 	display_time_period = frame_state.predictedDisplayPeriod;
@@ -1407,6 +1413,27 @@ void scenes::stream::wait_for_frame()
 {
 	if (device.waitForFences(*fence, VK_TRUE, UINT64_MAX) != vk::Result::eSuccess)
 		throw std::runtime_error("Failed to wait for the stream frame fence");
+}
+
+// Standby: the video decoders go (iris has few sessions) until the PC presents VR again
+void scenes::stream::teardown_video()
+{
+	std::array<accumulator_images, decoder_count> retired;
+	{
+		std::unique_lock lock(decoder_mutex);
+		wait_for_frame();
+		current_blit_handles.fill(nullptr);
+		decoders.swap(retired);
+		video_stream_description.reset();
+	}
+	for (auto & item: retired)
+	{
+		item.latest_frames.fill(nullptr);
+		item.decoder.reset();
+	}
+	audio_handle.reset();
+	if (state_ == state::streaming)
+		set_state(state::stalled);
 }
 
 void scenes::stream::setup(const to_headset::video_stream_description & description) noexcept

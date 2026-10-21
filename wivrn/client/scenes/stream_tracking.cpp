@@ -352,6 +352,12 @@ void scenes::stream::tracking()
 	{
 		try
 		{
+			// A PC on standby gets no tracking until it presents VR again
+			if (not video_active)
+			{
+				std::this_thread::sleep_for(std::chrono::milliseconds(50));
+				continue;
+			}
 			const float offset = config.get_height_offset();
 			const XrPosef drag = shell_drag();
 			if (offset != applied_height_offset or std::memcmp(&drag, &applied_drag, sizeof(drag)) != 0)

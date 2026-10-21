@@ -126,6 +126,7 @@
       '';
     });
   in {
+    nixosModules.host = import ./nix/host-module.nix self;
     packages.${system} = {
       default = server;
       inherit server frame-host xrizer media-bridge ytmusic-extension wayvrctl;

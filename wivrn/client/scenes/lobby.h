@@ -34,6 +34,7 @@
 #include <openxr/openxr.h>
 
 #include <chrono>
+#include <map>
 #include <compare>
 #include <optional>
 #include <uni_algo/case.h>
@@ -273,6 +274,26 @@ class lobby : public scene_impl<lobby>
 	std::optional<glm::vec3> check_recenter_gui(glm::vec3 head_position, glm::quat head_orientation);
 
 	crypto::key keypair;
+#ifndef __ANDROID__
+	// Frame shell: the PC presenting VR is next_scene; PCs connected besides it stand by. A connection started
+	// while another PC presents becomes one of them.
+	struct standby_pc
+	{
+		std::string cookie;
+		std::shared_ptr<stream> scene;
+	};
+	std::vector<standby_pc> standby;
+	std::string active_cookie;
+	std::string connecting_cookie;
+	std::string connecting_name;
+	// A failed connection to a PC that would have stood by: cookie, message
+	std::optional<std::pair<std::string, std::string>> standby_error;
+	// Auto-connect PCs that failed to connect as standby, and when to try again
+	std::map<std::string, std::chrono::steady_clock::time_point> standby_retry;
+	std::string hosts_json;
+	void manage_standby(float fps);
+	void publish_hosts_state();
+#endif
 
 public:
 	virtual ~lobby();
