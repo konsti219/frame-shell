@@ -37,36 +37,6 @@
         <Slider id="slider_brightness" width="300" height="24" min_value="0" max_value="140" />
       </GroupBox>
 
-      <!-- Frame shell: positional timewarp of streamed frames (Monado reads $XDG_RUNTIME_DIR/frame-shell-timewarp) -->
-      <GroupBox>
-        <label text="Positional timewarp" weight="bold" size="18" color="secondary" />
-        <label text="Corrects head movement since a streamed frame was rendered, at the depth your eyes focus on." wrap="1" width="~s_width" />
-        <CKRow>
-          <div gap="8" flex_direction="column" width="100%">
-            <label text="Strength (%)"/>
-            <Slider id="slider_tw_strength" min_value="0" max_value="100" step="5" show_value="1" width="100%" height="24"/>
-          </div>
-          <div gap="8" flex_direction="column" width="100%">
-            <label text="Nearest depth (cm)"/>
-            <Slider id="slider_tw_near" min_value="20" max_value="300" step="10" show_value="1" width="100%" height="24"/>
-          </div>
-          <div gap="8" flex_direction="column" width="100%">
-            <label text="Far cutoff (m, 0 = none)"/>
-            <Slider id="slider_tw_far" min_value="0" max_value="30" step="1" show_value="1" width="100%" height="24"/>
-          </div>
-        </CKRow>
-        <CKRow>
-          <div gap="8" flex_direction="column" width="100%">
-            <label text="Max shift (mm)"/>
-            <Slider id="slider_tw_max_shift" min_value="0" max_value="50" step="1" show_value="1" width="100%" height="24"/>
-          </div>
-          <div gap="8" flex_direction="column" width="100%">
-            <label text="Depth smoothing (ms)"/>
-            <Slider id="slider_tw_smoothing" min_value="0" max_value="300" step="10" show_value="1" width="100%" height="24"/>
-          </div>
-        </CKRow>
-      </GroupBox>
-
       <!-- color keying -->
       <GroupBox>
         <GroupBoxTitle src_builtin="@/dashboard/settings.svg" translation="APP_SETTINGS.COLOR_KEYING" />

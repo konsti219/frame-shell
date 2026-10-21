@@ -76,52 +76,6 @@ struct SubtabGeneralSettings {
 	slider_keying_saturation_range: Rc<ComponentSlider>,
 	slider_keying_value_range: Rc<ComponentSlider>,
 	cs_keying: Rc<ComponentColorSelector>,
-	#[allow(dead_code)]
-	timewarp_sliders: Vec<Rc<ComponentSlider>>,
-}
-
-/// Positional timewarp settings for the frame shell's Monado: (slider id, file key, file units per slider unit,
-/// default in slider units)
-const TIMEWARP_SETTINGS: [(&str, &str, f32, f32); 5] = [
-	("slider_tw_strength", "strength", 0.01, 100.0),
-	("slider_tw_near", "near", 0.01, 60.0),
-	("slider_tw_far", "far", 1.0, 0.0),
-	("slider_tw_max_shift", "max_shift", 0.001, 20.0),
-	("slider_tw_smoothing", "smoothing", 0.001, 50.0),
-];
-
-fn timewarp_file() -> Option<std::path::PathBuf> {
-	std::env::var_os("XDG_RUNTIME_DIR").map(|dir| std::path::PathBuf::from(dir).join("frame-shell-timewarp"))
-}
-
-/// Current settings in slider units, from Monado's file or the defaults
-fn read_timewarp() -> [f32; 5] {
-	let mut values = TIMEWARP_SETTINGS.map(|(_, _, _, default)| default);
-	let text = timewarp_file().and_then(|path| std::fs::read_to_string(path).ok()).unwrap_or_default();
-	for line in text.lines() {
-		let mut parts = line.split_whitespace();
-		let (Some(key), Some(value)) = (parts.next(), parts.next().and_then(|value| value.parse::<f32>().ok())) else {
-			continue;
-		};
-		if let Some(index) = TIMEWARP_SETTINGS.iter().position(|(_, file_key, _, _)| *file_key == key) {
-			values[index] = value / TIMEWARP_SETTINGS[index].2;
-		}
-	}
-	values
-}
-
-fn write_timewarp(values: &[f32; 5]) {
-	let Some(path) = timewarp_file() else {
-		return;
-	};
-	let text: String = TIMEWARP_SETTINGS
-		.iter()
-		.zip(values)
-		.map(|((_, key, scale, _), value)| format!("{key} {}\n", value * scale))
-		.collect();
-	if let Err(error) = std::fs::write(&path, text) {
-		log::warn!("{}: {error}", path.display());
-	}
 }
 
 struct DebugGraph {
@@ -387,26 +341,8 @@ impl SubtabGeneralSettings {
 			cs_keying.on_changed(get_color_selector_callback(tasks));
 		}
 
-		// Positional timewarp: every change rewrites the file Monado reads
-		let timewarp_values = Rc::new(std::cell::RefCell::new(read_timewarp()));
-		let mut timewarp_sliders = Vec::new();
-		for (index, (id, _, _, _)) in TIMEWARP_SETTINGS.iter().enumerate() {
-			let slider = state.fetch_component_as::<ComponentSlider>(id)?;
-			slider.set_value_primary(&mut frontend.layout.common(), timewarp_values.borrow()[index]);
-			slider.on_value_changed({
-				let values = timewarp_values.clone();
-				Box::new(move |_common, event| {
-					let mut values = values.borrow_mut();
-					values[index] = event.value;
-					write_timewarp(&values);
-				})
-			});
-			timewarp_sliders.push(slider);
-		}
-
 		Ok(Self {
 			state,
-			timewarp_sliders,
 			slider_keying_curve,
 			slider_keying_despill,
 			slider_keying_hue_range,
