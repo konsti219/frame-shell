@@ -41,7 +41,7 @@
       '';
     };
     craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
-    # PC-side WayVR IPC clients, built from our tree so they speak the headset's protocol
+    # PC-side WayVR IPC client, built from our tree so it speaks the headset's protocol
     ipcClient = pname: craneLib.buildPackage {
       inherit pname;
       version = "0.1.0";
@@ -50,22 +50,6 @@
       cargoExtraArgs = "--package ${pname}";
       doCheck = false;
     };
-    # Firefox native-messaging host for the watch's media controls; register via programs.firefox.nativeMessagingHosts
-    media-bridge = (ipcClient "wayvr-media-bridge").overrideAttrs {
-      postInstall = ''
-        mkdir -p $out/lib/mozilla/native-messaging-hosts
-        substitute ${./wayvr/extras/firefox-ytmusic/native-host/dev.wayvr.ytmusic.json} \
-          $out/lib/mozilla/native-messaging-hosts/dev.wayvr.ytmusic.json \
-          --replace-fail @BRIDGE_PATH@ $out/bin/wayvr-media-bridge
-      '';
-      meta.mainProgram = "wayvr-media-bridge";
-    };
-    # The browser add-on as an unsigned .xpi, named after its gecko id
-    ytmusic-extension = pkgs.runCommand "wayvr-ytmusic-extension" { nativeBuildInputs = [ pkgs.zip ]; } ''
-      mkdir -p $out
-      cd ${./wayvr/extras/firefox-ytmusic/extension}
-      zip -r -X "$out/wayvr-ytmusic@konsti.xpi" .
-    '';
     wayvrctl = ipcClient "wayvrctl";
     xrizerSource = builtins.fromJSON (builtins.readFile ./nix/xrizer.json);
     # OpenVR games on WiVRn, with the Frame's controllers
@@ -75,7 +59,7 @@
         inherit (xrizerSource) owner repo rev hash;
       };
       cargoDeps = pkgs.rustPlatform.fetchCargoVendor {
-        inherit (finalAttrs) src;
+        inherit (finalAttrs) src patches;
         hash = xrizerSource.cargoHash;
       };
       patches = (old.patches or [ ]) ++ map (name: ./nix + "/${name}") xrizerSource.patches;
@@ -114,7 +98,7 @@
     nixosModules.host = import ./nix/host-module.nix self;
     packages.${system} = {
       default = server;
-      inherit server frame-host xrizer media-bridge ytmusic-extension wayvrctl;
+      inherit server frame-host xrizer wayvrctl;
     };
     devShells.${system}.default = pkgs.mkShell {
       inputsFrom = [ server wayvr.devShells.${system}.default ];

@@ -19,6 +19,5 @@ gstreamer-app = "0.24"
 prost = "0.14"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-sysinfo = "0.39.6"
 wayvr-ipc = { path = "../wayvr/wayvr-ipc", default-features = false, features = ["runtime"] }
 wlx-capture = { path = "../wayvr/wlx-capture", default-features = false, features = ["pipewire"] }

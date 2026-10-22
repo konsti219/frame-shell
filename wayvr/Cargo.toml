@@ -9,7 +9,6 @@ members = [
   "wayvr-openxr-layer",
   "wayvr-openxr-layer-common",
   "wayvr-ipc",
-  "wayvr-media-bridge",
   "wayvrctl",
   "wgui",
   "wlx-capture",

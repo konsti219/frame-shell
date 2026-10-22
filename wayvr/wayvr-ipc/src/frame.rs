@@ -11,7 +11,6 @@ pub const MAX_MESSAGE: usize = 256 * 1024;
 /// PC to headset
 #[derive(Debug, Serialize, Deserialize)]
 pub enum HostMessage {
-	System(SystemStats),
 	/// Steam app ids of the running games
 	Games(Vec<String>),
 	/// Host runtime frame timings, for the watch
@@ -20,7 +19,7 @@ pub enum HostMessage {
 	Clients(Vec<RuntimeClient>),
 	Error(String),
 	Notification(Notification),
-	/// A wayvr-ipc client on the PC (the browser media bridge, wayvrctl) connected to the shell through the host
+	/// A wayvr-ipc client on the PC (wayvrctl, scripts) connected to the shell through the host
 	IpcOpen(u32),
 	Ipc(u32, PacketClient),
 	IpcClose(u32),
@@ -50,22 +49,6 @@ pub struct DesktopSettings {
 	/// kbit/s for 1920×1080 worth of pixels, scaled to each monitor
 	pub bitrate_per_1080p: u32,
 	pub hevc: bool,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct SystemStats {
-	pub cpu_usage: f32,
-	pub cpu_temp: Option<f32>,
-	pub gpu_usage: Option<u32>,
-	pub gpu_temp: Option<f32>,
-	pub ram_used_gib: f32,
-	pub ram_total_gib: f32,
-	pub vram_used_gib: Option<f32>,
-	pub vram_total_gib: Option<f32>,
-	/// Usage of groups of cores, in percent
-	pub core_usage: Vec<f32>,
-	pub power_draw_watts: Option<u32>,
-	pub power_cap_watts: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]

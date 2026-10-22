@@ -30,7 +30,8 @@ visibility, focus and game stop the other. Every shell event names its PC.
 
 The host serves WayVR's IPC socket on the PC and tunnels each client to the headset (`Ipc*` messages); starting
 or stopping headset processes is refused. Watch controls acting on the PC send `CustomEvent`s to subscribed
-clients (`::IpcSend`), which answer with `wayvrctl panel-modify`.
+clients (`::IpcSend`), which answer with panel-modify. A custom watch (`gui/watch.xml` in WayVR's theme folder)
+is driven this way; WayVR itself only fills in its frame timings.
 
 ## Desktop video
 
@@ -49,7 +50,7 @@ VR frames carry a 32-byte foveation description; both ends build the mapping tab
 - WayVR IPC: abstract socket `/tmp/wayvr_ipc.sock`, length-prefixed JSON (u32 big-endian), protocol 6.
 - Notifications: UDP `127.0.0.1:42069` (XSOverlay format) and `org.freedesktop.Notifications` (D-Bus monitor).
 - libmonado: metrics fd (length-delimited protobuf), client list with process IDs, `set_client_primary`.
-- Host load, RAM, temperature and GPU power: sysinfo and AMD sysfs. Steam games: launch metadata in `/proc`.
+- Steam games: launch metadata in `/proc`.
 
 Host workers poll on their own threads; nothing on the headset's render thread waits for the PC.
 

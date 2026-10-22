@@ -4,7 +4,7 @@
   "repo": "xrizer",
   "rev": "63fc7eb3f80bba2277b48c023d2af569cc6e6453",
   "hash": "sha256-/UiAJhKrMN2gYD3aVeORtI196xzjs61cK/FLyHPizZw=",
-  "cargoHash": "sha256-HVeKLohd73oBoiQHZE5jGwDJeLvR4J8I5zRnYvZlHoA=",
+  "cargoHash": "sha256-GGBrwWFCgL4vuWVzk20gKQunefUBJbrxOheB3PirNEk=",
   "patches": [
     "xrizer-frame-profile.patch",
     "xrizer-hand-tracking-data-source.patch",

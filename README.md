@@ -35,8 +35,7 @@ For everyday installation, NixOS PCs import the flake's `nixosModules.host` and 
 `services.frame-shell.enable`: the server with its host services as a user service (`frame-shell.service`), its
 port, mDNS publishing and uinput (`inputUsers`). VR extras stay outside: `settings.openvr-compat-path` with the
 flake's `xrizer` (the Frame's controller patches), `steamPackage` to start Steam games. The flake also builds the
-PC-side WayVR IPC clients from this tree: `wayvrctl`, the Firefox media bridge and its extension (`media-bridge`,
-`ytmusic-extension`). Patches for upstream packages are in `nix/`.
+`wayvrctl` is the PC-side WayVR IPC client from this tree. Patches for upstream packages are in `nix/`.
 
 The headset's "Desktop" app (WayVR's launcher) is SteamOS's nested Plasma (`steamos-nested-desktop`, as in
 SteamVR) in a WayVR window. It is registered in memory by the shell and uses WayVR's normal app launch path.
@@ -97,8 +96,8 @@ ignored clones or patch export step. Client and server share one `wivrn/common/w
 are defined once in `frame_abi.h`; Rust gets them through bindgen at build time.
 
 `desktop/` builds `libframe_host.a`, which the server links and starts per headset connection. `capture.rs`
-streams monitors; `ipc_proxy.rs` tunnels WayVR IPC clients such as the browser media bridge; `notifications.rs`
-forwards VRCX and desktop notifications; `metrics.rs`, `system.rs` and `games.rs` cover the watch.
+streams monitors; `ipc_proxy.rs` tunnels WayVR IPC clients; `notifications.rs`
+forwards VRCX and desktop notifications; `metrics.rs` and `games.rs` cover the watch and dashboard.
 Host messages and commands travel through WiVRn's authenticated connection as opaque bytes.
 
 `out/` contains ignored build products, caches and private pairing state. The build scripts

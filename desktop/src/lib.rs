@@ -10,7 +10,6 @@ mod metrics;
 mod metrics_proto;
 mod notifications;
 mod notify;
-mod system;
 
 use frame_abi::{frame_host, frame_host_callbacks, frame_host_surface};
 use std::{
@@ -166,8 +165,6 @@ impl Host {
                     .expect("spawning a host thread"),
             );
         };
-        let worker = output.clone();
-        spawn("system", Box::new(move || system::run(&worker)));
         let worker = output.clone();
         spawn("games", Box::new(move || games::run(&worker, &games_rx)));
         let worker = output.clone();

@@ -430,8 +430,4 @@ pub struct WatchData {
     pub fps_current: f32,
     pub fps_average: f32,
     pub latest_notification: Option<WatchNotification>,
-    /// Latest media playback state pushed over IPC by the media bridge, and when
-    /// it arrived (used to fall back to "No media" once it goes stale).
-    pub media: Option<wayvr_ipc::packet_client::WatchMediaState>,
-    pub media_updated: Option<std::time::Instant>,
 }

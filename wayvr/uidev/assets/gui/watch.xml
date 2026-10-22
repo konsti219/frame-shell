@@ -1,5 +1,0 @@
-<layout>
-  <elements>
-    <include src_ext="wayvr/src/assets/gui/watch.xml" />
-  </elements>
-</layout>

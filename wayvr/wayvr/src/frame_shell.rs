@@ -1523,10 +1523,6 @@ pub fn watch_metrics(
     }
 }
 
-pub fn host_system() -> Option<wayvr_ipc::frame::SystemStats> {
-    crate::frame_host::system()
-}
-
 
 pub fn remote_game_running(host: &str, app_id: &str) -> bool {
     source_for_host(host)

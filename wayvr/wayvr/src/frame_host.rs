@@ -10,7 +10,6 @@ use std::{
 use wayvr_ipc::{
     frame::{
         DesktopSettings, HostMessage, Notification, RuntimeClient, SessionFrame, ShellMessage,
-        SystemStats,
     },
     packet_client::PacketClient,
 };
@@ -39,7 +38,6 @@ struct State {
     /// What the PCs should encode their monitors with, from the headset's settings
     desktop_settings: Option<DesktopSettings>,
     /// The VR PC's stats and runtime frame timings, for the watch
-    system: Option<(Instant, SystemStats)>,
     frames: VecDeque<SessionFrame>,
     errors: VecDeque<String>,
     notifications: VecDeque<Notification>,
@@ -49,7 +47,6 @@ struct State {
 static STATE: Mutex<State> = Mutex::new(State {
     pcs: BTreeMap::new(),
     desktop_settings: None,
-    system: None,
     frames: VecDeque::new(),
     errors: VecDeque::new(),
     notifications: VecDeque::new(),
@@ -104,7 +101,6 @@ pub fn connected(source: u32, vr: bool) {
     });
     pc.vr = vr;
     if !vr {
-        state.system = None;
         state.frames.clear();
     }
 }
@@ -125,11 +121,6 @@ pub fn receive(source: u32, data: &[u8]) {
     };
     let vr = pc.vr;
     match message {
-        HostMessage::System(stats) => {
-            if vr {
-                state.system = Some((Instant::now(), stats));
-            }
-        }
         HostMessage::Games(games) => {
             let changed = pc.games.as_ref().is_none_or(|(_, old)| *old != games);
             pc.games = Some((Instant::now(), games));
@@ -177,7 +168,6 @@ pub fn disconnected(source: u32) {
         return;
     };
     if pc.vr {
-        state.system = None;
         state.frames.clear();
     }
     state.ipc.retain(|event| match event {
@@ -216,14 +206,6 @@ pub fn resync_desktop_settings() {
             pc.sent_settings = Some(settings);
         }
     }
-}
-
-pub fn system() -> Option<SystemStats> {
-    state()
-        .system
-        .as_ref()
-        .filter(|(updated, _)| updated.elapsed() < FRESH)
-        .map(|(_, stats)| stats.clone())
 }
 
 /// Steam app ids of a PC's running games
