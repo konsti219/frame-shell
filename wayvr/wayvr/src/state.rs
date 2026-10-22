@@ -193,6 +193,7 @@ impl AppState {
 
         let mut desktop_finder = DesktopFinder::new();
         desktop_finder.refresh();
+        crate::backend::wayvr::plasma::register(&mut desktop_finder);
 
         #[cfg(feature = "pipewire")]
         let screencast_manager = ScreenCastManager::new()

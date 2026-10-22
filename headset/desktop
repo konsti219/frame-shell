@@ -1,9 +1,0 @@
-#!/bin/sh
-# SteamOS's nested Plasma (SteamVR's "Desktop") as a WayVR window. Its runtime directory is a new one, so the
-# Wayland socket goes by path; Plasma's Steam autostart is hidden, Steam doesn't run in the frame shell.
-case "$WAYLAND_DISPLAY" in
-    ""|/*) ;;
-    *) export WAYLAND_DISPLAY="$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" ;;
-esac
-export XDG_CONFIG_DIRS="$HOME/.local/share/frame-shell/desktop-config:${XDG_CONFIG_DIRS:-/etc/xdg}"
-exec steamos-nested-desktop

@@ -1,9 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=Desktop
-Comment=KDE Plasma in a window
-Exec=frame-shell-desktop
-Icon=desktop
-Categories=Utility;
-X-Steam-Controller-Template=Desktop
-X-Steam-Special=Desktop

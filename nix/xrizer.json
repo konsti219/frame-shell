@@ -1,0 +1,16 @@
+{
+  "version": "0.6-unstable-2026-10-14",
+  "owner": "Supreeeme",
+  "repo": "xrizer",
+  "rev": "63fc7eb3f80bba2277b48c023d2af569cc6e6453",
+  "hash": "sha256-/UiAJhKrMN2gYD3aVeORtI196xzjs61cK/FLyHPizZw=",
+  "cargoHash": "sha256-HVeKLohd73oBoiQHZE5jGwDJeLvR4J8I5zRnYvZlHoA=",
+  "patches": [
+    "xrizer-frame-profile.patch",
+    "xrizer-hand-tracking-data-source.patch",
+    "xrizer-controller-wrist.patch",
+    "xrizer-finger-curl.patch",
+    "xrizer-both-hand-binds.patch",
+    "xrizer-linked-openxr.patch"
+  ]
+}

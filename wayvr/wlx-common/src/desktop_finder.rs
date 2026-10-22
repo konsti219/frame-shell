@@ -65,6 +65,7 @@ struct DesktopFinderParams {
 pub struct DesktopFinder {
 	params: Arc<DesktopFinderParams>,
 	entry_cache: HashMap<String, DesktopEntry>,
+	builtin_entries: HashMap<String, DesktopEntry>,
 	bg_task: Option<JoinHandle<HashMap<String, DesktopEntryOwned>>>,
 }
 
@@ -114,6 +115,7 @@ impl DesktopFinder {
 				size_preferences,
 			}),
 			entry_cache: HashMap::new(),
+			builtin_entries: HashMap::new(),
 			bg_task: None,
 		}
 	}
@@ -333,6 +335,13 @@ impl DesktopFinder {
 		for (app_id, entry) in entries {
 			self.entry_cache.insert(app_id, entry.into());
 		}
+		self.entry_cache.extend(self.builtin_entries.clone());
+	}
+
+	pub fn add_builtin(&mut self, entry: DesktopEntry) {
+		let app_id = entry.app_id.to_string();
+		self.entry_cache.insert(app_id.clone(), entry.clone());
+		self.builtin_entries.insert(app_id, entry);
 	}
 
 	pub fn get_cached_entry(&self, app_id: &str) -> Option<&DesktopEntry> {

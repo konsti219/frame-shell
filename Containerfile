@@ -42,3 +42,5 @@ RUN curl -fL 'https://download.pytorch.org/whl/cpu/torch-2.13.0%2Bcpu-cp313-cp31
         third-party/flatbuffers third-party/flatcc third-party/json third-party/gflags \
     && CCACHE_DISABLE=1 PYTHONPATH=/tmp/torchgen bash /opt/build-executorch.sh /tmp/executorch /opt/executorch-arm64 \
     && rm -rf /tmp/executorch /tmp/torchgen /tmp/et-build
+
+RUN apt-get update && apt-get install -y --no-install-recommends glslc && rm -rf /var/lib/apt/lists/*

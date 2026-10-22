@@ -12,3 +12,19 @@ diff --git a/Cargo.toml b/Cargo.toml
  tracing = ["dep:tracy-client", "openvr/tracing"]
  monado = ["dep:openxr_mndx_xdev_space"]
  # Derive the reported version from `git describe`. Disable when building outside
+diff --git a/Cargo.lock b/Cargo.lock
+index 9d659f3..18cf604 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -265,9 +264,0 @@ dependencies = [
+-[[package]]
+-name = "cmake"
+-version = "0.1.54"
+-source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "e7caa3f9de89ddbe2c607f4101924c5abec803763ae9534e4f4d7d8f84aa81f0"
+-dependencies = [
+- "cc",
+-]
+-
+@@ -1293 +1283,0 @@ dependencies = [
+- "cmake",

@@ -1,0 +1,14 @@
+#!/bin/bash
+# SteamVR's command for Steam's games in the frame shell. Lepton mounts `steamvr path` into Android games as their
+# OpenXR runtime (bin/androidarm64/vrclient.so): there, Monado's Android client and a hard link to the service's
+# socket, which a bind mount carries into the container. Everything else goes to SteamVR's own command.
+set -euo pipefail
+if [[ "${1:-}" != path ]]; then
+    exec /usr/bin/steamvr "$@"
+fi
+runtime="/run/user/$UID"
+dir="$runtime/frame-shell-android-runtime"
+mkdir -p "$dir/bin/androidarm64"
+cp -u "$HOME/.local/opt/monado/lib/android-arm64/libopenxr_monado.so" "$dir/bin/androidarm64/vrclient.so"
+ln -f "$runtime/monado_comp_ipc" "$dir/monado_comp_ipc"
+echo "$dir"

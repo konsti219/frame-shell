@@ -3,6 +3,7 @@ mod comp;
 pub mod hit_test;
 mod image_importer;
 mod input_capture;
+pub(crate) mod plasma;
 pub mod process;
 mod time;
 pub mod window;
@@ -1326,6 +1327,7 @@ impl WvrServerState {
         userdata: HashMap<String, String>,
     ) -> anyhow::Result<process::ProcessHandle> {
         let auth_key = generate_auth_key();
+        let exec_path = plasma::resolve_executable(exec_path);
 
         let is_flatpak =
             exec_path.ends_with("flatpak") && args.first().is_some_and(|a| *a == "run");
@@ -1341,6 +1343,7 @@ impl WvrServerState {
             cmd.env(e.0, e.1);
         }
 
+        let plasma = plasma::PlasmaLaunch::prepare(&mut cmd)?;
         let child = cmd.spawn().context("Failed to spawn child process")?;
 
         let handle = self
@@ -1348,6 +1351,7 @@ impl WvrServerState {
             .insert(process::Process::Managed(process::WayVRProcess {
                 auth_key,
                 child,
+                plasma,
                 exec_path: String::from(exec_path),
                 app_name: String::from(app_name),
                 userdata,

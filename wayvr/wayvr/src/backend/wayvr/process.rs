@@ -8,6 +8,7 @@ use wayvr_ipc::{packet_client, packet_server};
 pub struct WayVRProcess {
     pub auth_key: String,
     pub child: std::process::Child,
+    pub plasma: Option<super::plasma::PlasmaLaunch>,
     pub app_name: String,
     pub exec_path: String,
     pub args: Vec<String>,
@@ -145,7 +146,8 @@ impl WayVRProcess {
     fn kill(&mut self, signal: i32) {
         unsafe {
             // Gracefully stop process
-            libc::kill(self.child.id() as i32, signal);
+            let pid = self.child.id() as i32;
+            libc::kill(if self.plasma.is_some() { -pid } else { pid }, signal);
         }
     }
 

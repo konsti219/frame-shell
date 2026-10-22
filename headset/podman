@@ -1,0 +1,6 @@
+#!/bin/bash
+# Podman for Lepton (Android games) from Steam in the nested Plasma session: with the user's own session bus and
+# runtime folder (systemd's cgroups, Podman's state), not the nested session's
+runtime="/run/user/$UID"
+export XDG_RUNTIME_DIR="$runtime" DBUS_SESSION_BUS_ADDRESS="unix:path=$runtime/bus"
+exec /usr/bin/podman "$@"

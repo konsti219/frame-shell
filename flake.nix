@@ -67,33 +67,18 @@
       zip -r -X "$out/wayvr-ytmusic@konsti.xpi" .
     '';
     wayvrctl = ipcClient "wayvrctl";
+    xrizerSource = builtins.fromJSON (builtins.readFile ./nix/xrizer.json);
     # OpenVR games on WiVRn, with the Frame's controllers
     xrizer = pkgs.xrizer.overrideAttrs (finalAttrs: old: {
-      version = "0.6-unstable-2026-10-14";
+      version = xrizerSource.version;
       src = pkgs.fetchFromGitHub {
-        owner = "Supreeeme";
-        repo = "xrizer";
-        rev = "63fc7eb3f80bba2277b48c023d2af569cc6e6453";
-        hash = "sha256-/UiAJhKrMN2gYD3aVeORtI196xzjs61cK/FLyHPizZw=";
+        inherit (xrizerSource) owner repo rev hash;
       };
       cargoDeps = pkgs.rustPlatform.fetchCargoVendor {
         inherit (finalAttrs) src;
-        hash = "sha256-HVeKLohd73oBoiQHZE5jGwDJeLvR4J8I5zRnYvZlHoA=";
+        hash = xrizerSource.cargoHash;
       };
-      patches = (old.patches or [ ]) ++ [
-        # Native Steam Frame controller profile, plus custom bindings for undeclared controllers
-        ./nix/xrizer-frame-profile.patch
-        # Supreeeme/xrizer#338: Partial (not Full) skeletal level for controller-sourced hand joints
-        ./nix/xrizer-hand-tracking-data-source.patch
-        # SteamVR's fixed wrist for controller skeletons (the Frame's wrist joint is pitched ~27°)
-        ./nix/xrizer-controller-wrist.patch
-        # Finger curl from summed joint bends (pinky under-curled before)
-        ./nix/xrizer-finger-curl.patch
-        # Some apps ignore right hand inputs when bound on both hands, merge both into the left query
-        ./nix/xrizer-both-hand-binds.patch
-        # main dlopens a bare libopenxr_loader.so, which isn't findable (esp. in Proton); link it instead
-        ./nix/xrizer-linked-openxr.patch
-      ];
+      patches = (old.patches or [ ]) ++ map (name: ./nix + "/${name}") xrizerSource.patches;
       postPatch = ''
         substituteInPlace src/graphics_backends/gl.rs \
           --replace-fail 'libGLX.so.0' '${pkgs.lib.getLib pkgs.libglvnd}/lib/libGLX.so.0'

@@ -34,4 +34,5 @@ install -Dm755 "$build/client/_deps/openxr_loader-build/src/loader/libopenxr_loa
 install -Dm755 /opt/ktx-arm64/usr/lib/libktx.so.4 "$build/stage/frame-shell/libktx.so.4"
 install -Dm755 /usr/lib/aarch64-linux-gnu/libcrypto.so.3 "$build/stage/frame-shell/libcrypto.so.3"
 find "$build/stage" -type f \( -name '*.so' -o -name '*.so.*' -o -path "$build/stage/home/steamos/.local/opt/monado/bin/*" \) \
+    ! -path '*/xrizer/bin/linux64/*' \
     -exec aarch64-linux-gnu-strip --strip-debug {} +

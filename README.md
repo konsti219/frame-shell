@@ -39,7 +39,22 @@ PC-side WayVR IPC clients from this tree: `wayvrctl`, the Firefox media bridge a
 `ytmusic-extension`). Patches for upstream packages are in `nix/`.
 
 The headset's "Desktop" app (WayVR's launcher) is SteamOS's nested Plasma (`steamos-nested-desktop`, as in
-SteamVR) in a WayVR window; `headset/desktop` passes WayVR's socket by path and hides Plasma's Steam autostart.
+SteamVR) in a WayVR window. It is registered in memory by the shell and uses WayVR's normal app launch path.
+The Plasma handler passes the Wayland socket by absolute path, hides Steam's autostart with temporary runtime
+configuration, and stops the nested session together. No extra desktop entry, helper script or configuration
+is installed; pinned apps and autostart retain their normal behavior.
+Plasma's apps select their own X11/Wayland backends; outer Gamescope settings are cleared so Steam can run
+as a desktop client instead of forcing gamepad mode or a Wayland backend it does not support.
+Windows OpenXR games under x86-64 Proton/FEX use frame-monado's x86-64 client and the native ARM64 service.
+Build/deploy the current frame-monado first: its shared `openxr_frame.json` selects the matching architecture.
+The shell launcher also exposes Monado's IPC socket inside Steam's game containers.
+Its `VR_OVERRIDE` selects a bundled xrizer for OpenVR and Proton's VR initialization, using the same
+revision and Frame controller patches as the PC package (`nix/xrizer.json`). Both ARM64 and x86-64
+clients are built by `./build headset` and installed by `./deploy`; SteamVR's global runtime remains unchanged.
+Android games run through Lepton from Steam in that Plasma session. The shell's `PATH` holds two wrappers for it:
+`steamvr path` gives Lepton a folder with frame-monado's Android client and a hard link to Monado's socket, which
+Lepton mounts as the Android runtime, and `podman` uses the user's own session bus and runtime folder instead of
+Plasma's. The Plasma launcher links `gamescope-0` to KWin's socket, the Wayland display Lepton expects.
 
 ## Several PCs
 
