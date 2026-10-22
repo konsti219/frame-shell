@@ -227,6 +227,16 @@ async fn run_once(state: &mut WayVRClientState, args: Args) -> anyhow::Result<()
                 SubcommandPanelModify::SetValue { value } => {
                     packet_client::WlxModifyPanelCommand::SetValue(value)
                 }
+                SubcommandPanelModify::SetHeight { height } => {
+                    packet_client::WlxModifyPanelCommand::SetHeight(height)
+                }
+                SubcommandPanelModify::SetImageData { path } => match std::fs::read(&path) {
+                    Ok(data) => packet_client::WlxModifyPanelCommand::SetImageData(data),
+                    Err(error) => {
+                        log::error!("{path}: {error}");
+                        return Ok(());
+                    }
+                },
             };
 
             wlx_panel_modify(state, overlay, element, command).await;
@@ -669,4 +679,9 @@ enum SubcommandPanelModify {
     SetStickyState { sticky_state_0_or_1: u8 },
     /// Set the value of a <Slider> (number), <CheckBox> (0 or 1) or <RadioGroup>
     SetValue { value: String },
+    /// Set the height of an element: pixels, or a percentage of its parent ("50%")
+    SetHeight { height: String },
+    /// Send an image file (svg, gif, png, jpeg or webp) as the content of a <sprite> or <image>; the file is read
+    /// here, so it works from another machine
+    SetImageData { path: String },
 }

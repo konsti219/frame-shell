@@ -83,6 +83,8 @@ pub enum ModifyPanelCommand {
     GetValue,
     SetValue(String),
     SetStickyState(bool),
+    SetHeight(String),
+    SetImageData(Vec<u8>),
 }
 
 #[derive(Debug, Clone)]
