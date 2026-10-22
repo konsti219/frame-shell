@@ -1,0 +1,8 @@
+.~lock.*
+/target
+.gdb_history
+.vscode
+.direnv
+.cargo
+scripts/translator/node_modules
+*/Cargo.lock
