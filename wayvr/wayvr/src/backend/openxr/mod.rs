@@ -376,6 +376,9 @@ pub fn openxr_run(args: &Args, params: RunParams) -> Result<(), BackendError> {
         playspace_mover.update(&mut overlays, &mut app);
         app.floor_from_stage = playspace_mover.floor_from_stage();
         crate::frame_shell::update_drag_offset(app.floor_from_stage);
+        if crate::frame_shell::EMBEDDED.load(std::sync::atomic::Ordering::Relaxed) {
+            crate::frame_shell::check_battery(&mut app);
+        }
         app.floor_from_raw = playspace_mover.floor_from_raw();
 
         for o in overlays.values_mut() {

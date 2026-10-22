@@ -51,6 +51,12 @@ The shell launcher also exposes Monado's IPC socket inside Steam's game containe
 Its `VR_OVERRIDE` selects a bundled xrizer for OpenVR and Proton's VR initialization, using the same
 revision and Frame controller patches as the PC package (`nix/xrizer.json`). Both ARM64 and x86-64
 clients are built by `./build headset` and installed by `./deploy`; SteamVR's global runtime remains unchanged.
+The dashboard's "Battery / performance" menu shows the battery as SteamVR reads it (Valve's charger service in
+`/run/deckardcharger`) and switches between two performance modes: "Streaming optimized" (frame-monado's GPU cap,
+578 MHz) and "Performance" (uncapped, for native games). The mode is `frame.gpu_max_mhz` in Monado's config, applied
+by its `session-power`; the shell applies it again when something lifts it (Steam sets the GPU level to auto when it
+starts). On battery the shell warns at 10, 5 and 1 %.
+
 Steam's client runs as a WayVR app (X11 through a bundled `xwayland-satellite`, which SteamOS lacks); the launcher
 clears the SteamOS session's Gamescope variables so it starts as the desktop client. Starting a game from the
 dashboard or a pin starts Steam on WayVR's displays if it isn't running. Android games run through Lepton: the

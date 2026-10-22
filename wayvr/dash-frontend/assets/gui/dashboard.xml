@@ -159,6 +159,9 @@
             <Button id="btn_playspace" color="background(transparent)" border_color="background(transparent)" tooltip_str="Floor / playspace" tooltip_side="top">
               <sprite src_builtin="@/dashboard/fix_floor.svg" width="24" height="24" margin="8" />
             </Button>
+            <Button id="btn_battery" color="background(transparent)" border_color="background(transparent)" tooltip_str="Battery / performance" tooltip_side="top">
+              <sprite src_builtin="@/dashboard/gpu.svg" width="24" height="24" margin="8" />
+            </Button>
           </div>
 
           <!-- Right bottom side -->

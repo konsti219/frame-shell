@@ -313,6 +313,48 @@ pub fn toast(app: &mut AppState, text: String) {
     .submit(app);
 }
 
+/// Last battery check, and the lowest warning level shown since the headset was last on the charger
+static BATTERY_WARNING: Mutex<(Option<std::time::Instant>, Option<u32>)> = Mutex::new((None, None));
+
+/// Every 5 s: keeps the performance mode applied, and warns once each at 10, 5 and 1 % on battery (only the lowest
+/// level crossed since the last check)
+pub fn check_battery(app: &mut AppState) {
+    let mut state = BATTERY_WARNING
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (checked, warned) = &mut *state;
+    if checked.is_some_and(|at| at.elapsed() < std::time::Duration::from_secs(5)) {
+        return;
+    }
+    *checked = Some(std::time::Instant::now());
+    if let Err(error) = wlx_common::frame_power::enforce_performance_mode() {
+        log::warn!("Performance mode: {error:?}");
+    }
+    let Some(battery) = wlx_common::frame_power::battery() else {
+        return;
+    };
+    if battery.external_power {
+        *warned = None;
+        return;
+    }
+    let Some(level) = [1, 5, 10]
+        .into_iter()
+        .find(|level| battery.percent <= *level as f32 && warned.is_none_or(|warned| *level < warned))
+    else {
+        return;
+    };
+    *warned = Some(level);
+    drop(state);
+    crate::overlays::toast::Toast::new(
+        wlx_common::overlays::ToastTopic::Priority,
+        Some(wgui::i18n::Translation::from_raw_text("Battery low")),
+        wgui::i18n::Translation::from_raw_text_string(format!("{level} % left")),
+    )
+    .with_timeout(6.0)
+    .with_sound(true)
+    .submit(app);
+}
+
 fn lobby_json() -> (serde_json::Value, serde_json::Value) {
     let state = LOBBY_STATE
         .lock()

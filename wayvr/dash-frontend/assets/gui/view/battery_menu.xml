@@ -1,0 +1,10 @@
+<layout version="2">
+  <elements>
+    <div flex_direction="column" width="100%" padding="8" gap="12">
+      <label id="battery" text="" size="14" />
+      <label text="Performance" weight="bold" size="14" />
+      <Button id="mode_streaming" text="Streaming optimized" width="100%" />
+      <Button id="mode_performance" text="Performance" width="100%" />
+    </div>
+  </elements>
+</layout>

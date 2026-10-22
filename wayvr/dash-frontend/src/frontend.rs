@@ -24,6 +24,7 @@ use wgui::{
 };
 use wlx_common::{
 	async_executor::AsyncExecutor,
+	frame_power,
 	audio,
 	dash_interface::{AudioControl, BoxDashInterface, ConfigChangeKind, DashPlayspaceTask, ShellRequest},
 	locale::WayVRLangProvider,
@@ -89,6 +90,9 @@ pub struct Frontend<T> {
 	menu_power: Option<ParserState>,
 	window_playspace: WguiWindow,
 	menu_playspace: Option<ParserState>,
+	window_battery: WguiWindow,
+	menu_battery: Option<ParserState>,
+	battery_updated: Option<std::time::Instant>,
 }
 
 pub struct FrontendUpdateParams<'a, T> {
@@ -144,6 +148,8 @@ pub enum FrontendTask {
 	},
 	ShowPowerMenu,
 	ShowPlayspaceMenu,
+	ShowBatteryMenu,
+	SetPerformanceMode(frame_power::PerformanceMode),
 	DetectFloor,
 	DebugFloor(bool),
 	PowerAction(&'static str),
@@ -234,6 +240,9 @@ impl<T: 'static> Frontend<T> {
 			menu_power: None,
 			window_playspace: WguiWindow::default(),
 			menu_playspace: None,
+			window_battery: WguiWindow::default(),
+			menu_battery: None,
+			battery_updated: None,
 			executor: params.executor,
 			sounds_to_play: Vec::new(),
 			popup_dialog_box: Default::default(),
@@ -294,6 +303,7 @@ impl<T: 'static> Frontend<T> {
 		}
 
 		self.update_playspace_menu(params.data)?;
+		self.update_battery_menu()?;
 		self.update_audio_menu(params.data)?;
 
 		let res = self.tick(params)?;
@@ -481,6 +491,13 @@ impl<T: 'static> Frontend<T> {
 				self.interface.wivrn_launch(params.data, &host, &app_id, &name)
 			}
 			FrontendTask::ShowPowerMenu => self.action_show_power_menu()?,
+			FrontendTask::ShowBatteryMenu => self.action_show_battery_menu()?,
+			FrontendTask::SetPerformanceMode(mode) => {
+				if let Err(error) = frame_power::set_performance_mode(mode) {
+					log::warn!("Could not set the performance mode: {error:?}");
+				}
+				self.battery_updated = None;
+			}
 			FrontendTask::ShowPlayspaceMenu => self.action_show_playspace_menu(params.data)?,
 			FrontendTask::DetectFloor => self.interface.floor_detect(params.data),
 			FrontendTask::DebugFloor(visible) => self.interface.floor_debug_set(params.data, visible),
@@ -632,6 +649,11 @@ impl<T: 'static> Frontend<T> {
 			FrontendTask::ShowPlayspaceMenu,
 		);
 
+		self.tasks.handle_button(
+			&self.state.fetch_component_as::<ComponentButton>("btn_battery")?,
+			FrontendTask::ShowBatteryMenu,
+		);
+
 		// "Power" bottom bar button
 		self.tasks.handle_button(
 			&self.state.fetch_component_as::<ComponentButton>("btn_power")?,
@@ -739,6 +761,7 @@ impl<T: 'static> Frontend<T> {
 		self.window_audio_settings.close();
 		self.window_power.close();
 		self.window_playspace.close();
+		self.window_battery.close();
 		window.open(&mut WguiWindowParams {
 			position: Vec2::new(64.0, 64.0),
 			layout: &mut self.layout,
@@ -792,6 +815,78 @@ impl<T: 'static> Frontend<T> {
 			}));
 		self.menu_playspace = Some(state);
 		self.update_playspace_menu(data)
+	}
+
+	fn action_show_battery_menu(&mut self) -> anyhow::Result<()> {
+		let state = self.open_shell_menu(
+			&self.window_battery.clone(),
+			"Battery / performance",
+			"gui/view/battery_menu.xml",
+		)?;
+		for (id, mode) in [
+			("mode_streaming", frame_power::PerformanceMode::StreamingOptimized),
+			("mode_performance", frame_power::PerformanceMode::Performance),
+		] {
+			self.tasks.handle_button(
+				&state.fetch_component_as::<ComponentButton>(id)?,
+				FrontendTask::SetPerformanceMode(mode),
+			);
+		}
+		self.menu_battery = Some(state);
+		self.battery_updated = None;
+		self.update_battery_menu()
+	}
+
+	/// Battery state and the performance mode, once a second while the menu is open
+	fn update_battery_menu(&mut self) -> anyhow::Result<()> {
+		let Some(state) = &mut self.menu_battery else {
+			return Ok(());
+		};
+		if self
+			.battery_updated
+			.is_some_and(|at| at.elapsed() < std::time::Duration::from_secs(1))
+		{
+			return Ok(());
+		}
+		self.battery_updated = Some(std::time::Instant::now());
+		let Ok(label) = state.fetch_widget(&self.layout.state, "battery") else {
+			return Ok(());
+		};
+		let text = match frame_power::battery() {
+			None => "Battery state unavailable".to_owned(),
+			Some(battery) => {
+				let status = if battery.full {
+					"full"
+				} else if battery.external_power {
+					"charging"
+				} else {
+					"on battery"
+				};
+				let mut text = format!("{:.0} %, {status}", battery.percent);
+				if let Some(watts) = battery.watts.filter(|_| !battery.full) {
+					text += &format!(", {watts:.1} W");
+				}
+				if let Some(seconds) = battery.seconds_left {
+					let until = if battery.external_power { "until full" } else { "left" };
+					text += &format!("\n{}:{:02} h {until}", seconds / 3600, seconds / 60 % 60);
+				}
+				text
+			}
+		};
+		label
+			.widget
+			.cast::<WidgetLabel>()?
+			.set_text(&mut self.layout.common(), Translation::from_raw_text(&text));
+		let mode = frame_power::performance_mode();
+		for (id, button_mode) in [
+			("mode_streaming", frame_power::PerformanceMode::StreamingOptimized),
+			("mode_performance", frame_power::PerformanceMode::Performance),
+		] {
+			state
+				.fetch_component_as::<ComponentButton>(id)?
+				.set_sticky_state(&mut self.layout.common(), mode == button_mode);
+		}
+		Ok(())
 	}
 
 	fn update_playspace_menu(&mut self, data: &mut T) -> anyhow::Result<()> {
