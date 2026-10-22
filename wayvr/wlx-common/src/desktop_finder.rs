@@ -60,6 +60,22 @@ struct DesktopFinderParams {
 	size_preferences: Vec<&'static OsStr>,
 	icon_folders: Vec<String>,
 	app_folders: Vec<String>,
+	icon_theme: String,
+}
+
+/// The user's icon theme: KDE's setting, else KDE's default (Breeze) when installed, else hicolor
+fn icon_theme(xdg: &xdg::BaseDirectories) -> String {
+	let configured = xdg
+		.find_config_files("kdeglobals")
+		.filter_map(|path| Ini::load_from_file(path).ok())
+		.find_map(|ini| ini.get_from(Some("Icons"), "Theme").map(str::to_owned));
+	configured.unwrap_or_else(|| {
+		if xdg.find_data_file("icons/breeze/index.theme").is_some() {
+			"breeze".into()
+		} else {
+			"hicolor".into()
+		}
+	})
 }
 
 pub struct DesktopFinder {
@@ -113,6 +129,7 @@ impl DesktopFinder {
 				app_folders,
 				icon_folders,
 				size_preferences,
+				icon_theme: icon_theme(&xdg),
 			}),
 			entry_cache: HashMap::new(),
 			builtin_entries: HashMap::new(),
@@ -268,6 +285,16 @@ impl DesktopFinder {
 	fn find_icon(params: &DesktopFinderParams, icon_name: &str) -> Option<String> {
 		if icon_name.starts_with("/") && exists(icon_name).unwrap_or(false) {
 			return Some(icon_name.to_string());
+		}
+
+		// Through the icon theme and the ones it inherits (hicolor last)
+		if let Some(path) = freedesktop_icons::lookup(icon_name)
+			.with_theme(&params.icon_theme)
+			.with_size(128)
+			.with_cache()
+			.find()
+		{
+			return Some(path.to_string_lossy().into());
 		}
 
 		for folder in &params.icon_folders {
