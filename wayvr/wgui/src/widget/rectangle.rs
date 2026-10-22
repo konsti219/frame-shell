@@ -21,6 +21,10 @@ pub struct WidgetRectangleParams {
 	pub border_color: WguiColor,
 
 	pub round: WLength,
+
+	/// Instead of itself, draws its color over the panels drawn before it, in their shapes: dims what's behind a popup
+	/// without covering the layout's transparent cut-outs
+	pub dim_below: bool,
 }
 
 pub struct WidgetRectangle {
@@ -60,6 +64,11 @@ impl WidgetRectangle {
 
 impl WidgetObj for WidgetRectangle {
 	fn draw(&mut self, state: &mut super::DrawState, _params: &super::DrawParams) {
+		if self.params.dim_below {
+			let color = self.params.color.resolve(&state.globals.palette);
+			dim_below(state, color);
+			return;
+		}
 		let boundary = drawing::Boundary::construct_relative(state.transform_stack);
 
 		let round_units = match self.params.round {
@@ -107,4 +116,47 @@ impl WidgetObj for WidgetRectangle {
 			self.params.gradient,
 		)
 	}
+}
+
+/// The screen-space bounds of a primitive
+fn screen_bounds(extent: &drawing::PrimitiveExtent) -> (glam::Vec2, glam::Vec2) {
+	let a = extent.transform.transform_point3(extent.boundary.pos.extend(0.0)).truncate();
+	let b = extent
+		.transform
+		.transform_point3((extent.boundary.pos + extent.boundary.size).extend(0.0))
+		.truncate();
+	(a.min(b), a.max(b))
+}
+
+/// Covers the outermost visible rectangles drawn so far (the panels; ones inside them would be dimmed twice)
+fn dim_below(state: &mut super::DrawState, color: drawing::Color) {
+	let mut outer: Vec<(glam::Vec2, glam::Vec2)> = Vec::new();
+	let mut overlays = Vec::new();
+	for primitive in state.primitives.iter() {
+		let drawing::RenderPrimitive::Rectangle(extent, rectangle) = primitive else {
+			continue;
+		};
+		if rectangle.color.a <= 0.0 && rectangle.color2.a <= 0.0 && (rectangle.border <= 0.0 || rectangle.border_color.a <= 0.0)
+		{
+			continue;
+		}
+		let (min, max) = screen_bounds(extent);
+		if outer
+			.iter()
+			.any(|(outer_min, outer_max)| min.cmpge(*outer_min).all() && max.cmple(*outer_max).all())
+		{
+			continue;
+		}
+		outer.push((min, max));
+		overlays.push(drawing::RenderPrimitive::Rectangle(
+			extent.clone(),
+			drawing::Rectangle {
+				color,
+				color2: color,
+				round_units: rectangle.round_units,
+				..Default::default()
+			},
+		));
+	}
+	state.primitives.extend(overlays);
 }

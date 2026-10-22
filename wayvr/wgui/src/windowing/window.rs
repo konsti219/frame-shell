@@ -8,14 +8,14 @@ use taffy::{
 
 use crate::{
 	animation::{Animation, AnimationDuration, AnimationEasing},
+	drawing,
 	assets::AssetPathRef,
 	components::button::ComponentButton,
-	drawing,
 	event::{EventListenerKind, StyleSetRequest},
 	i18n::Translation,
 	layout::{Layout, LayoutTask, LayoutTasks, WidgetPair},
 	parser::{self, Fetchable, ParserState},
-	widget::{EventResult, div::WidgetDiv, label::WidgetLabel, rectangle::WidgetRectangle},
+	widget::{EventResult, div::WidgetDiv, label::WidgetLabel, rectangle::{WidgetRectangle, WidgetRectangleParams}},
 };
 
 struct OpenedWindow {
@@ -242,7 +242,11 @@ impl WguiWindow {
 		};
 
 		let input_grabber = if params.extra.close_if_clicked_outside {
-			let mut rect = WidgetRectangle::create(Default::default());
+			let mut rect = WidgetRectangle::create(WidgetRectangleParams {
+				color: drawing::Color::new(0.0, 0.0, 0.0, 0.0).into(),
+				dim_below: true,
+				..Default::default()
+			});
 			rect.flags.consume_mouse_events = true;
 
 			let this = self.clone();
@@ -266,14 +270,14 @@ impl WguiWindow {
 				},
 			)?;
 
-			// Fade animation
+			// Fade in the dimming of the panels behind
 			Animation::new(
 				widget.id,
-				AnimationDuration::Seconds(0.333),
+				AnimationDuration::Seconds(0.15),
 				AnimationEasing::OutQuad,
 				Box::new(|common, data| {
 					let rect = data.obj.get_as_mut::<WidgetRectangle>().unwrap() /* should always succeed */;
-					rect.params.color = drawing::Color::new(0.0, 0.0, 0.0, data.pos * 0.3).into();
+					rect.params.color = drawing::Color::new(0.0, 0.0, 0.0, data.pos * 0.55).into();
 					common.alterables.mark_redraw();
 				}),
 			)

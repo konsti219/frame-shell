@@ -712,6 +712,7 @@ pub fn construct(ess: &mut ConstructEssentials, params: Params) -> anyhow::Resul
 			round: params.round,
 			border_color,
 			border: params.border,
+			dim_below: false,
 		}),
 		style,
 	)?;
