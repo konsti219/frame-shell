@@ -25,6 +25,10 @@ export SHADERC_LIB_DIR="$build/host-libs"
 cargo build --locked --manifest-path /work/wayvr/Cargo.toml \
     --target aarch64-unknown-linux-gnu -p wayvr --lib --bin wayvr --release \
     --no-default-features --features openxr,wayland,feat-monado-metrics
+# X11 apps in WayVR (Steam's client among them): SteamOS doesn't ship xwayland-satellite
+cargo install --locked --git https://github.com/Supreeeme/xwayland-satellite --tag v0.8.3 \
+    --target aarch64-unknown-linux-gnu --root "$build/xwayland-satellite" xwayland-satellite
+install -Dm755 "$build/xwayland-satellite/bin/xwayland-satellite" "$build/stage/frame-shell/xwayland-satellite"
 install -Dm755 "$build/client/bin/wivrn" "$build/stage/frame-shell/frame-shell-client"
 aarch64-linux-gnu-strip --strip-debug "$build/stage/frame-shell/frame-shell-client"
 install -Dm755 "$CARGO_TARGET_DIR/aarch64-unknown-linux-gnu/release/libwayvr.so" "$build/stage/frame-shell/libwayvr.so"

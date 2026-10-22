@@ -1400,7 +1400,7 @@ impl WvrServerState {
             cmd.arg(format!("--env=WAYVR_DISPLAY_AUTH={auth_key}"));
             cmd.arg("--env=GDK_BACKEND=wayland,x11");
             cmd.arg("--env=QT_QPA_PLATFORM=wayland;xcb");
-            cmd.arg("--env=SDL_VIDEODRIVER=wayland");
+            cmd.arg("--env=SDL_VIDEODRIVER=wayland,x11");
             cmd.arg("--env=CLUTTER_BACKEND=wayland");
             cmd.arg("--env=MOZ_ENABLE_WAYLAND=1");
             cmd.arg("--env=ELECTRON_OZONE_PLATFORM_HINT=wayland");
@@ -1416,7 +1416,7 @@ impl WvrServerState {
         cmd.env("WAYVR_DISPLAY_AUTH", auth_key);
         cmd.env("GDK_BACKEND", "wayland,x11");
         cmd.env("QT_QPA_PLATFORM", "wayland;xcb");
-        cmd.env("SDL_VIDEODRIVER", "wayland");
+        cmd.env("SDL_VIDEODRIVER", "wayland,x11");
         cmd.env("CLUTTER_BACKEND", "wayland");
         cmd.env("MOZ_ENABLE_WAYLAND", "1");
         cmd.env("ELECTRON_OZONE_PLATFORM_HINT", "wayland");

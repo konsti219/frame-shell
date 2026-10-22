@@ -94,6 +94,18 @@ impl WayVRCompositor {
         seat_pointer: PointerHandle<comp::Application>,
     ) -> anyhow::Result<Self> {
         let (wayland_env, listener) = create_wayland_listener()?;
+        if crate::frame_shell::EMBEDDED.load(std::sync::atomic::Ordering::Relaxed)
+            && let Some(runtime) = std::env::var_os("XDG_RUNTIME_DIR")
+        {
+            super::plasma::link_gamescope_socket(runtime.into(), wayland_env.wayland_display_num_string());
+        }
+        // The frame shell's session has no desktop: Steam's client started for a game shows in WayVR
+        if crate::frame_shell::EMBEDDED.load(std::sync::atomic::Ordering::Relaxed) {
+            wlx_common::steam::set_launch_env(vec![
+                ("WAYLAND_DISPLAY".into(), wayland_env.wayland_display_num_string()),
+                ("DISPLAY".into(), wayland_env.display_num_string()),
+            ]);
+        }
 
         let xwayland_satellite = Command::new(bundled_executable("xwayland-satellite"))
             .arg(wayland_env.display_num_string())

@@ -95,7 +95,21 @@ pub fn launch(app_id: &AppID) -> anyhow::Result<()> {
 	Ok(())
 }
 
+/// Environment for Steam started by a launch request (the displays it opens its window on), when not the process's
+static LAUNCH_ENV: std::sync::OnceLock<Vec<(String, String)>> = std::sync::OnceLock::new();
+
+/// Steam's client started by a launch request (if it isn't running yet) gets this environment
+pub fn set_launch_env(env: Vec<(String, String)>) {
+	let _ = LAUNCH_ENV.set(env);
+}
+
 fn call_steam(arg: &str) -> anyhow::Result<()> {
+	// With a launch environment Steam starts from this process (xdg-open's handlers can drop the environment),
+	// without opening its window
+	if let Some(env) = LAUNCH_ENV.get() {
+		std::process::Command::new("steam").arg("-silent").arg(arg).envs(env.iter().cloned()).spawn()?;
+		return Ok(());
+	}
 	match std::process::Command::new("xdg-open").arg(arg).spawn() {
 		Ok(_) => Ok(()),
 		Err(_) => {

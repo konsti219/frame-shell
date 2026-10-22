@@ -44,3 +44,4 @@ RUN curl -fL 'https://download.pytorch.org/whl/cpu/torch-2.13.0%2Bcpu-cp313-cp31
     && rm -rf /tmp/executorch /tmp/torchgen /tmp/et-build
 
 RUN apt-get update && apt-get install -y --no-install-recommends glslc && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends libxcb-cursor-dev:arm64 && rm -rf /var/lib/apt/lists/*

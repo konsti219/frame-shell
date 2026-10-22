@@ -51,10 +51,13 @@ The shell launcher also exposes Monado's IPC socket inside Steam's game containe
 Its `VR_OVERRIDE` selects a bundled xrizer for OpenVR and Proton's VR initialization, using the same
 revision and Frame controller patches as the PC package (`nix/xrizer.json`). Both ARM64 and x86-64
 clients are built by `./build headset` and installed by `./deploy`; SteamVR's global runtime remains unchanged.
-Android games run through Lepton from Steam in that Plasma session. The shell's `PATH` holds two wrappers for it:
-`steamvr path` gives Lepton a folder with frame-monado's Android client and a hard link to Monado's socket, which
-Lepton mounts as the Android runtime, and `podman` uses the user's own session bus and runtime folder instead of
-Plasma's. The Plasma launcher links `gamescope-0` to KWin's socket, the Wayland display Lepton expects.
+Steam's client runs as a WayVR app (X11 through a bundled `xwayland-satellite`, which SteamOS lacks); the launcher
+clears the SteamOS session's Gamescope variables so it starts as the desktop client. Starting a game from the
+dashboard or a pin starts Steam on WayVR's displays if it isn't running. Android games run through Lepton: the
+shell's `PATH` holds `steamvr`, whose `path` gives Lepton a folder with frame-monado's Android client and a hard
+link to Monado's socket (Lepton mounts it as the Android runtime), and `podman`, which uses the user's own session
+bus and runtime folder when Steam runs in Plasma. `gamescope-0` links to WayVR's socket (KWin's in Plasma), the
+Wayland display Lepton expects.
 
 ## Several PCs
 

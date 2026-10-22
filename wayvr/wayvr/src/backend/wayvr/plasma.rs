@@ -77,7 +77,7 @@ impl PlasmaLaunch {
         config_dirs.push(std::env::var_os("XDG_CONFIG_DIRS").unwrap_or_else(|| "/etc/xdg".into()));
         cmd.env("WAYLAND_DISPLAY", socket);
         cmd.env("XDG_CONFIG_DIRS", config_dirs);
-        // Nested Plasma chooses its own application backends and is independent of the outer gamescope session.
+        // Nested Plasma chooses its own application backends
         for key in [
             "SDL_VIDEODRIVER",
             "GDK_BACKEND",
@@ -85,36 +85,27 @@ impl PlasmaLaunch {
             "CLUTTER_BACKEND",
             "MOZ_ENABLE_WAYLAND",
             "ELECTRON_OZONE_PLATFORM_HINT",
-            "STEAM_GAME_DISPLAY_0",
-            "STEAM_MULTIPLE_XWAYLANDS",
-            "STEAM_USE_MANGOAPP",
-            "STEAM_DISABLE_MANGOAPP_ATOM_WORKAROUND",
-            "ENABLE_GAMESCOPE_WSI",
             "LD_LIBRARY_PATH",
         ] {
             cmd.env_remove(key);
         }
-        for (key, _) in std::env::vars_os() {
-            if key.as_encoded_bytes().starts_with(b"GAMESCOPE_")
-                || key.as_encoded_bytes().starts_with(b"STEAM_GAMESCOPE_")
-                || key.as_encoded_bytes().starts_with(b"STEAM_MANGOAPP_")
-            {
-                cmd.env_remove(key);
-            }
-        }
         cmd.env("XDG_SESSION_DESKTOP", "KDE");
         cmd.process_group(0);
-        link_gamescope_socket(runtime.join("nested_plasma"));
+        link_gamescope_socket(runtime.join("nested_plasma"), "wayland-0".into());
         Ok(Some(launch))
     }
 }
 
-/// Lepton (Android games) takes Gamescope's socket in the session's runtime folder: KWin's, once it's there
-fn link_gamescope_socket(nested: PathBuf) {
+/// Lepton (Android games) takes Gamescope's socket in the session's runtime folder: a link to `socket` there, once
+/// it exists, unless Gamescope runs
+pub(crate) fn link_gamescope_socket(dir: PathBuf, socket: String) {
     std::thread::spawn(move || {
         for _ in 0..120 {
-            if nested.join("wayland-0").exists() {
-                if let Err(error) = std::os::unix::fs::symlink("wayland-0", nested.join("gamescope-0")) {
+            if dir.join("gamescope-0").symlink_metadata().is_ok() {
+                return;
+            }
+            if dir.join(&socket).exists() {
+                if let Err(error) = std::os::unix::fs::symlink(&socket, dir.join("gamescope-0")) {
                     log::warn!("Could not link Gamescope's socket for Lepton: {error}");
                 }
                 return;

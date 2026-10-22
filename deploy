@@ -34,7 +34,7 @@ rm -f "$HOME/.local/bin/frame-shell-desktop" "$HOME/.local/share/applications/de
     "$HOME/.local/share/frame-shell/desktop-config/autostart/steam.desktop" "$stage/desktop" "$stage/deckard-nested-desktop.desktop"
 rmdir "$HOME/.local/share/frame-shell/desktop-config/autostart" "$HOME/.local/share/frame-shell/desktop-config" 2>/dev/null || true
 install -m755 "$stage/frame-shell-client" "$HOME/.local/bin/frame-shell-client"
-install -Dm755 -t "$HOME/.local/lib/frame-shell/bin" "$stage/steamvr" "$stage/podman"
+install -Dm755 -t "$HOME/.local/lib/frame-shell/bin" "$stage/steamvr" "$stage/podman" "$stage/xwayland-satellite"
 install -m755 "$stage/wayvr" "$HOME/.local/bin/wayvr"
 install -m755 "$stage/"*.so* "$HOME/.local/lib/frame-shell/"
 cp -a "$stage/xrizer" "$HOME/.local/lib/frame-shell/"

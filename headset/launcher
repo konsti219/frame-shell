@@ -1,5 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
+# The session's Gamescope settings don't apply: the shell's apps (Steam's client among them) run under WayVR
+for var in $(compgen -e); do
+    case "$var" in GAMESCOPE_* | STEAM_GAMESCOPE_* | STEAM_MANGOAPP_*) unset "$var" ;; esac
+done
+unset ENABLE_GAMESCOPE_WSI STEAM_USE_MANGOAPP STEAM_DISABLE_MANGOAPP_ATOM_WORKAROUND STEAM_GAME_DISPLAY_0 \
+    STEAM_MULTIPLE_XWAYLANDS MANGOHUD_CONFIGFILE LIBEI_SOCKET XDG_DESKTOP_PORTAL_DIR \
+    DESKTOP_SESSION XDG_SESSION_DESKTOP XDG_CURRENT_DESKTOP
 export XR_RUNTIME_JSON="$HOME/.local/opt/monado/share/openxr/1/openxr_frame.json"
 export VR_OVERRIDE="$HOME/.local/lib/frame-shell/xrizer"
 # Its steamvr and podman commands give Lepton (Android games) Monado's Android client and the user's session
