@@ -744,7 +744,7 @@ impl Layout {
 	}
 
 	pub fn tick(&mut self) -> anyhow::Result<()> {
-		let mut alterables = EventAlterables::default();
+		let mut alterables = std::mem::take(&mut self.alterables);
 		self.animations.tick(&self.state, &mut alterables);
 		self.process_pending_widget_ticks(&mut alterables);
 		self.process_alterables(alterables)?;
