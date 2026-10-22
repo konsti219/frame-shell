@@ -1199,6 +1199,7 @@ fn desktop_overlay(name: Arc<str>, key: u64, app: &AppState) -> OverlayWindowCon
             shown: None,
             imports: HashMap::new(),
             renderer: None,
+            last_hover: None,
         }))
     }
 }
@@ -1217,6 +1218,8 @@ struct DesktopOverlay {
     /// The decoder cycles through a fixed pool of DMA-bufs: import each once
     imports: HashMap<u64, (Arc<ImageView>, Arc<ImageView>)>,
     renderer: Option<Nv12ScreenPipeline>,
+    /// Pointer and monitor pixel of the last hover, to leave the PC's mouse alone under a resting controller
+    last_hover: Option<(usize, [i32; 2])>,
 }
 
 impl DesktopOverlay {
@@ -1377,6 +1380,16 @@ impl OverlayBackend for DesktopOverlay {
             return offline.on_hover(app, hit);
         }
         POINTER_SURFACE.store(self.key, Ordering::Relaxed);
+        // A pointer that didn't move doesn't move the mouse, so the PC's own mouse keeps working
+        if let Some(meta) = self.meta {
+            let pixel = [
+                (hit.uv.x * meta.extent[0] as f32).round() as i32,
+                (hit.uv.y * meta.extent[1] as f32).round() as i32,
+            ];
+            if self.last_hover.replace((hit.pointer, pixel)) == Some((hit.pointer, pixel)) {
+                return HoverResult::consume();
+            }
+        }
         screen_hover(app, hit, hit.uv)
     }
     fn on_left(&mut self, app: &mut AppState, pointer: usize) {
