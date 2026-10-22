@@ -129,9 +129,8 @@ Once the host runtime change is committed and pushed, update the pinned dependen
 
 ## Upstream and checks
 
-WiVRn and WayVR were imported with Git subtree, so their source is present in a normal clone. No submodule init
-or private scratchpad checkout is needed. Import revisions and update commands are in [UPSTREAM.md](UPSTREAM.md).
-Feature status is in [PLAN.md](PLAN.md).
+WiVRn and WayVR are Git subtrees (squashed imports of upstream WiVRn and the WayVR fork), so their source is in a
+normal clone.
 
 Validate host changes with `./build host`, headset changes with `./build headset`, and protocol changes with
 both. Runtime changes belong in frame-monado. Deployment checks dynamic dependencies before replacing binaries.
@@ -195,7 +194,7 @@ The WiVRn tab's eye tracking line shows the update rate and whether it is still 
 - Headset `client.json`: `eye_expressions` (default on), `eye_expressions_divisor` (one model update per that many
   camera frames, default 1). The cameras run at frame-monado's `frame.eye_tracking_fps` (default 36).
   At divisor 1, increasing 15 to 72 Hz measured about +0.5 W and +17% of one CPU core for the eye process
-  plus shell in a panel-on idle test; [measurements](https://github.com/konsti219/steamframe/blob/main/monado.md#eye-tracking-rate-cost).
+  plus shell in a panel-on idle test.
 - Server config: `eye-osc` (`host:port`, default `127.0.0.1:9000`; empty or `false` turns it off) and
   `eye-osc-prefix` (default `/FT`).
 
