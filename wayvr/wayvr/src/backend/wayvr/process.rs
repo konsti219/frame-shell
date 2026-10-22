@@ -96,10 +96,26 @@ impl Drop for WayVRProcess {
     }
 }
 
-fn get_process_env_value(pid: i32, key: &str) -> anyhow::Result<Option<String>> {
-    let path = format!("/proc/{pid}/environ");
+/// A process's parent, from /proc/<pid>/stat (the field after the parenthesised name)
+fn parent_pid(pid: i32) -> Option<i32> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    stat.rsplit_once(')')?.1.split_whitespace().nth(1)?.parse().ok()
+}
+
+/// A process's environment; processes with file capabilities (kwin_wayland) hide theirs, so their parent's
+pub fn read_environ(pid: i32) -> std::io::Result<String> {
     let mut env_data = String::new();
-    std::fs::File::open(path)?.read_to_string(&mut env_data)?;
+    match std::fs::File::open(format!("/proc/{pid}/environ")).and_then(|mut file| file.read_to_string(&mut env_data)) {
+        Ok(_) => Ok(env_data),
+        Err(error) => match parent_pid(pid) {
+            Some(parent) if parent > 1 => read_environ(parent),
+            _ => Err(error),
+        },
+    }
+}
+
+fn get_process_env_value(pid: i32, key: &str) -> anyhow::Result<Option<String>> {
+    let env_data = read_environ(pid)?;
     let lines: Vec<&str> = env_data.split('\0').filter(|s| !s.is_empty()).collect();
 
     for line in lines {

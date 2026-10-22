@@ -38,6 +38,9 @@ flake's `xrizer` (the Frame's controller patches), `steamPackage` to start Steam
 PC-side WayVR IPC clients from this tree: `wayvrctl`, the Firefox media bridge and its extension (`media-bridge`,
 `ytmusic-extension`). Patches for upstream packages are in `nix/`.
 
+The headset's "Desktop" app (WayVR's launcher) is SteamOS's nested Plasma (`steamos-nested-desktop`, as in
+SteamVR) in a WayVR window; `headset/desktop` passes WayVR's socket by path and hides Plasma's Steam autostart.
+
 ## Several PCs
 
 The headset connects to every PC marked auto-connect (and any connected from the WiVRn tab), all with the same

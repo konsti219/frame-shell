@@ -9,6 +9,7 @@ tar -C "$stage" -cf - . | ssh "$headset" 'tar -C ~/.local/state/frame-shell/depl
 scp "$root/headset/not-with-shell.conf" "$headset":.local/state/frame-shell/deploy/not-with-shell.conf
 scp "$root/headset/launcher" "$headset":.local/state/frame-shell/deploy/launcher
 scp "$root/headset/frame-shell.desktop" "$headset":.local/state/frame-shell/deploy/frame-shell.desktop
+scp "$root/headset/desktop" "$root/headset/deckard-nested-desktop.desktop" "$headset":.local/state/frame-shell/deploy/
 scp "$root/headset/frame-shell.service" "$headset":.config/systemd/user/frame-shell.service
 ssh "$headset" 'systemctl --user daemon-reload'
 ssh "$headset" 'bash -s' <<'REMOTE'
@@ -26,6 +27,11 @@ mkdir -p "$HOME/.local/bin" "$HOME/.local/lib/frame-shell" "$HOME/.local/share/a
 install -m755 "$stage/launcher" "$HOME/.local/bin/frame-shell"
 # Listed in SteamVR's non-Steam apps: switches to the desktop session, which is the frame shell
 install -m644 "$stage/frame-shell.desktop" "$HOME/.local/share/applications/frame-shell.desktop"
+# Plasma in a window: replaces SteamOS's nested desktop entry (same file name)
+install -m755 "$stage/desktop" "$HOME/.local/bin/frame-shell-desktop"
+install -m644 "$stage/deckard-nested-desktop.desktop" "$HOME/.local/share/applications/deckard-nested-desktop.desktop"
+install -d "$HOME/.local/share/frame-shell/desktop-config/autostart"
+printf '[Desktop Entry]\nHidden=true\n' > "$HOME/.local/share/frame-shell/desktop-config/autostart/steam.desktop"
 install -m755 "$stage/frame-shell-client" "$HOME/.local/bin/frame-shell-client"
 install -m755 "$stage/wayvr" "$HOME/.local/bin/wayvr"
 install -m755 "$stage/"*.so* "$HOME/.local/lib/frame-shell/"

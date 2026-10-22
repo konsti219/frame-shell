@@ -1,5 +1,4 @@
 use std::{
-    io::Read,
     os::unix::net::UnixStream,
     path::PathBuf,
     process::{Child, Command},
@@ -65,9 +64,7 @@ impl Drop for WayVRCompositor {
 }
 
 fn get_wayvr_env_from_pid(pid: i32) -> anyhow::Result<ProcessWayVREnv> {
-    let path = format!("/proc/{pid}/environ");
-    let mut env_data = String::new();
-    std::fs::File::open(path)?.read_to_string(&mut env_data)?;
+    let env_data = super::process::read_environ(pid)?;
 
     let lines: Vec<&str> = env_data.split('\0').filter(|s| !s.is_empty()).collect();
 
