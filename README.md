@@ -193,7 +193,9 @@ carries them over the stream socket, and the server sends them as VRCFT v2 avata
 The WiVRn tab's eye tracking line shows the update rate and whether it is still calibrating.
 
 - Headset `client.json`: `eye_expressions` (default on), `eye_expressions_divisor` (one model update per that many
-  camera frames, default 1). The cameras run at the rate Valve's eye service sets (15 fps while unworn).
+  camera frames, default 1). The cameras run at frame-monado's `frame.eye_tracking_fps` (default 36).
+  At divisor 1, increasing 15 to 72 Hz measured about +0.5 W and +17% of one CPU core for the eye process
+  plus shell in a panel-on idle test; [measurements](https://github.com/konsti219/steamframe/blob/main/monado.md#eye-tracking-rate-cost).
 - Server config: `eye-osc` (`host:port`, default `127.0.0.1:9000`; empty or `false` turns it off) and
   `eye-osc-prefix` (default `/FT`).
 
