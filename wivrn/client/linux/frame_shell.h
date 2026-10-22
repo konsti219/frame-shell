@@ -9,6 +9,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <utility>
 #include <optional>
 #include <span>
 #include <string>
@@ -46,6 +47,23 @@ inline void hosts_state(const char * json) { api->hosts_state(json); }
 
 // A PC on standby started a VR application: the presenting stream gives way so the lobby can switch
 inline std::atomic<bool> switch_wanted{false};
+
+// The shell asked for a PC (cookie) to present VR ("present <cookie>"), handled by the lobby
+inline std::mutex present_mutex;
+inline std::string present_request;
+
+inline void request_present(std::string cookie)
+{
+    std::scoped_lock lock(present_mutex);
+    present_request = std::move(cookie);
+    switch_wanted = true;
+}
+
+inline std::string take_present_request()
+{
+    std::scoped_lock lock(present_mutex);
+    return std::exchange(present_request, {});
+}
 inline bool command_poll(char * buffer, size_t size) { return api->command_poll(buffer, size); }
 inline void drag_offset(float * out) { api->drag_offset(out); }
 

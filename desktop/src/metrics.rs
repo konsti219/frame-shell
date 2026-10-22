@@ -1,92 +1,34 @@
 use crate::Output;
 use crate::metrics_proto as proto;
-use anyhow::{Context, Result, bail};
-use libloading::Library;
+use anyhow::{Result, bail};
 use prost::Message;
 use std::{
-    ffi::c_void,
     io::{ErrorKind, Read},
     os::{
         fd::{AsFd, AsRawFd},
         unix::net::UnixStream,
     },
-    path::PathBuf,
     thread,
     time::{Duration, Instant},
 };
-use wayvr_ipc::frame::{HostMessage, SessionFrame};
+use wayvr_ipc::{
+    frame::{HostMessage, SessionFrame},
+    runtime::Runtime,
+};
 
-struct Runtime {
-    _library: Library,
-    root: *mut c_void,
-    destroy: unsafe extern "C" fn(*mut *mut c_void),
-}
-
-impl Drop for Runtime {
-    fn drop(&mut self) {
-        unsafe { (self.destroy)(&mut self.root) };
-    }
-}
-
-impl Runtime {
-    fn connect() -> Result<(Self, UnixStream)> {
-        let manifest = runtime_manifest()?;
-        let value: serde_json::Value = serde_json::from_slice(&std::fs::read(&manifest)?)?;
-        let library = value["runtime"]["MND_libmonado_path"]
-            .as_str()
-            .context("Runtime has no libmonado")?;
-        let library = manifest
-            .canonicalize()?
-            .parent()
-            .context("Invalid runtime path")?
-            .join(library);
-        // These signatures are the public libmonado API used by WayVR's metrics reader.
-        let library = unsafe { Library::new(library) }?;
-        let create = unsafe {
-            *library.get::<unsafe extern "C" fn(*mut *mut c_void) -> i32>(b"mnd_root_create\0")?
-        };
-        let destroy = unsafe {
-            *library.get::<unsafe extern "C" fn(*mut *mut c_void)>(b"mnd_root_destroy\0")?
-        };
-        let push = unsafe {
-            *library.get::<unsafe extern "C" fn(*mut c_void, i32, bool) -> i32>(
-                b"mnd_root_push_metrics_fd\0",
-            )?
-        };
-        let mut root = std::ptr::null_mut();
-        let result = unsafe { create(&mut root) };
-        if result != 0 {
-            bail!("Connecting to host runtime: {result}");
-        }
-        let runtime = Self {
-            _library: library,
-            root,
-            destroy,
-        };
-        let (reader, writer) = UnixStream::pair()?;
-        writer.set_nonblocking(true)?;
-        reader.set_nonblocking(true)?;
-        let result = unsafe { push(root, writer.as_fd().as_raw_fd(), true) };
-        if result != 0 {
-            bail!("Subscribing to runtime metrics: {result}");
-        }
-        Ok((runtime, reader))
-    }
-}
-
-fn runtime_manifest() -> Result<PathBuf> {
-    for name in ["FRAME_SHELL_RUNTIME_JSON", "XR_RUNTIME_JSON"] {
-        if let Some(path) = std::env::var_os(name) {
-            return Ok(path.into());
-        }
-    }
-    let home = PathBuf::from(std::env::var_os("HOME").context("No HOME")?);
-    Ok(home.join(".config/openxr/1/active_runtime.json"))
+/// The runtime's metrics stream, through libmonado
+fn connect() -> Result<(Runtime, UnixStream)> {
+    let runtime = Runtime::connect()?;
+    let (reader, writer) = UnixStream::pair()?;
+    writer.set_nonblocking(true)?;
+    reader.set_nonblocking(true)?;
+    runtime.push_metrics_fd(writer.as_fd().as_raw_fd())?;
+    Ok((runtime, reader))
 }
 
 pub fn run(output: &Output) {
     while !output.stopped() {
-        let result = Runtime::connect().and_then(|(_runtime, stream)| relay(stream, output));
+        let result = connect().and_then(|(_runtime, stream)| relay(stream, output));
         if let Err(error) = result {
             eprintln!("Host runtime metrics: {error:#}");
         }

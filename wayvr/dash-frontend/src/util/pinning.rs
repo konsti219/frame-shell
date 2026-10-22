@@ -66,7 +66,8 @@ fn get_cropped_cover_icon_path(app_id: &str) -> Option<String> {
 	Some(output_path.to_string_lossy().to_string())
 }
 
-fn get_game_pin_icon_path(app_id: &str) -> Option<String> {
+/// A Steam game's square artwork: Steam's icon, else the cropped cover from the games tab's cache
+pub fn game_icon_path(app_id: &str) -> Option<String> {
 	steam_utils::get_game_icon_path(app_id).or_else(|| get_cropped_cover_icon_path(app_id))
 }
 
@@ -74,7 +75,7 @@ pub fn build_game_pin(manifest: &AppManifest, host: Option<&str>) -> WvrPinLaunc
 	WvrPinLaunchParams {
 		name: manifest.name.clone(),
 		app_id: manifest.run_game_id.clone(),
-		icon: get_game_pin_icon_path(&manifest.app_id),
+		icon: game_icon_path(&manifest.app_id),
 		host: host.map(str::to_owned),
 	}
 }

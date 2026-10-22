@@ -45,7 +45,12 @@ server and protocol. Each streams its monitors; one presents VR. The others stan
 applications and monitors stay up, but they encode no VR video, get no tracking, and the headset holds no VR
 decoders for them (`video_active`). The PC whose VR application started last presents; when that application
 ends or the PC goes away, one still running an application takes over. Starting an application on a PC on
-standby from the shell starts it there (`on <source> start_app`), which then switches.
+standby from the shell starts it there (`on <source> start_app`), which then switches. The keyboard's top row shows the headset's
+own applications next to the WayVR button, then a group per PC: a button with its actions (connect, disconnect),
+its screens, its pins and running applications. Running applications are the runtime's clients (libmonado, on the
+headset and through each PC's host), with their Steam game's artwork when `/proc/<pid>/environ` has `SteamAppId`.
+Clicking one shows it: its PC presents (`present <cookie>`, which holds until a VR application starts elsewhere)
+and it becomes the runtime's primary client.
 
 ## Source map
 

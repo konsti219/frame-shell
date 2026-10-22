@@ -69,6 +69,10 @@ pub(crate) fn pinned_runtime_signature(app: &AppState) -> u64 {
             .unwrap_or(0);
         stop_stage.hash(&mut hasher);
     }
+    // The frame shell's PC groups and running applications
+    if crate::frame_shell::EMBEDDED.load(Ordering::Relaxed) {
+        crate::frame_shell::top_row_signature(app).hash(&mut hasher);
+    }
 
     hasher.finish()
 }
@@ -843,6 +847,33 @@ pub(super) fn setup_custom_button<S: 'static>(
                             return Ok(EventResult::Pass);
                         }
                         crate::frame_shell::toggle_screen_host(app, &screen);
+                        Ok(EventResult::Consumed)
+                    })
+                }
+                "::FrameShellStop" => {
+                    // A Steam game on a PC (source number) or on the headset ("native"), "force" to kill it
+                    let source = args.next().and_then(|source| source.parse::<u32>().ok());
+                    let app_id = args.next().unwrap_or_default().to_owned();
+                    let force = args.next() == Some("force");
+                    Box::new(move |_common, data, app, _| {
+                        if !test_button(data) || !test_duration(&button, app) {
+                            return Ok(EventResult::Pass);
+                        }
+                        crate::frame_shell::stop_game(source, &app_id, force);
+                        Ok(EventResult::Consumed)
+                    })
+                }
+                "::RuntimeFocus" => {
+                    // Makes a runtime client the one shown: a PC's (its source) or the headset's own ("native")
+                    let source = args.next().and_then(|source| source.parse::<u32>().ok());
+                    let client = args.next().and_then(|id| id.parse::<u32>().ok());
+                    Box::new(move |_common, data, app, _| {
+                        if !test_button(data) || !test_duration(&button, app) {
+                            return Ok(EventResult::Pass);
+                        }
+                        if let Some(client) = client {
+                            crate::frame_shell::focus_client(source, client);
+                        }
                         Ok(EventResult::Consumed)
                     })
                 }

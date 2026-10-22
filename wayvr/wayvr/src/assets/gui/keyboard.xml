@@ -154,6 +154,47 @@
     </Button>
   </template>
 
+  <!-- Frame shell: a PC's group, led by a button with the PC's actions; its screens and applications follow -->
+  <blueprint name="menu_host">
+    <context_menu>
+      <cell text="${action_label}" _press="${action}" _press2="::ContextMenuClose" />
+    </context_menu>
+  </blueprint>
+
+  <template name="HostGroup">
+    <!-- None for the first group while the headset has nothing in the row -->
+    <rectangle width="2" height="100%" color="primary" display="${separator}" />
+    <div id="host_${idx}" gap="6" align_items="center">
+      <Button macro="button_style" id="hostbtn_${idx}" tooltip_str="${name}" _context_action="${action}" _context_action_label="${action_label}" _press="::ContextMenuOpen menu_host">
+        <sprite width="38" height="38" src_builtin="@/keyboard/host.svg" />
+        <rectangle display="${presenting_display}" new_pass="1" position="absolute" width="20" height="20" margin_top="-26" margin_left="26"
+          align_items="center" justify_content="center" round="50%" color="primary" border="2" border_color="background">
+          <sprite width="12" height="12" color="background" parent_color="ignore" src_builtin="@/edit/3d.svg" />
+        </rectangle>
+      </Button>
+    </div>
+  </template>
+
+  <!-- An application running on a PC or the headset; Steam games can be stopped -->
+  <blueprint name="menu_client">
+    <context_menu>
+      <cell text="Stop" _press="::FrameShellStop ${source} ${app_id}" _press2="::ContextMenuClose" />
+      <cell text="Force stop" _press="::FrameShellStop ${source} ${app_id} force" _press2="::ContextMenuClose" />
+    </context_menu>
+  </blueprint>
+
+  <template name="Client">
+    <Button macro="button_style" id="client_${idx}" tooltip_str="${name}" _context_source="${source}" _context_app_id="${app_id}" _press_left="${show}" _press_right="::ContextMenuOpen menu_client">
+      <sprite width="38" height="38" src="${icon_builtin}" src_ext="${icon}" parent_color="ignore" />
+    </Button>
+  </template>
+
+  <template name="ClientShow">
+    <Button macro="button_style" id="client_${idx}" tooltip_str="${name}" _press="${show}">
+      <sprite width="38" height="38" src_builtin="@/edit/3d.svg" />
+    </Button>
+  </template>
+
   <blueprint name="menu_panel">
     <context_menu >
       <!-- title text="${name}" /-->
@@ -243,10 +284,13 @@
             <sprite width="38" height="38" src="@/watch/wayvr_dashboard_mono.svg"  />
           </Button>
           <VerticalSeparator />
+          <!-- The headset's own: WayVR apps, local pins and the runtime's other clients; hidden while empty -->
+          <div id="apps_root" gap="6" skip="${openvr}">
+          </div>
           <div id="panels_root" gap="6">
           </div>
-          <VerticalSeparator />
-          <div id="apps_root" gap="6" skip="${openvr}">
+          <!-- Frame shell: one group per PC (HostGroup) -->
+          <div id="hosts_root" gap="10">
           </div>
         </div>
         <div id="tray_root" flex_direction="row" gap="10">

@@ -288,6 +288,8 @@ class lobby : public scene_impl<lobby>
 	std::string connecting_name;
 	// A failed connection to a PC that would have stood by: cookie, message
 	std::optional<std::pair<std::string, std::string>> standby_error;
+	// When a PC was last picked to present in the shell (steady clock ns): only later VR applications switch away
+	int64_t present_override = 0;
 	// Auto-connect PCs that failed to connect as standby, and when to try again
 	std::map<std::string, std::chrono::steady_clock::time_point> standby_retry;
 	std::string hosts_json;

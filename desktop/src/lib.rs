@@ -3,6 +3,7 @@
 //! notifications, for one headset connection at a time.
 
 mod capture;
+mod clients;
 mod games;
 mod ipc_proxy;
 mod metrics;
@@ -139,6 +140,7 @@ struct Host {
     output: Output,
     shared: Arc<Shared>,
     games: Sender<(String, bool)>,
+    focus: Sender<u32>,
     proxy: Arc<ipc_proxy::Proxy>,
     threads: Vec<JoinHandle<()>>,
 }
@@ -153,6 +155,7 @@ impl Host {
         };
         let shared = Arc::new(Shared::default());
         let (games, games_rx) = mpsc::channel();
+        let (focus, focus_rx) = mpsc::channel();
         let proxy = Arc::new(ipc_proxy::Proxy::default());
         let mut threads = Vec::new();
         let mut spawn = |name: &str, body: Box<dyn FnOnce() + Send>| {
@@ -169,6 +172,8 @@ impl Host {
         spawn("games", Box::new(move || games::run(&worker, &games_rx)));
         let worker = output.clone();
         spawn("metrics", Box::new(move || metrics::run(&worker)));
+        let worker = output.clone();
+        spawn("clients", Box::new(move || clients::run(&worker, &focus_rx)));
         let worker = output.clone();
         spawn(
             "notify-udp",
@@ -190,6 +195,7 @@ impl Host {
             output,
             shared,
             games,
+            focus,
             proxy,
             threads,
         })
@@ -210,6 +216,9 @@ impl Host {
                 if app_id.parse::<u64>().is_ok() {
                     let _ = self.games.send((app_id, force));
                 }
+            }
+            ShellMessage::FocusClient(client) => {
+                let _ = self.focus.send(client);
             }
             ShellMessage::Ipc(connection, packet) => self.proxy.send(connection, &packet),
             ShellMessage::IpcClose(connection) => self.proxy.close(connection),

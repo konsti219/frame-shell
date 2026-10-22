@@ -460,7 +460,7 @@ void scenes::stream::operator()(to_headset::desktop_video && video)
 #ifndef __ANDROID__
 static bool is_stream_command(std::string_view command)
 {
-	return command == "disconnect" or command.starts_with("start_app ") or command.starts_with("set_active_app ") or command.starts_with("setting ") or command.starts_with("stop_app ");
+	return command == "disconnect" or command.starts_with("present ") or command.starts_with("start_app ") or command.starts_with("set_active_app ") or command.starts_with("setting ") or command.starts_with("stop_app ");
 }
 
 void scenes::stream::poll_shell()
@@ -506,6 +506,8 @@ void scenes::stream::poll_shell()
 			frame_shell::user_disconnected = true;
 			exit();
 		}
+		else if (command->starts_with("present "))
+			frame_shell::request_present(command->substr(8));
 		else if (command->starts_with("start_app "))
 			start_application(command->substr(10));
 		else if (command->starts_with("stop_app "))

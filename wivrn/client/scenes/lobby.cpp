@@ -1528,7 +1528,7 @@ scene::meta & scenes::lobby::get_meta_scene()
 #ifndef __ANDROID__
 static bool is_lobby_command(std::string_view command)
 {
-	for (std::string_view prefix: {"connect ", "disconnect", "pin ", "pin_cancel", "autoconnect ", "forget ", "setting "})
+	for (std::string_view prefix: {"connect ", "disconnect", "present ", "pin ", "pin_cancel", "autoconnect ", "forget ", "setting "})
 		if (command.starts_with(prefix))
 			return true;
 	return false;
@@ -1686,6 +1686,8 @@ void scenes::lobby::handle_shell_command(const std::string & command)
 			connect(server->second);
 		}
 	}
+	else if (command.starts_with("present "))
+		frame_shell::request_present(argument(0));
 	else if (command.starts_with("disconnect "))
 	{
 		// A PC on standby, or one being connected; auto-connect leaves it alone until connected again
@@ -1758,9 +1760,19 @@ void scenes::lobby::manage_standby(float fps)
 	std::erase_if(standby, [](auto & pc) { return pc.scene->current_state() == stream::state::shutdown; });
 	frame_shell::switch_wanted = false;
 
-	auto newest = std::ranges::max_element(standby, {}, [](auto & pc) { return pc.scene->vr_app_started(); });
-	bool promote = newest != standby.end() and
-	               (not next_scene or newest->scene->vr_app_started() > next_scene->vr_app_started());
+	// A PC picked in the shell presents until a VR application starts after that choice
+	auto requested = frame_shell::take_present_request();
+	if (not requested.empty() and (requested == active_cookie or std::ranges::any_of(standby, [&](auto & pc) { return pc.cookie == requested; })))
+		present_override = std::chrono::steady_clock::now().time_since_epoch().count();
+
+	auto newest = std::ranges::find_if(standby, [&](auto & pc) { return pc.cookie == requested; });
+	bool promote = newest != standby.end();
+	if (not promote)
+	{
+		newest = std::ranges::max_element(standby, {}, [](auto & pc) { return pc.scene->vr_app_started(); });
+		promote = newest != standby.end() and
+		          (not next_scene or newest->scene->vr_app_started() > std::max(next_scene->vr_app_started(), present_override));
+	}
 	if (promote)
 	{
 		spdlog::info("Presenting VR from {}", newest->scene->apps.server());

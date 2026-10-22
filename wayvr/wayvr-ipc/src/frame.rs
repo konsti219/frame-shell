@@ -16,6 +16,8 @@ pub enum HostMessage {
 	Games(Vec<String>),
 	/// Host runtime frame timings, for the watch
 	Frames(Vec<SessionFrame>),
+	/// The PC runtime's clients
+	Clients(Vec<RuntimeClient>),
 	Error(String),
 	Notification(Notification),
 	/// A wayvr-ipc client on the PC (the browser media bridge, wayvrctl) connected to the shell through the host
@@ -37,6 +39,8 @@ pub enum ShellMessage {
 		app_id: String,
 		force: bool,
 	},
+	/// Make a PC runtime client the one shown
+	FocusClient(u32),
 	Ipc(u32, PacketServer),
 	IpcClose(u32),
 }
@@ -120,4 +124,17 @@ impl ShellMessage {
 		anyhow::ensure!(data.len() <= MAX_MESSAGE, "Shell message too large");
 		crate::ipc::data_decode(data)
 	}
+}
+
+/// An OpenXR runtime client with an active session (frame shell runtimes, through libmonado)
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct RuntimeClient {
+	pub id: u32,
+	pub name: String,
+	pub pid: i32,
+	/// The Steam game it is, from its process environment
+	pub steam_app_id: Option<String>,
+	/// Shown (Monado's primary application)
+	pub primary: bool,
+	pub overlay: bool,
 }

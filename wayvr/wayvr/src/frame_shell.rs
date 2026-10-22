@@ -452,22 +452,28 @@ pub fn toggle_screen_host(app: &mut AppState, screen: &str) {
         toast(app, format!("{host} is not a known PC"));
         return;
     };
-    let active = lobby.get("server").and_then(serde_json::Value::as_str) == Some(name.as_str())
-        && matches!(
-            lobby.get("state").and_then(serde_json::Value::as_str),
-            Some("connected" | "connecting" | "pin")
-        );
-    connect_host(app, host, !active);
+    let active = source_for_host(&name).is_some()
+        || (lobby.get("server").and_then(serde_json::Value::as_str) == Some(name.as_str())
+            && matches!(
+                lobby.get("state").and_then(serde_json::Value::as_str),
+                Some("connecting" | "pin")
+            ));
+    connect_host(app, &name, !active);
 }
 
 /// Connects to (or disconnects from) a PC by service or host name
 pub fn connect_host(app: &mut AppState, host: &str, connect: bool) {
+    let (lobby, _) = lobby_json();
     if !connect {
-        send_command("disconnect");
+        // The PC presenting VR, or one on standby
+        if connected_host().as_deref() == Some(host) {
+            send_command("disconnect");
+        } else if let Some((_, cookie)) = find_server(&lobby, host) {
+            send_command(&format!("disconnect {cookie}"));
+        }
         toast(app, format!("Disconnecting from {host}"));
         return;
     }
-    let (lobby, _) = lobby_json();
     match find_server(&lobby, host) {
         Some((name, cookie)) => {
             send_command(&format!("connect {cookie}"));
@@ -1526,4 +1532,180 @@ fn source_for_host(host: &str) -> Option<u32> {
 
 pub fn pinned_stop_key(host: Option<&str>, app_id: &str) -> String {
     host.map_or_else(|| app_id.to_owned(), |host| format!("{host}:{app_id}"))
+}
+
+// ---- Keyboard top row: one group per PC, and the headset's own clients ----
+
+/// An application running on a PC or on the headset, for the keyboard's top row
+pub struct RunningClient {
+    pub name: String,
+    /// Steam app id: its artwork, matching pins and stopping it
+    pub app_id: Option<String>,
+    /// Button action making it the application shown in VR
+    pub show: String,
+}
+
+/// A PC in the keyboard's top row; its screens are the overlays named "<screen_prefix> <output>"
+pub struct TopRowHost {
+    pub name: String,
+    pub screen_prefix: String,
+    pub cookie: String,
+    /// Its connection's source number, if connected
+    pub source: Option<u32>,
+    pub presenting: bool,
+    pub clients: Vec<RunningClient>,
+}
+
+/// Known PCs that are found on the network or connected, with what runs on them
+pub fn top_row_hosts() -> Vec<TopRowHost> {
+    let (lobby, _) = lobby_json();
+    let field = |value: &serde_json::Value, key: &str| {
+        value
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_owned()
+    };
+    let presenting_name = connected_host();
+    let standby = hosts();
+    let mut out = Vec::new();
+    for server in lobby
+        .get("servers")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let name = field(server, "name");
+        let cookie = field(server, "cookie");
+        let listed = standby
+            .as_array()
+            .is_some_and(|pcs| pcs.iter().any(|pc| field(pc, "cookie") == cookie));
+        let source = source_for_host(&name);
+        let visible = server
+            .get("visible")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        if !visible && !listed && source.is_none() {
+            continue;
+        }
+        // Screens are named after the PC's hostname; an address (manually added PCs) names none
+        let hostname = field(server, "hostname");
+        let short = hostname.split('.').next().unwrap_or_default();
+        let screen_prefix = if short.is_empty() || short.chars().all(|c| c.is_ascii_digit()) {
+            name.clone()
+        } else {
+            short.to_owned()
+        };
+        let presenting = presenting_name.as_deref() == Some(name.as_str());
+        let clients = source.map_or_else(Vec::new, pc_clients);
+        out.push(TopRowHost {
+            name,
+            screen_prefix,
+            cookie,
+            source,
+            presenting,
+            clients,
+        });
+    }
+    out
+}
+
+/// A runtime's clients as running applications; `source` is the PC's, None for the headset
+fn running_clients(source: Option<u32>, clients: Vec<wayvr_ipc::frame::RuntimeClient>) -> Vec<RunningClient> {
+    let target = source.map_or_else(|| "native".to_owned(), |s| s.to_string());
+    clients
+        .into_iter()
+        .map(|client| RunningClient {
+            name: client.name,
+            app_id: client.steam_app_id,
+            show: format!("::RuntimeFocus {target} {}", client.id),
+        })
+        .collect()
+}
+
+fn pc_clients(source: u32) -> Vec<RunningClient> {
+    running_clients(Some(source), crate::frame_host::clients(source))
+}
+
+/// The headset's runtime, for its own clients
+static NATIVE_RUNTIME: Mutex<Option<wayvr_ipc::runtime::Runtime>> = Mutex::new(None);
+
+fn native_runtime<T>(f: impl FnOnce(&wayvr_ipc::runtime::Runtime) -> anyhow::Result<T>) -> Option<T> {
+    let mut runtime = NATIVE_RUNTIME
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if runtime.is_none() {
+        *runtime = wayvr_ipc::runtime::Runtime::connect().ok();
+    }
+    let result = f(runtime.as_ref()?);
+    if result.is_err() {
+        *runtime = None;
+    }
+    result.ok()
+}
+
+/// The headset's own clients, not the shell's (WayVR and the WiVRn client run in this process)
+pub fn native_clients(_app: &AppState) -> Vec<RunningClient> {
+    let own = std::process::id() as i32;
+    let clients = native_runtime(|runtime| runtime.clients())
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|client| client.pid != own)
+        .collect();
+    running_clients(None, clients)
+}
+
+/// Shows a runtime client: a PC's (presenting that PC first) or the headset's own (None)
+pub fn focus_client(source: Option<u32>, client: u32) {
+    let Some(source) = source else {
+        native_runtime(|runtime| runtime.set_primary(client));
+        return;
+    };
+    if crate::frame_host::vr_source() != Some(source)
+        && let Some(cookie) = hosts().as_array().and_then(|pcs| {
+            pcs.iter()
+                .find(|pc| pc.get("source").and_then(serde_json::Value::as_u64) == Some(u64::from(source)))
+                .and_then(|pc| pc.get("cookie").and_then(serde_json::Value::as_str))
+                .map(str::to_owned)
+        })
+    {
+        send_command(&format!("present {cookie}"));
+    }
+    crate::frame_host::send(source, &wayvr_ipc::frame::ShellMessage::FocusClient(client));
+}
+
+/// Changes when what the keyboard's top row shows of PCs and clients does
+pub fn top_row_signature(app: &AppState) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for host in top_row_hosts() {
+        (&host.name, &host.cookie, host.source, host.presenting).hash(&mut hasher);
+        for client in &host.clients {
+            (&client.name, &client.app_id, &client.show).hash(&mut hasher);
+        }
+    }
+    for client in native_clients(app) {
+        (&client.name, &client.app_id, &client.show).hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
+/// Stops a Steam game on a PC (by source number) or on the headset (None)
+pub fn stop_game(source: Option<u32>, app_id: &str, force: bool) {
+    match source {
+        Some(source) => {
+            crate::frame_host::send(
+                source,
+                &wayvr_ipc::frame::ShellMessage::StopGame {
+                    app_id: app_id.to_owned(),
+                    force,
+                },
+            );
+        }
+        None => {
+            if let Err(error) = wlx_common::steam::stop(app_id, force) {
+                log::warn!("Could not stop {app_id}: {error:?}");
+            }
+        }
+    }
 }

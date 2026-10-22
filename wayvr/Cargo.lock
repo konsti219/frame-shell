@@ -6179,6 +6179,7 @@ dependencies = [
  "async-io",
  "bytes",
  "interprocess",
+ "libloading 0.8.9",
  "log",
  "serde",
  "serde_json",

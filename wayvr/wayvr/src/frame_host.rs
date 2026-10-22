@@ -8,7 +8,10 @@ use std::{
     time::{Duration, Instant},
 };
 use wayvr_ipc::{
-    frame::{DesktopSettings, HostMessage, Notification, SessionFrame, ShellMessage, SystemStats},
+    frame::{
+        DesktopSettings, HostMessage, Notification, RuntimeClient, SessionFrame, ShellMessage,
+        SystemStats,
+    },
     packet_client::PacketClient,
 };
 
@@ -26,6 +29,8 @@ struct Pc {
     /// It streams VR, rather than only its monitors
     vr: bool,
     games: Option<(Instant, Vec<String>)>,
+    /// Its runtime's clients
+    clients: Vec<RuntimeClient>,
     sent_settings: Option<DesktopSettings>,
 }
 
@@ -94,6 +99,7 @@ pub fn connected(source: u32, vr: bool) {
     let pc = state.pcs.entry(source).or_insert(Pc {
         vr,
         games: None,
+        clients: Vec::new(),
         sent_settings: None,
     });
     pc.vr = vr;
@@ -128,6 +134,12 @@ pub fn receive(source: u32, data: &[u8]) {
             let changed = pc.games.as_ref().is_none_or(|(_, old)| *old != games);
             pc.games = Some((Instant::now(), games));
             if changed {
+                crate::frame_shell::bump_lobby_state();
+            }
+        }
+        HostMessage::Clients(clients) => {
+            if pc.clients != clients {
+                pc.clients = clients;
                 crate::frame_shell::bump_lobby_state();
             }
         }
@@ -222,6 +234,15 @@ pub fn games(source: u32) -> Option<Vec<String>> {
         .and_then(|pc| pc.games.as_ref())
         .filter(|(updated, _)| updated.elapsed() < FRESH)
         .map(|(_, games)| games.clone())
+}
+
+/// A PC runtime's clients
+pub fn clients(source: u32) -> Vec<RuntimeClient> {
+    state()
+        .pcs
+        .get(&source)
+        .map(|pc| pc.clients.clone())
+        .unwrap_or_default()
 }
 
 /// Whether a games list went stale since the last call
