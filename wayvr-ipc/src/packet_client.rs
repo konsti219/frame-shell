@@ -81,6 +81,10 @@ pub enum WlxModifyPanelCommand {
 	SetStickyState(bool),
 	/// Value of a slider, checkbox or radio group
 	SetValue(String),
+	/// Height of an element: pixels, or a percentage of its parent with `%`
+	SetHeight(String),
+	/// Content of a <sprite> or <image>: svg, gif, png, jpeg or webp data
+	SetImageData(Vec<u8>),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

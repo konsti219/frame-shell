@@ -443,6 +443,12 @@ impl Connection {
                     packet_client::WlxModifyPanelCommand::SetValue(value) => {
                         ModifyPanelCommand::SetValue(value)
                     }
+                    packet_client::WlxModifyPanelCommand::SetHeight(height) => {
+                        ModifyPanelCommand::SetHeight(height)
+                    }
+                    packet_client::WlxModifyPanelCommand::SetImageData(data) => {
+                        ModifyPanelCommand::SetImageData(data)
+                    }
                 },
             }));
     }

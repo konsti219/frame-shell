@@ -613,6 +613,45 @@ pub fn apply_custom_command<T>(
                 radio.set_value(&mut com, value_str)?;
             }
         }
+        ModifyPanelCommand::SetHeight(height) => {
+            let wid = panel
+                .parser_state
+                .get_widget_id(element)
+                .context("No widget with such id.")?;
+            let height = match height.strip_suffix('%') {
+                Some(percent) => wgui::taffy::Dimension::percent(
+                    percent.trim().parse::<f32>().context("Not a valid percentage")? / 100.0,
+                ),
+                None => wgui::taffy::Dimension::length(
+                    height.trim().parse::<f32>().context("Not a valid number")?,
+                ),
+            };
+            com.alterables
+                .set_style(wid, wgui::event::StyleSetRequest::Height(height));
+            com.alterables.mark_redraw();
+        }
+        ModifyPanelCommand::SetImageData(bytes) => {
+            let pair = panel
+                .parser_state
+                .fetch_widget(com.state, element)
+                .context("No <sprite> or <image> with such id.")?;
+            // Cached by content, under a name per element
+            let key = format!("ipc:{element}");
+            let is_svg = bytes.iter().find(|b| !b.is_ascii_whitespace()) == Some(&b'<');
+            let data = if is_svg {
+                CustomGlyphData::from_bytes_svg(&app.wgui_globals, &key, bytes)
+            } else {
+                CustomGlyphData::from_bytes_raster(&app.wgui_globals, &key, bytes)
+            }
+            .context("Could not decode the image.")?;
+            if let Some(mut sprite) = pair.widget.get_as::<WidgetSprite>() {
+                sprite.set_content(com.alterables, Some(data));
+            } else if let Some(mut image) = pair.widget.get_as::<WidgetImage>() {
+                image.set_content(com.alterables, Some(data));
+            } else {
+                anyhow::bail!("No <sprite> or <image> with such id.");
+            }
+        }
         ModifyPanelCommand::GetValue => todo!(),
         ModifyPanelCommand::SetStickyState(sticky_down) => {
             let button = panel
