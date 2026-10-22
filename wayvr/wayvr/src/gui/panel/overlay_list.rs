@@ -43,23 +43,10 @@ impl OverlayList {
 
             layout.remove_children(apps_root);
 
-            let mut stop_clicks_to_reset = Vec::<String>::new();
-
-            for (i, pin) in app.session.config.pinned_games.iter().enumerate() {
-                // In the frame shell, pins go into their PC's group (rebuild_groups)
-                if crate::frame_shell::EMBEDDED.load(std::sync::atomic::Ordering::Relaxed) {
-                    continue;
+            for (i, _) in app.session.config.pinned_games.iter().enumerate() {
+                if !crate::frame_shell::EMBEDDED.load(std::sync::atomic::Ordering::Relaxed) {
+                    add_pin(app, layout, parser_state, doc_params, apps_root, i)?;
                 }
-                if !add_pin(app, layout, parser_state, doc_params, apps_root, i)? {
-                    stop_clicks_to_reset.push(crate::frame_shell::pinned_stop_key(
-                        pin.host.as_deref(),
-                        &pin.app_id,
-                    ));
-                }
-            }
-
-            for pin_id in stop_clicks_to_reset {
-                app.session.pinned_stop_clicks.remove(&pin_id);
             }
 
             Ok(())
@@ -87,7 +74,12 @@ impl OverlayList {
 
                 let (template, root) = match meta.category {
                     // The frame shell groups screens by PC (rebuild_groups)
-                    OverlayCategory::Screen if crate::frame_shell::EMBEDDED.load(std::sync::atomic::Ordering::Relaxed) => continue,
+                    OverlayCategory::Screen
+                        if crate::frame_shell::EMBEDDED
+                            .load(std::sync::atomic::Ordering::Relaxed) =>
+                    {
+                        continue;
+                    }
                     OverlayCategory::Screen => {
                         params.insert(
                             "keep_visible_display",
@@ -204,18 +196,6 @@ impl OverlayList {
                 elements_changed = true;
             }
             OverlayEventData::VisibleOverlaysChanged(overlays) => {
-                let keyboard_id = self
-                    .last_metas
-                    .iter()
-                    .find(|meta| matches!(meta.category, OverlayCategory::Keyboard))
-                    .map(|meta| meta.id);
-                if let Some(keyboard_id) = keyboard_id
-                    && !overlays.as_ref().contains(&keyboard_id)
-                {
-                    // Closing the keyboard resets the stop click sequence.
-                    app.session.pinned_stop_clicks.clear();
-                }
-
                 let mut overlay_buttons = self.overlay_buttons.clone();
 
                 for visible in overlays.as_ref() {
@@ -255,40 +235,49 @@ fn add_pin(
         |host| crate::frame_shell::remote_game_running(host, &pin.app_id),
     );
 
-    let stop_stage = app
-        .session
-        .pinned_stop_clicks
-        .get(&crate::frame_shell::pinned_stop_key(
-            pin.host.as_deref(),
-            &pin.app_id,
-        ))
-        .copied()
-        .unwrap_or(0);
-
+    let (source, clients) = pin.host.as_ref().map_or_else(
+        || (None, crate::frame_shell::native_clients(app)),
+        |name| {
+            crate::frame_shell::top_row_hosts()
+                .into_iter()
+                .find(|host| host.name == *name)
+                .map_or((None, Vec::new()), |host| (host.source, host.clients))
+        },
+    );
+    if let Some(client) = clients
+        .iter()
+        .find(|c| c.app_id.as_deref() == Some(&pin.app_id))
+    {
+        add_client(
+            layout,
+            parser_state,
+            doc_params,
+            root,
+            100_000 + i,
+            source,
+            client,
+            Some(i),
+        )?;
+        return Ok(true);
+    }
     let mut params = TemplateParams::new();
     params.insert_rc("idx", i.to_string().into());
     params.insert("name", pin.name.as_str());
     params.insert_rc(
         "icon",
-        if running && stop_stage >= 1 {
-            "".into()
-        } else {
-            pin.icon
-                .as_ref()
-                .map_or_else(|| "".into(), |x| x.as_str().into())
-        },
+        pin.icon
+            .as_ref()
+            .map_or_else(|| "".into(), |x| x.as_str().into()),
     );
-    params.insert(
-        "icon_builtin",
-        if running && stop_stage >= 2 {
-            "@/dashboard/knife.svg"
-        } else if running && stop_stage >= 1 {
-            "@/dashboard/remove_circle.svg"
-        } else {
-            "@/edit/panel.svg"
-        },
+    params.insert("icon_builtin", "@/edit/3d.svg");
+    params.insert("running_skip", if running { "0" } else { "1" });
+    params.insert("app_id", &pin.app_id);
+    params.insert_rc(
+        "source",
+        source
+            .map_or_else(|| "native".to_owned(), |s| s.to_string())
+            .into(),
     );
-
     parser_state.instantiate_template(doc_params, "PinnedApp", layout, root, params)?;
 
     let pin_button = parser_state.fetch_component_as::<ComponentButton>(&format!("pinned_{i}"))?;
@@ -298,7 +287,7 @@ fn add_pin(
     Ok(running)
 }
 
-/// A running application's button in `root`: left shows it, right stops Steam games
+/// Left selects the default app or toggles an overlay; right opens its controls.
 fn add_client(
     layout: &mut Layout,
     parser_state: &mut ParserState,
@@ -307,20 +296,42 @@ fn add_client(
     idx: usize,
     source: Option<u32>,
     client: &crate::frame_shell::RunningClient,
+    pin: Option<usize>,
 ) -> anyhow::Result<()> {
     let mut params = TemplateParams::new();
     params.insert_rc("idx", idx.to_string().into());
     params.insert("name", client.name.as_str());
     params.insert("show", client.show.as_str());
+    params.insert("pin_skip", if pin.is_some() { "0" } else { "1" });
+    params.insert_rc("pin", pin.unwrap_or_default().to_string().into());
+    params.insert_rc("client", client.client_id.to_string().into());
+    params.insert_rc(
+        "source",
+        source
+            .map_or_else(|| "native".to_owned(), |s| s.to_string())
+            .into(),
+    );
+    params.insert(
+        "stop_skip",
+        if client.app_id.is_some() {
+            "0"
+        } else {
+            "1"
+        },
+    );
     let template = if let Some(app_id) = &client.app_id {
         params.insert_rc(
             "source",
-            source.map_or_else(|| "native".to_owned(), |s| s.to_string()).into(),
+            source
+                .map_or_else(|| "native".to_owned(), |s| s.to_string())
+                .into(),
         );
         params.insert("app_id", app_id.as_str());
         params.insert_rc(
             "icon",
-            dash_frontend::game_icon_path(app_id).unwrap_or_default().into(),
+            dash_frontend::game_icon_path(app_id)
+                .unwrap_or_default()
+                .into(),
         );
         params.insert("icon_builtin", "@/edit/3d.svg");
         "Client"
@@ -329,7 +340,7 @@ fn add_client(
     };
     parser_state.instantiate_template(doc_params, template, layout, root, params)?;
     let button = parser_state.fetch_component_as::<ComponentButton>(&format!("client_{idx}"))?;
-    button.set_sticky_state(&mut layout.common(), true);
+    button.set_sticky_state(&mut layout.common(), client.selected);
     Ok(())
 }
 
@@ -344,7 +355,9 @@ fn rebuild_groups(
 ) -> anyhow::Result<()> {
     let hosts_root = parser_state.get_widget_id("hosts_root").unwrap_or_default();
     let apps_root = parser_state.get_widget_id("apps_root").unwrap_or_default();
-    let panels_root = parser_state.get_widget_id("panels_root").unwrap_or_default();
+    let panels_root = parser_state
+        .get_widget_id("panels_root")
+        .unwrap_or_default();
     if hosts_root.is_null() || apps_root.is_null() {
         return Ok(());
     }
@@ -355,18 +368,26 @@ fn rebuild_groups(
 
     // The headset: local pins, then running applications that no pin stands for
     for (i, pin) in pins.iter().enumerate() {
-        if pin.host.is_none() && !add_pin(app, layout, parser_state, doc_params, apps_root, i)? {
-            app.session
-                .pinned_stop_clicks
-                .remove(&crate::frame_shell::pinned_stop_key(None, &pin.app_id));
+        if pin.host.is_none() {
+            add_pin(app, layout, parser_state, doc_params, apps_root, i)?;
         }
     }
     for client in crate::frame_shell::native_clients(app) {
         let pinned = client.app_id.as_ref().is_some_and(|id| {
-            pins.iter().any(|pin| pin.host.is_none() && *pin.app_id == **id)
+            pins.iter()
+                .any(|pin| pin.host.is_none() && *pin.app_id == **id)
         });
         if !pinned {
-            add_client(layout, parser_state, doc_params, apps_root, client_idx, None, &client)?;
+            add_client(
+                layout,
+                parser_state,
+                doc_params,
+                apps_root,
+                client_idx,
+                None,
+                &client,
+                None,
+            )?;
             client_idx += 1;
         }
     }
@@ -376,7 +397,10 @@ fn rebuild_groups(
     for root in [apps_root, panels_root] {
         let mut children = Vec::new();
         layout.collect_children_ids_recursive(root, &mut children);
-        layout.common().alterables.set_widget_visible(root, !children.is_empty());
+        layout
+            .common()
+            .alterables
+            .set_widget_visible(root, !children.is_empty());
         native |= !children.is_empty();
     }
 
@@ -411,22 +435,34 @@ fn rebuild_groups(
         });
     }
 
-    layout.common().alterables.set_widget_visible(hosts_root, !hosts.is_empty());
+    layout
+        .common()
+        .alterables
+        .set_widget_visible(hosts_root, !hosts.is_empty());
     for (g, host) in hosts.iter().enumerate() {
         let connected = host.source.is_some();
         let mut params = TemplateParams::new();
         params.insert_rc("idx", g.to_string().into());
         params.insert("name", host.name.as_str());
-        params.insert("presenting_display", if host.presenting { "flex" } else { "none" });
+        params.insert(
+            "presenting_display",
+            if host.presenting { "flex" } else { "none" },
+        );
         params.insert("separator", if g > 0 || native { "flex" } else { "none" });
         let (action, label) = if host.cookie.is_empty() {
-            (format!("::FrameShellScreen {} ", host.screen_prefix), "Connect / disconnect")
+            (
+                format!("::FrameShellScreen {} ", host.screen_prefix),
+                "Connect / disconnect",
+            )
         } else if !connected {
             (format!("::FrameShell connect {}", host.cookie), "Connect")
         } else if host.presenting {
             ("::FrameShell disconnect".to_owned(), "Disconnect")
         } else {
-            (format!("::FrameShell disconnect {}", host.cookie), "Disconnect")
+            (
+                format!("::FrameShell disconnect {}", host.cookie),
+                "Disconnect",
+            )
         };
         params.insert_rc("action", action.into());
         params.insert("action_label", label);
@@ -439,42 +475,53 @@ fn rebuild_groups(
         // Its screens
         for (i, meta) in me.last_metas.iter().enumerate() {
             if !matches!(meta.category, OverlayCategory::Screen)
-                || meta.name.rsplit_once(' ').map(|(prefix, _)| prefix) != Some(host.screen_prefix.as_str())
+                || meta.name.rsplit_once(' ').map(|(prefix, _)| prefix)
+                    != Some(host.screen_prefix.as_str())
             {
                 continue;
             }
             let mut params = TemplateParams::new();
             params.insert(
                 "keep_visible_display",
-                if meta.keep_visible_when_hidden { "flex" } else { "none" },
+                if meta.keep_visible_when_hidden {
+                    "flex"
+                } else {
+                    "none"
+                },
             );
             params.insert_rc("display", screen_label(&meta.name).into());
             params.insert_rc("idx", i.to_string().into());
             params.insert("name", meta.name.as_ref());
             parser_state.instantiate_template(doc_params, "Screen", layout, group, params)?;
-            let button = parser_state.fetch_component_as::<ComponentButton>(&format!("overlay_{i}"))?;
+            let button =
+                parser_state.fetch_component_as::<ComponentButton>(&format!("overlay_{i}"))?;
             button.set_sticky_state_immediate(&mut layout.common(), meta.visible);
             me.overlay_buttons.insert(meta.id, button);
         }
 
         // Its pins, which turn into the running game's button while it runs, then other running applications
         for (i, pin) in pins.iter().enumerate() {
-            if pin.host.as_deref() == Some(host.name.as_str())
-                && !add_pin(app, layout, parser_state, doc_params, group, i)?
-            {
-                app.session.pinned_stop_clicks.remove(&crate::frame_shell::pinned_stop_key(
-                    pin.host.as_deref(),
-                    &pin.app_id,
-                ));
+            if pin.host.as_deref() == Some(host.name.as_str()) {
+                add_pin(app, layout, parser_state, doc_params, group, i)?;
             }
         }
         for client in &host.clients {
             let pinned = client.app_id.as_ref().is_some_and(|id| {
-                pins.iter()
-                    .any(|pin| pin.host.as_deref() == Some(host.name.as_str()) && *pin.app_id == **id)
+                pins.iter().any(|pin| {
+                    pin.host.as_deref() == Some(host.name.as_str()) && *pin.app_id == **id
+                })
             });
             if !pinned {
-                add_client(layout, parser_state, doc_params, group, client_idx, host.source, client)?;
+                add_client(
+                    layout,
+                    parser_state,
+                    doc_params,
+                    group,
+                    client_idx,
+                    host.source,
+                    client,
+                    None,
+                )?;
                 client_idx += 1;
             }
         }

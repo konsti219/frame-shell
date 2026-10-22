@@ -111,7 +111,7 @@
 
   <!-- An app with a single icon. -->
   <template name="App">
-    <Button macro="button_style" id="overlay_${idx}" tooltip_str="${name}" _context_name="${name}" _press_left="::ContextMenuOpen menu_app" _press_right="::OverlayToggle ${name}">  
+    <Button macro="button_style" id="overlay_${idx}" tooltip_str="${name}" _context_name="${name}" _press_left="::OverlayToggle ${name}" _press_right="::ContextMenuOpen menu_app">
       <sprite width="38" height="38" src="${icon_builtin}" src_ext="${icon}" parent_color="ignore" />
     </Button>
   </template>
@@ -119,12 +119,14 @@
   <blueprint name="menu_pinned_app">
     <context_menu>
       <cell translation="APP_LAUNCHER.LAUNCH" _press="::WvrPinnedLaunch ${idx}" />
+      <cell skip="${running_skip}" text="Stop" _press="::FrameShellStop ${source} ${app_id}" _press2="::ContextMenuClose" />
+      <cell skip="${running_skip}" text="Force stop" _press="::FrameShellStop ${source} ${app_id} force" _press2="::ContextMenuClose" />
       <cell text="Unpin" _press="::WvrPinnedRemove ${idx}" _press2="::ContextMenuClose" />
     </context_menu>
   </blueprint>
 
   <template name="PinnedApp">
-    <Button macro="button_style" id="pinned_${idx}" tooltip_str="${name}" _context_idx="${idx}" _press_left="::WvrPinnedLaunch ${idx}" _press_right="::ContextMenuOpen menu_pinned_app">
+    <Button macro="button_style" id="pinned_${idx}" tooltip_str="${name}" _context_idx="${idx}" _context_source="${source}" _context_app_id="${app_id}" _context_running_skip="${running_skip}" _press_left="::WvrPinnedLaunch ${idx}" _press_right="::ContextMenuOpen menu_pinned_app">
       <sprite width="38" height="38" src="${icon_builtin}" src_ext="${icon}" parent_color="ignore" />
     </Button>
   </template>
@@ -142,7 +144,7 @@
 
   <!-- A screen with a shortened connector name, e.g. "H1" for HDMI-A-1 or "D2" for DP-2 -->
   <template name="Screen">
-    <Button macro="button_style" id="overlay_${idx}" tooltip_str="${name}" _context_name="${name}" _press_left="::OverlayToggle ${name}" _release_right="::ContextMenuOpen menu_screen">
+    <Button macro="button_style" id="overlay_${idx}" tooltip_str="${name}" _context_name="${name}" _press_left="::OverlayToggle ${name}" _press_right="::ContextMenuOpen menu_screen">
       <sprite width="38" height="38" src_builtin="@/edit/screen.svg" />
       <div position="absolute" margin_top="-7" margin_left="-1">
         <label text="${display}" size="~text_size" weight="bold" parent_color="background" />
@@ -165,7 +167,7 @@
     <!-- None for the first group while the headset has nothing in the row -->
     <rectangle width="2" height="100%" color="primary" display="${separator}" />
     <div id="host_${idx}" gap="6" align_items="center">
-      <Button macro="button_style" id="hostbtn_${idx}" tooltip_str="${name}" _context_action="${action}" _context_action_label="${action_label}" _press="::ContextMenuOpen menu_host">
+      <Button macro="button_style" id="hostbtn_${idx}" tooltip_str="${name}" _context_action="${action}" _context_action_label="${action_label}" _press_left="${action}" _press_right="::ContextMenuOpen menu_host">
         <sprite width="38" height="38" src_builtin="@/keyboard/host.svg" />
         <rectangle display="${presenting_display}" new_pass="1" position="absolute" width="20" height="20" margin_top="-26" margin_left="26"
           align_items="center" justify_content="center" round="50%" color="primary" border="2" border_color="background">
@@ -178,19 +180,23 @@
   <!-- An application running on a PC or the headset; Steam games can be stopped -->
   <blueprint name="menu_client">
     <context_menu>
-      <cell text="Stop" _press="::FrameShellStop ${source} ${app_id}" _press2="::ContextMenuClose" />
-      <cell text="Force stop" _press="::FrameShellStop ${source} ${app_id} force" _press2="::ContextMenuClose" />
+      <cell text="Automatic blending" _press="::RuntimeMode ${source} ${client} auto" _press2="::ContextMenuClose" />
+      <cell text="Use as default app" _press="::RuntimeMode ${source} ${client} default" _press2="::ContextMenuClose" />
+      <cell text="Use as overlay" _press="::RuntimeMode ${source} ${client} overlay" _press2="::ContextMenuClose" />
+      <cell skip="${stop_skip}" text="Stop" _press="::FrameShellStop ${source} ${app_id}" _press2="::ContextMenuClose" />
+      <cell skip="${pin_skip}" text="Unpin" _press="::WvrPinnedRemove ${pin}" _press2="::ContextMenuClose" />
+      <cell skip="${stop_skip}" text="Force stop" _press="::FrameShellStop ${source} ${app_id} force" _press2="::ContextMenuClose" />
     </context_menu>
   </blueprint>
 
   <template name="Client">
-    <Button macro="button_style" id="client_${idx}" tooltip_str="${name}" _context_source="${source}" _context_app_id="${app_id}" _press_left="${show}" _press_right="::ContextMenuOpen menu_client">
+    <Button macro="button_style" id="client_${idx}" tooltip_str="${name}" _context_source="${source}" _context_app_id="${app_id}" _context_client="${client}" _context_pin="${pin}" _context_pin_skip="${pin_skip}" _context_stop_skip="${stop_skip}" _press_left="${show}" _press_right="::ContextMenuOpen menu_client">
       <sprite width="38" height="38" src="${icon_builtin}" src_ext="${icon}" parent_color="ignore" />
     </Button>
   </template>
 
   <template name="ClientShow">
-    <Button macro="button_style" id="client_${idx}" tooltip_str="${name}" _press="${show}">
+    <Button macro="button_style" id="client_${idx}" tooltip_str="${name}" _context_source="${source}" _context_app_id="0" _context_client="${client}" _context_pin="${pin}" _context_pin_skip="${pin_skip}" _context_stop_skip="1" _press_left="${show}" _press_right="::ContextMenuOpen menu_client">
       <sprite width="38" height="38" src_builtin="@/edit/3d.svg" />
     </Button>
   </template>
@@ -205,7 +211,7 @@
   </blueprint>
 
   <template name="Panel">
-    <Button macro="button_style" id="overlay_${idx}" tooltip_str="${name}" _context_name="${name}" _press_left="::ContextMenuOpen menu_panel" _press_right="::OverlayToggle ${name}">
+    <Button macro="button_style" id="overlay_${idx}" tooltip_str="${name}" _context_name="${name}" _press_left="::OverlayToggle ${name}" _press_right="::ContextMenuOpen menu_panel">
       <sprite width="38" height="38" src="${icon}" />
     </Button>
   </template>
@@ -220,7 +226,7 @@
   </blueprint>
 
   <template name="Mirror">
-    <Button macro="button_style" id="overlay_${idx}" tooltip_str="${name}" _context_name="${name}" _press_left="::ContextMenuOpen menu_mirror" _press_right="::OverlayToggle ${name}">
+    <Button macro="button_style" id="overlay_${idx}" tooltip_str="${name}" _context_name="${name}" _press_left="::OverlayToggle ${name}" _press_right="::ContextMenuOpen menu_mirror">
       <sprite width="38" height="38" src_builtin="@/edit/mirror.svg" />
       <div position="absolute" margin_top="5" margin_left="13">
         <label text="${display}" size="20" weight="bold" parent_color="background" />
@@ -230,7 +236,7 @@
 
   <!-- mirror with a different icon -->
   <template name="Passthru">
-    <Button macro="button_style" id="overlay_${idx}" tooltip_str="${name}" _context_name="${name}" _press_left="::ContextMenuOpen menu_mirror" _press_right="::OverlayToggle ${name}">
+    <Button macro="button_style" id="overlay_${idx}" tooltip_str="${name}" _context_name="${name}" _press_left="::OverlayToggle ${name}" _press_right="::ContextMenuOpen menu_mirror">
       <sprite width="38" height="38" src_builtin="@/icons/landscape.svg" />
       <div position="absolute" margin_top="5" margin_left="13">
         <label text="${display}" size="20" weight="bold" parent_color="background" />

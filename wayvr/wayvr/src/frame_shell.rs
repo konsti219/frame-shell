@@ -43,6 +43,15 @@ use wlx_common::{
     windowing::OverlayWindowState,
 };
 
+pub fn set_input_capture(paths: &[std::ffi::CString], pose_mask: u32) {
+    let pointers: Vec<_> = paths.iter().map(|p| p.as_ptr()).collect();
+    if let Some(Host(host)) = host().as_ref() {
+        if let Some(set) = host.set_input_capture {
+            unsafe { set(host.user, pointers.as_ptr(), pointers.len(), pose_mask) };
+        }
+    }
+}
+
 pub static EMBEDDED: AtomicBool = AtomicBool::new(false);
 /// The WiVRn client's callbacks, from `run`
 static HOST: Mutex<Option<Host>> = Mutex::new(None);
@@ -337,10 +346,9 @@ pub fn check_battery(app: &mut AppState) {
         *warned = None;
         return;
     }
-    let Some(level) = [1, 5, 10]
-        .into_iter()
-        .find(|level| battery.percent <= *level as f32 && warned.is_none_or(|warned| *level < warned))
-    else {
+    let Some(level) = [1, 5, 10].into_iter().find(|level| {
+        battery.percent <= *level as f32 && warned.is_none_or(|warned| *level < warned)
+    }) else {
         return;
     };
     *warned = Some(level);
@@ -1501,7 +1509,6 @@ pub fn openxr_entry() -> anyhow::Result<openxr::Entry> {
     }
 }
 
-
 #[cfg(feature = "feat-monado-metrics")]
 pub fn remote_connected() -> bool {
     EMBEDDED.load(Ordering::Relaxed) && CONNECTED.load(Ordering::Relaxed)
@@ -1523,23 +1530,10 @@ pub fn watch_metrics(
     }
 }
 
-
 pub fn remote_game_running(host: &str, app_id: &str) -> bool {
     source_for_host(host)
         .and_then(crate::frame_host::games)
         .is_some_and(|games| games.iter().any(|game| game == app_id))
-}
-
-pub fn stop_remote_game(host: &str, app_id: &str, force: bool) {
-    if let Some(source) = source_for_host(host) {
-        crate::frame_host::send(
-            source,
-            &wayvr_ipc::frame::ShellMessage::StopGame {
-                app_id: app_id.to_owned(),
-                force,
-            },
-        );
-    }
 }
 
 /// The PCs connected besides the one presenting VR: [{"cookie", "name", "state", "detail", "source"}]
@@ -1568,10 +1562,6 @@ fn source_for_host(host: &str) -> Option<u32> {
         .map(|source| source as u32)
 }
 
-pub fn pinned_stop_key(host: Option<&str>, app_id: &str) -> String {
-    host.map_or_else(|| app_id.to_owned(), |host| format!("{host}:{app_id}"))
-}
-
 // ---- Keyboard top row: one group per PC, and the headset's own clients ----
 
 /// An application running on a PC or on the headset, for the keyboard's top row
@@ -1581,6 +1571,8 @@ pub struct RunningClient {
     pub app_id: Option<String>,
     /// Button action making it the application shown in VR
     pub show: String,
+    pub client_id: u32,
+    pub selected: bool,
 }
 
 /// A PC in the keyboard's top row; its screens are the overlays named "<screen_prefix> <output>"
@@ -1649,7 +1641,10 @@ pub fn top_row_hosts() -> Vec<TopRowHost> {
 }
 
 /// A runtime's clients as running applications; `source` is the PC's, None for the headset
-fn running_clients(source: Option<u32>, clients: Vec<wayvr_ipc::frame::RuntimeClient>) -> Vec<RunningClient> {
+fn running_clients(
+    source: Option<u32>,
+    clients: Vec<wayvr_ipc::frame::RuntimeClient>,
+) -> Vec<RunningClient> {
     let target = source.map_or_else(|| "native".to_owned(), |s| s.to_string());
     clients
         .into_iter()
@@ -1657,6 +1652,12 @@ fn running_clients(source: Option<u32>, clients: Vec<wayvr_ipc::frame::RuntimeCl
             name: client.name,
             app_id: client.steam_app_id,
             show: format!("::RuntimeFocus {target} {}", client.id),
+            client_id: client.id,
+            selected: if client.overlay {
+                client.visible
+            } else {
+                client.primary
+            },
         })
         .collect()
 }
@@ -1668,7 +1669,9 @@ fn pc_clients(source: u32) -> Vec<RunningClient> {
 /// The headset's runtime, for its own clients
 static NATIVE_RUNTIME: Mutex<Option<wayvr_ipc::runtime::Runtime>> = Mutex::new(None);
 
-fn native_runtime<T>(f: impl FnOnce(&wayvr_ipc::runtime::Runtime) -> anyhow::Result<T>) -> Option<T> {
+fn native_runtime<T>(
+    f: impl FnOnce(&wayvr_ipc::runtime::Runtime) -> anyhow::Result<T>,
+) -> Option<T> {
     let mut runtime = NATIVE_RUNTIME
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -1695,21 +1698,48 @@ pub fn native_clients(_app: &AppState) -> Vec<RunningClient> {
 
 /// Shows a runtime client: a PC's (presenting that PC first) or the headset's own (None)
 pub fn focus_client(source: Option<u32>, client: u32) {
+    control_client(source, client, wayvr_ipc::frame::ClientAction::Select);
+}
+
+pub fn control_client(source: Option<u32>, client: u32, action: wayvr_ipc::frame::ClientAction) {
     let Some(source) = source else {
-        native_runtime(|runtime| runtime.set_primary(client));
+        native_runtime(|runtime| runtime.control(client, action));
         return;
     };
     if crate::frame_host::vr_source() != Some(source)
         && let Some(cookie) = hosts().as_array().and_then(|pcs| {
             pcs.iter()
-                .find(|pc| pc.get("source").and_then(serde_json::Value::as_u64) == Some(u64::from(source)))
+                .find(|pc| {
+                    pc.get("source").and_then(serde_json::Value::as_u64) == Some(u64::from(source))
+                })
                 .and_then(|pc| pc.get("cookie").and_then(serde_json::Value::as_str))
                 .map(str::to_owned)
         })
     {
         send_command(&format!("present {cookie}"));
     }
-    crate::frame_host::send(source, &wayvr_ipc::frame::ShellMessage::FocusClient(client));
+    let is_default = matches!(action, wayvr_ipc::frame::ClientAction::Default)
+        || (matches!(action, wayvr_ipc::frame::ClientAction::Select)
+            && crate::frame_host::clients(source)
+                .iter()
+                .any(|c| c.id == client && !c.overlay));
+    if is_default {
+        let own = std::process::id() as i32;
+        native_runtime(|runtime| {
+            if let Some(stream) = runtime
+                .clients()?
+                .into_iter()
+                .find(|c| c.pid == own && c.name == "WiVRn")
+            {
+                runtime.control(stream.id, wayvr_ipc::frame::ClientAction::Default)?;
+            }
+            Ok(())
+        });
+    }
+    crate::frame_host::send(
+        source,
+        &wayvr_ipc::frame::ShellMessage::ClientAction { client, action },
+    );
 }
 
 /// Changes when what the keyboard's top row shows of PCs and clients does
@@ -1719,11 +1749,11 @@ pub fn top_row_signature(app: &AppState) -> u64 {
     for host in top_row_hosts() {
         (&host.name, &host.cookie, host.source, host.presenting).hash(&mut hasher);
         for client in &host.clients {
-            (&client.name, &client.app_id, &client.show).hash(&mut hasher);
+            (&client.name, &client.app_id, &client.show, client.selected).hash(&mut hasher);
         }
     }
     for client in native_clients(app) {
-        (&client.name, &client.app_id, &client.show).hash(&mut hasher);
+        (&client.name, &client.app_id, &client.show, client.selected).hash(&mut hasher);
     }
     hasher.finish()
 }

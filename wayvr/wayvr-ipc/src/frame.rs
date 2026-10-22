@@ -40,6 +40,10 @@ pub enum ShellMessage {
 	},
 	/// Make a PC runtime client the one shown
 	FocusClient(u32),
+	ClientAction {
+		client: u32,
+		action: ClientAction,
+	},
 	Ipc(u32, PacketServer),
 	IpcClose(u32),
 }
@@ -109,6 +113,14 @@ impl ShellMessage {
 	}
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub enum ClientAction {
+	Select,
+	Automatic,
+	Default,
+	Overlay,
+}
+
 /// An OpenXR runtime client with an active session (frame shell runtimes, through libmonado)
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct RuntimeClient {
@@ -117,7 +129,11 @@ pub struct RuntimeClient {
 	pub pid: i32,
 	/// The Steam game it is, from its process environment
 	pub steam_app_id: Option<String>,
-	/// Shown (Monado's primary application)
+	/// Selected default application, beneath any visible overlays
 	pub primary: bool,
 	pub overlay: bool,
+	#[serde(default)]
+	pub visible: bool,
+	#[serde(default)]
+	pub presentation_mode: u32,
 }

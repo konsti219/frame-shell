@@ -119,7 +119,7 @@ pub fn openxr_run(args: &Args, params: RunParams) -> Result<(), BackendError> {
 
     let mut blocker = blocker::InputBlocker::new()
         .map_err(|e| {
-            log::warn!("Will not use OpenXR layer input blocker: {e}");
+            log::warn!("Cannot initialize native input capture: {e}");
             e
         })
         .ok();
@@ -278,6 +278,9 @@ pub fn openxr_run(args: &Args, params: RunParams) -> Result<(), BackendError> {
         }
 
         if !session_running {
+            if let Some(blocker) = &mut blocker {
+                blocker.update(Default::default())?;
+            }
             std::thread::sleep(Duration::from_millis(100));
             log::trace!("session not running: continue");
             continue 'main_loop;
@@ -323,6 +326,9 @@ pub fn openxr_run(args: &Args, params: RunParams) -> Result<(), BackendError> {
         app.watch_data.fps_average = xr_state.fps;
 
         if !xr_frame_state.should_render {
+            if let Some(blocker) = &mut blocker {
+                blocker.update(Default::default())?;
+            }
             log::trace!("xrEndFrame");
             frame_stream.end(
                 xr_frame_state.predicted_display_time,
@@ -335,10 +341,6 @@ pub fn openxr_run(args: &Args, params: RunParams) -> Result<(), BackendError> {
         app.input_state.pre_update();
         input_source.update(&xr_state, &mut app)?;
         app.input_state.post_update(&app.session);
-
-        if let Some(ref mut blocker) = blocker {
-            blocker.update(&mut app);
-        }
 
         if app
             .input_state
@@ -418,6 +420,9 @@ pub fn openxr_run(args: &Args, params: RunParams) -> Result<(), BackendError> {
         current_lines.clear();
 
         let haptics = interact(&mut overlays, &mut app, &mut current_lines);
+        if let Some(ref mut blocker) = blocker {
+            blocker.update(input_source.capture(&xr_state, &app)?)?;
+        }
         for (idx, haptics) in haptics.iter().enumerate() {
             if let Some(haptics) = haptics {
                 input_source.haptics(&xr_state, idx, haptics);
@@ -620,9 +625,7 @@ pub fn openxr_run(args: &Args, params: RunParams) -> Result<(), BackendError> {
         }
     } // main_loop
 
-    if let Some(blocker) = blocker {
-        blocker.unblock();
-    }
+    drop(blocker);
 
     overlays.persist_layout(&mut app);
     if let Err(e) = save_state(&app.session.config) {

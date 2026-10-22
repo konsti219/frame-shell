@@ -1,7 +1,7 @@
 //! The frame shell's OpenXR runtime (Monado) through libmonado, loaded from the active runtime's manifest: its
 //! clients with the Steam game each one is, focusing one, and the metrics stream.
 
-use crate::frame::RuntimeClient;
+use crate::frame::{ClientAction, RuntimeClient};
 use anyhow::{Context, Result, bail};
 use libloading::Library;
 use std::{
@@ -13,6 +13,9 @@ use std::{
 const CLIENT_PRIMARY_APP: u32 = 1 << 0;
 const CLIENT_SESSION_ACTIVE: u32 = 1 << 1;
 const CLIENT_SESSION_OVERLAY: u32 = 1 << 4;
+const CLIENT_SESSION_VISIBLE: u32 = 1 << 2;
+const CLIENT_PRESENTATION_DEFAULT: u32 = 1 << 10;
+const CLIENT_PRESENTATION_OVERLAY: u32 = 1 << 11;
 
 pub struct Runtime {
 	library: Library,
@@ -24,7 +27,9 @@ unsafe impl Send for Runtime {}
 
 impl Drop for Runtime {
 	fn drop(&mut self) {
-		if let Ok(destroy) = self.function::<unsafe extern "C" fn(*mut *mut c_void)>(b"mnd_root_destroy\0") {
+		if let Ok(destroy) =
+			self.function::<unsafe extern "C" fn(*mut *mut c_void)>(b"mnd_root_destroy\0")
+		{
 			unsafe { destroy(&mut self.root) };
 		}
 	}
@@ -57,11 +62,13 @@ fn libmonado_path() -> Result<PathBuf> {
 	if !library.contains('/') {
 		return Ok(library.into());
 	}
-	Ok(manifest
-		.canonicalize()?
-		.parent()
-		.context("Invalid runtime path")?
-		.join(library))
+	Ok(
+		manifest
+			.canonicalize()?
+			.parent()
+			.context("Invalid runtime path")?
+			.join(library),
+	)
 }
 
 /// The Steam game a process belongs to: Steam starts games with SteamAppId in their environment
@@ -77,7 +84,9 @@ fn steam_app_id(pid: i32) -> Option<String> {
 impl Runtime {
 	pub fn connect() -> Result<Self> {
 		let library = unsafe { Library::new(libmonado_path()?) }?;
-		let create = unsafe { *library.get::<unsafe extern "C" fn(*mut *mut c_void) -> i32>(b"mnd_root_create\0")? };
+		let create = unsafe {
+			*library.get::<unsafe extern "C" fn(*mut *mut c_void) -> i32>(b"mnd_root_create\0")?
+		};
 		let mut root = std::ptr::null_mut();
 		let result = unsafe { create(&mut root) };
 		if result != 0 {
@@ -99,23 +108,44 @@ impl Runtime {
 
 	/// Streams the runtime's frame metrics (length-delimited protobuf records) into `fd`
 	pub fn push_metrics_fd(&self, fd: RawFd) -> Result<()> {
-		let push = self.function::<unsafe extern "C" fn(*mut c_void, i32, bool) -> i32>(b"mnd_root_push_metrics_fd\0")?;
-		Self::check(unsafe { push(self.root, fd, true) }, "Subscribing to runtime metrics")
+		let push = self.function::<unsafe extern "C" fn(*mut c_void, i32, bool) -> i32>(
+			b"mnd_root_push_metrics_fd\0",
+		)?;
+		Self::check(
+			unsafe { push(self.root, fd, true) },
+			"Subscribing to runtime metrics",
+		)
 	}
 
 	/// The runtime's clients with an active session
 	pub fn clients(&self) -> Result<Vec<RuntimeClient>> {
-		let update = self.function::<unsafe extern "C" fn(*mut c_void) -> i32>(b"mnd_root_update_client_list\0")?;
-		let count = self.function::<unsafe extern "C" fn(*mut c_void, *mut u32) -> i32>(b"mnd_root_get_number_clients\0")?;
-		let id_at = self.function::<unsafe extern "C" fn(*mut c_void, u32, *mut u32) -> i32>(b"mnd_root_get_client_id_at_index\0")?;
-		let name = self.function::<unsafe extern "C" fn(*mut c_void, u32, *mut *const c_char) -> i32>(b"mnd_root_get_client_name\0")?;
-		let state = self.function::<unsafe extern "C" fn(*mut c_void, u32, *mut u32) -> i32>(b"mnd_root_get_client_state\0")?;
+		let update = self
+			.function::<unsafe extern "C" fn(*mut c_void) -> i32>(b"mnd_root_update_client_list\0")?;
+		let count = self.function::<unsafe extern "C" fn(*mut c_void, *mut u32) -> i32>(
+			b"mnd_root_get_number_clients\0",
+		)?;
+		let id_at = self.function::<unsafe extern "C" fn(*mut c_void, u32, *mut u32) -> i32>(
+			b"mnd_root_get_client_id_at_index\0",
+		)?;
+		let name = self.function::<unsafe extern "C" fn(*mut c_void, u32, *mut *const c_char) -> i32>(
+			b"mnd_root_get_client_name\0",
+		)?;
+		let state = self.function::<unsafe extern "C" fn(*mut c_void, u32, *mut u32) -> i32>(
+			b"mnd_root_get_client_state\0",
+		)?;
 		// API 1.9 (frame-monado); without it no client maps to a Steam game
-		let pid = self.function::<unsafe extern "C" fn(*mut c_void, u32, *mut i32) -> i32>(b"mnd_root_get_client_pid\0").ok();
+		let pid = self
+			.function::<unsafe extern "C" fn(*mut c_void, u32, *mut i32) -> i32>(
+				b"mnd_root_get_client_pid\0",
+			)
+			.ok();
 
 		Self::check(unsafe { update(self.root) }, "Listing runtime clients")?;
 		let mut number = 0;
-		Self::check(unsafe { count(self.root, &mut number) }, "Counting runtime clients")?;
+		Self::check(
+			unsafe { count(self.root, &mut number) },
+			"Counting runtime clients",
+		)?;
 		let mut clients = Vec::new();
 		for index in 0..number {
 			let mut id = 0;
@@ -135,19 +165,92 @@ impl Runtime {
 			}
 			clients.push(RuntimeClient {
 				id,
-				name: unsafe { CStr::from_ptr(text) }.to_string_lossy().into_owned(),
+				name: unsafe { CStr::from_ptr(text) }
+					.to_string_lossy()
+					.into_owned(),
 				pid: process,
 				steam_app_id: (process > 0).then(|| steam_app_id(process)).flatten(),
 				primary: flags & CLIENT_PRIMARY_APP != 0,
 				overlay: flags & CLIENT_SESSION_OVERLAY != 0,
+				visible: flags & CLIENT_SESSION_VISIBLE != 0,
+				presentation_mode: if flags & CLIENT_PRESENTATION_DEFAULT != 0 {
+					1
+				} else if flags & CLIENT_PRESENTATION_OVERLAY != 0 {
+					2
+				} else {
+					0
+				},
 			});
 		}
 		Ok(clients)
 	}
 
+	pub fn set_input_capture(
+		&self,
+		profiles: &[std::ffi::CString; 2],
+		paths: &[std::ffi::CString],
+		pose_mask: u32,
+	) -> Result<()> {
+		let set = self.function::<unsafe extern "C" fn(
+			*mut c_void,
+			*const c_char,
+			*const c_char,
+			*const *const c_char,
+			u32,
+			u32,
+		) -> i32>(b"mnd_root_set_input_capture\0")?;
+		let pointers: Vec<_> = paths.iter().map(|p| p.as_ptr()).collect();
+		Self::check(
+			unsafe {
+				set(
+					self.root,
+					profiles[0].as_ptr(),
+					profiles[1].as_ptr(),
+					pointers.as_ptr(),
+					pointers.len().try_into()?,
+					pose_mask,
+				)
+			},
+			"Setting input capture",
+		)
+	}
+
+	pub fn control(&self, client: u32, action: ClientAction) -> Result<()> {
+		let state = self
+			.clients()?
+			.into_iter()
+			.find(|state| state.id == client)
+			.context("Runtime client no longer running")?;
+		if matches!(action, ClientAction::Select) && !state.overlay {
+			return self.set_primary(client);
+		}
+		let (mode, visible) = match action {
+			ClientAction::Select => (state.presentation_mode, !state.visible),
+			ClientAction::Automatic => (0, true),
+			ClientAction::Default => (1, true),
+			ClientAction::Overlay => (2, true),
+		};
+		let set = self.function::<unsafe extern "C" fn(*mut c_void, u32, u32, bool) -> i32>(
+			b"mnd_root_set_client_presentation\0",
+		)?;
+		Self::check(
+			unsafe { set(self.root, client, mode, visible) },
+			"Changing app presentation",
+		)?;
+		if matches!(action, ClientAction::Default) {
+			self.set_primary(client)?;
+		}
+		Ok(())
+	}
+
 	/// Makes a client the one shown
 	pub fn set_primary(&self, client: u32) -> Result<()> {
-		let primary = self.function::<unsafe extern "C" fn(*mut c_void, u32) -> i32>(b"mnd_root_set_client_primary\0")?;
-		Self::check(unsafe { primary(self.root, client) }, "Focusing a runtime client")
+		let primary = self.function::<unsafe extern "C" fn(*mut c_void, u32) -> i32>(
+			b"mnd_root_set_client_primary\0",
+		)?;
+		Self::check(
+			unsafe { primary(self.root, client) },
+			"Focusing a runtime client",
+		)
 	}
 }

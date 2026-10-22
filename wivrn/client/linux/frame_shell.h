@@ -24,11 +24,38 @@
 #include "configuration.h"
 #include "decoder/decoder.h"
 #include "frame_abi.h"
+#include "input_paths.h"
+#include <array>
 #include <spdlog/fmt/fmt.h>
 #include <spdlog/spdlog.h>
 
 namespace frame_shell
 {
+struct input_capture_state {
+    std::array<bool, 256> inputs{};
+    uint32_t pose_mask = 0;
+};
+inline std::mutex input_capture_mutex;
+inline input_capture_state input_capture;
+inline input_capture_state input_capture_snapshot() {
+    std::scoped_lock lock(input_capture_mutex);
+    return input_capture;
+}
+inline void set_input_capture(const char * const * paths, size_t count, uint32_t pose_mask) {
+    input_capture_state next{.pose_mask = pose_mask};
+    for (size_t i = 0; i < count; ++i) {
+        if (auto it = wivrn::device_ids.find(paths[i]); it != wivrn::device_ids.end()) {
+            auto id = static_cast<uint8_t>(it->second);
+            next.inputs[id] = true;
+            std::string_view path(paths[i]);
+            if (path.ends_with("/thumbstick") or path.ends_with("/trackpad"))
+                next.inputs[id + 1] = true;
+        }
+    }
+    std::scoped_lock lock(input_capture_mutex);
+    input_capture = next;
+}
+
 // WayVR's entry points (frame_abi.h), null without FRAME_SHELL_LIBRARY
 inline const frame_shell_api * api = nullptr;
 inline bool enabled() { return api != nullptr; }
@@ -275,6 +302,9 @@ class runtime
                 if (queue.size() < 256)
                     queue.emplace_back(data, data + size);
             },
+            .set_input_capture = [](void *, const char * const * paths, size_t count, uint32_t pose_mask) {
+                set_input_capture(paths, count, pose_mask);
+            },
     };
 public:
     runtime()
@@ -290,7 +320,9 @@ public:
             throw std::runtime_error("Frame shell library has another ABI version");
         api = table;
         thread = std::jthread([run = api->run, host = &host] {
-            if (int result = run(host); result != 0) {
+            int result = run(host);
+            set_input_capture(nullptr, 0, 0);
+            if (result != 0) {
                 std::fprintf(stderr, "Frame shell failed (%d)\n", result);
                 std::_Exit(EXIT_FAILURE);
             }

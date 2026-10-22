@@ -139,7 +139,7 @@ struct Host {
     output: Output,
     shared: Arc<Shared>,
     games: Sender<(String, bool)>,
-    focus: Sender<u32>,
+    focus: Sender<(u32, wayvr_ipc::frame::ClientAction)>,
     proxy: Arc<ipc_proxy::Proxy>,
     threads: Vec<JoinHandle<()>>,
 }
@@ -170,7 +170,10 @@ impl Host {
         let worker = output.clone();
         spawn("metrics", Box::new(move || metrics::run(&worker)));
         let worker = output.clone();
-        spawn("clients", Box::new(move || clients::run(&worker, &focus_rx)));
+        spawn(
+            "clients",
+            Box::new(move || clients::run(&worker, &focus_rx)),
+        );
         let worker = output.clone();
         spawn(
             "notify-udp",
@@ -215,7 +218,12 @@ impl Host {
                 }
             }
             ShellMessage::FocusClient(client) => {
-                let _ = self.focus.send(client);
+                let _ = self
+                    .focus
+                    .send((client, wayvr_ipc::frame::ClientAction::Select));
+            }
+            ShellMessage::ClientAction { client, action } => {
+                let _ = self.focus.send((client, action));
             }
             ShellMessage::Ipc(connection, packet) => self.proxy.send(connection, &packet),
             ShellMessage::IpcClose(connection) => self.proxy.close(connection),

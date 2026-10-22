@@ -1,45 +1,65 @@
-use log::trace;
-use wayvr_openxr_layer_common::{BlockMode, ControlWriter};
+use std::ffi::CString;
+use wayvr_ipc::runtime::Runtime;
 
-use crate::state::AppState;
+#[derive(Default, Debug, PartialEq, Eq)]
+pub(super) struct Capture {
+    pub profiles: [String; 2],
+    pub paths: Vec<String>,
+    pub pose_mask: u32,
+}
+
+impl Capture {
+    pub fn add(&mut self, path: &str) {
+        let (base, component) = path.rsplit_once('/').unwrap_or((path, ""));
+        match component {
+            "click" | "value" | "force" => {
+                for alias in ["click", "value", "force"] {
+                    self.paths.push(format!("{base}/{alias}"));
+                }
+            }
+            "x" | "y" => self.paths.push(base.to_owned()),
+            _ => self.paths.push(path.to_owned()),
+        }
+    }
+}
 
 pub(super) struct InputBlocker {
-    control: ControlWriter,
-    blocked_last_frame: [BlockMode; 2],
+    runtime: Runtime,
+    previous: Option<Capture>,
 }
 
 impl InputBlocker {
-    pub fn new() -> std::io::Result<Self> {
+    pub fn new() -> anyhow::Result<Self> {
         Ok(Self {
-            control: ControlWriter::new()?,
-            blocked_last_frame: [BlockMode::None; 2],
+            runtime: Runtime::connect()?,
+            previous: None,
         })
     }
 
-    pub fn unblock(&self) {
-        self.control.clear();
-    }
-
-    pub fn update(&mut self, app: &mut AppState) {
-        // Refresh the liveness heartbeat every frame so readers (including
-        // sandboxed game processes in a different PID namespace) can tell this
-        // writer is alive. If wayvr dies, the heartbeat goes stale and readers
-        // fail open, never leaving game input stuck blocked.
-        self.control.heartbeat();
-
-        // Each hand is published separately: pointing one hand at an overlay
-        // must leave the other hand's input untouched.
-        let blocked = if app.session.config.block_game_input {
-            [0, 1].map(|idx| app.input_state.pointers[idx].interaction.block_input)
-        } else {
-            [BlockMode::None; 2]
-        };
-
-        if blocked != self.blocked_last_frame {
-            trace!("Input block: left={:?} right={:?}", blocked[0], blocked[1]);
-            self.control.set(blocked[0], blocked[1]);
+    pub fn update(&mut self, capture: Capture) -> anyhow::Result<()> {
+        if self.previous.as_ref() == Some(&capture) {
+            return Ok(());
         }
+        let profiles = [
+            CString::new(capture.profiles[0].as_str())?,
+            CString::new(capture.profiles[1].as_str())?,
+        ];
+        let paths: Vec<_> = capture
+            .paths
+            .iter()
+            .map(|p| CString::new(p.as_str()))
+            .collect::<Result<_, _>>()?;
+        self.runtime
+            .set_input_capture(&profiles, &paths, capture.pose_mask)?;
+        crate::frame_shell::set_input_capture(&paths, capture.pose_mask);
+        log::trace!("Input capture: {:?}", capture);
+        self.previous = Some(capture);
+        Ok(())
+    }
+}
 
-        self.blocked_last_frame = blocked;
+impl Drop for InputBlocker {
+    fn drop(&mut self) {
+        crate::frame_shell::set_input_capture(&[], 0);
     }
 }

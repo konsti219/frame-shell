@@ -1452,8 +1452,7 @@ void wivrn_session::update_client_states(bool visible, bool focused)
 		auto id = t.ics.client_state.id;
 		if (t.ics.server_thread_index < 0 or t.ics.xc == nullptr or locked->contains(id))
 			continue;
-		bool current = t.ics.client_state.session_overlay or
-		               mnd_ipc_server->global_state.active_client_index == t.ics.server_thread_index;
+		bool current = t.ics.client_state.session_visible;
 		U_LOG_D("Setting session state for app %s: visible=%s focused=%s current=%s",
 		        t.ics.client_state.info.application_name,
 		        visible ? "true" : "false",

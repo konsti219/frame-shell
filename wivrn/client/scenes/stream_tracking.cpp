@@ -600,6 +600,30 @@ void scenes::stream::tracking()
 			}
 
 
+#if defined(__linux__) && !defined(__ANDROID__)
+            static std::array<std::optional<from_headset::tracking::pose>, 256> retained_poses;
+            static auto profiles = tracking.interaction_profiles;
+            if (profiles != tracking.interaction_profiles) {
+                retained_poses = {};
+                profiles = tracking.interaction_profiles;
+            }
+            auto capture = frame_shell::input_capture_snapshot();
+            for (auto & pose : tracking.device_poses) {
+                int hand = -1;
+                if (pose.device == device_id::LEFT_AIM || pose.device == device_id::LEFT_GRIP || pose.device == device_id::LEFT_PALM) hand = 0;
+                if (pose.device == device_id::RIGHT_AIM || pose.device == device_id::RIGHT_GRIP || pose.device == device_id::RIGHT_PALM) hand = 1;
+                if (hand < 0) continue;
+                auto & retained = retained_poses[static_cast<uint8_t>(pose.device)];
+                if ((capture.pose_mask & (1u << hand)) && retained) {
+                    pose = *retained;
+                    pose.linear_velocity = {};
+                    pose.angular_velocity = {};
+                } else {
+                    retained = pose;
+                }
+            }
+#endif
+
 			tracking.drag_offset = applied_drag;
 
 			// FIXME: switch to event based

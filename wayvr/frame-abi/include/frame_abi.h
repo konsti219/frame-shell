@@ -11,7 +11,7 @@
 extern "C" {
 #endif
 
-#define FRAME_SHELL_ABI_VERSION 3
+#define FRAME_SHELL_ABI_VERSION 4
 
 // ---- Headset: WiVRn client <-> WayVR ----
 
@@ -49,6 +49,8 @@ typedef struct frame_shell_host
 	void (*release_desktop_frame)(void * user, uint64_t id);
 	// A wayvr_ipc::frame::ShellMessage for a connected PC (source)
 	void (*send_host_message)(void * user, uint32_t source, const uint8_t * data, size_t size);
+	// Resolved OpenXR input paths captured by the shell; strings are borrowed for this call
+	void (*set_input_capture)(void * user, const char * const * paths, size_t count, uint32_t pose_mask);
 } frame_shell_host;
 
 // The shell's entry points, from frame_shell_api() in libwayvr.so

@@ -8,7 +8,6 @@ use idmap_derive::IntegerId;
 use smallvec::{SmallVec, smallvec};
 use strum::{AsRefStr, EnumIs};
 use wayvr_ipc::packet_client::{HandsfreeAction, HandsfreeParams};
-use wayvr_openxr_layer_common::BlockMode;
 use wlx_common::common::LeftRight;
 use wlx_common::windowing::{OverlayWindowState, Positioning};
 
@@ -25,6 +24,14 @@ use crate::windowing::window::{self, OverlayCategory, OverlayWindowData, realign
 use crate::windowing::{OverlayID, OverlaySelector, raycast_overlay};
 
 use super::task::TaskType;
+
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlockMode {
+    #[default]
+    None,
+    PrimaryClick,
+    All,
+}
 
 #[derive(Clone, Default)]
 pub struct HoverResult {
@@ -641,13 +648,11 @@ where
         pointer.interaction.block_input = if !state.block_input {
             BlockMode::None
         } else if hovered.config.name.as_ref() == WATCH_NAME {
-            // The watch sits in the corner of your vision the whole time, so
-            // taking every input away while it is merely hovered is too much:
-            // only the trigger it actually clicks with is worth withholding.
+            // Capture only primary-click bindings while hovering the watch.
             if app.session.config.block_game_input_ignore_watch {
                 BlockMode::None
             } else {
-                BlockMode::TriggerOnly
+                BlockMode::PrimaryClick
             }
         } else {
             BlockMode::All
@@ -699,8 +704,12 @@ where
     let mut click_haptics = None;
 
     // The eye tracker calibrates from clicks: the user looks at what they click. Its gaze starts between the eyes
-    let target_in_head =
-        app.input_state.hmd.inverse().transform_point3a(raw_hit.global_pos) - app.input_state.eye_center;
+    let target_in_head = app
+        .input_state
+        .hmd
+        .inverse()
+        .transform_point3a(raw_hit.global_pos)
+        - app.input_state.eye_center;
 
     // click / release
     let pointer = &mut app.input_state.pointers[hit.pointer];

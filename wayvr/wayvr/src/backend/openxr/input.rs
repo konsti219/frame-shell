@@ -34,6 +34,7 @@ static CLICK_TIMES: [Duration; 3] = [
 pub(super) struct OpenXrInputSource {
     action_set: xr::ActionSet,
     physical_inputs: Vec<PhysicalInput>,
+    profiles: Vec<OpenXrInputProfile>,
     pointers: [OpenXrPointer; 2],
     handsfree_pointer: OpenXrPointer,
 }
@@ -46,6 +47,7 @@ pub(super) struct OpenXrPointer {
 pub(super) struct PhysicalInput {
     profile_index: usize,
     path: xr::Path,
+    path_string: String,
     action: PhysicalInputAction,
 }
 
@@ -206,6 +208,7 @@ enum ButtonConditionSet {
 struct ButtonBinding {
     conditions: ButtonConditionSet,
     clicks: MultiClickHandler,
+    consumed: bool,
 }
 
 impl ButtonBinding {
@@ -227,7 +230,8 @@ impl ButtonBinding {
             }
         };
 
-        self.clicks.check(active)
+        self.consumed = self.clicks.check(active);
+        self.consumed
     }
 }
 
@@ -301,12 +305,103 @@ impl OpenXrInputSource {
         Ok(Self {
             action_set,
             physical_inputs,
+            profiles,
             pointers: [
                 OpenXrPointer::new(xr, left_source)?,
                 OpenXrPointer::new(xr, right_source)?,
             ],
             handsfree_pointer: OpenXrPointer::new(xr, fallback_source)?,
         })
+    }
+
+    pub fn capture(&self, xr: &XrState, app: &AppState) -> anyhow::Result<super::blocker::Capture> {
+        use crate::backend::input::BlockMode;
+        let mut capture = super::blocker::Capture::default();
+        for hand in 0..2 {
+            let user = if hand == 0 {
+                "/user/hand/left"
+            } else {
+                "/user/hand/right"
+            };
+            let profile = xr
+                .session
+                .current_interaction_profile(xr.instance.string_to_path(user)?)?;
+            if profile == xr::Path::NULL {
+                continue;
+            }
+            capture.profiles[hand] = xr.instance.path_to_string(profile)?;
+            let Some(profile_index) = self
+                .profiles
+                .iter()
+                .position(|p| p.profile == capture.profiles[hand])
+            else {
+                continue;
+            };
+            let pointer = &app.input_state.pointers[hand];
+            let source = &self.pointers[hand].source;
+            let mode = if app.session.config.block_game_input {
+                pointer.interaction.block_input
+            } else {
+                BlockMode::None
+            };
+            let mut add_action = |action: &CustomClickAction, consumed_only: bool| {
+                for binding in &action.bindings {
+                    if consumed_only && !binding.consumed {
+                        continue;
+                    }
+                    let (ButtonConditionSet::Any(conditions) | ButtonConditionSet::All(conditions)) =
+                        &binding.conditions;
+                    for condition in conditions {
+                        let input = &self.physical_inputs[condition.input];
+                        if input.profile_index == profile_index
+                            && (!consumed_only || condition.active)
+                        {
+                            capture.add(&input.path_string);
+                        }
+                    }
+                }
+            };
+            if mode != BlockMode::None {
+                add_action(&source.click, false);
+            }
+            if mode == BlockMode::All {
+                for action in [
+                    &source.click_right,
+                    &source.click_middle,
+                    &source.alt_click,
+                    &source.grab,
+                    &source.modifier_right,
+                    &source.modifier_middle,
+                ] {
+                    add_action(action, false);
+                }
+            }
+            if app.session.config.block_game_input {
+                for (action, handled) in [
+                    (&source.show_hide, pointer.now.show_hide),
+                    (&source.toggle_dashboard, pointer.now.toggle_dashboard),
+                    (&source.recenter, pointer.now.recenter),
+                    (&source.space_drag, pointer.now.space_drag),
+                    (&source.space_rotate, pointer.now.space_rotate),
+                    (&source.space_reset, pointer.now.space_reset),
+                ] {
+                    if handled {
+                        add_action(action, true);
+                    }
+                }
+            }
+            if mode == BlockMode::All {
+                if let Some(scroll) = &self.profiles[profile_index].scroll {
+                    for_each_path(action_spec(scroll, hand), |path| capture.add(path));
+                }
+            }
+            if app.session.config.block_game_input && pointer.interaction.should_block_poses {
+                capture.pose_mask |= 1 << hand;
+            }
+        }
+        capture.paths.sort_unstable();
+        capture.paths.dedup();
+        Ok(capture)
     }
 
     pub fn haptics(&self, xr: &XrState, hand: usize, haptics: &Haptics) {
@@ -894,6 +989,7 @@ fn create_physical_inputs(
         physical_inputs.push(PhysicalInput {
             profile_index,
             path,
+            path_string: instance.path_to_string(path)?,
             action,
         });
     }
@@ -930,6 +1026,7 @@ fn build_button_bindings(
         bindings.push(ButtonBinding {
             conditions: ButtonConditionSet::Any(alternatives),
             clicks: MultiClickHandler::new(count),
+            consumed: false,
         });
     }
 
@@ -954,6 +1051,7 @@ fn build_button_bindings(
             bindings.push(ButtonBinding {
                 conditions: ButtonConditionSet::All(conditions),
                 clicks: MultiClickHandler::new(count),
+                consumed: false,
             });
         }
     }

@@ -3,7 +3,7 @@ use crate::Output;
 use std::{sync::mpsc::Receiver, time::Duration};
 use wayvr_ipc::{frame::HostMessage, runtime::Runtime};
 
-pub fn run(output: &Output, focus: &Receiver<u32>) {
+pub fn run(output: &Output, focus: &Receiver<(u32, wayvr_ipc::frame::ClientAction)>) {
     let mut runtime: Option<Runtime> = None;
     let mut sent = None;
     loop {
@@ -12,8 +12,8 @@ pub fn run(output: &Output, focus: &Receiver<u32>) {
         }
         let clients = match &runtime {
             Some(connected) => {
-                for client in focus.try_iter() {
-                    if let Err(error) = connected.set_primary(client) {
+                for (client, action) in focus.try_iter() {
+                    if let Err(error) = connected.control(client, action) {
                         eprintln!("Runtime client {client}: {error:#}");
                     }
                 }
