@@ -1,5 +1,6 @@
 <layout version="2">
   <include src="@/gui/t_menu_button.xml" />
+  <include src="@/gui/t_splash.xml" />
 
   <template name="MiscButton">
     <Button
@@ -24,7 +25,7 @@
       flex_grow="1"
       gap="8"
       >
-      <image src_builtin="@/dashboard/splash.png" width="300" height="89" />
+      <Splash />
 
       <!-- supporters -->
       <Button

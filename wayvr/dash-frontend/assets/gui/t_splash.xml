@@ -1,0 +1,12 @@
+<layout version="2">
+  <!-- Frame shell: logo and name in place of WayVR's splash.png -->
+  <template name="Splash">
+    <div flex_direction="row" align_items="center" gap="16">
+      <image src_builtin="@/dashboard/frame_shell_logo.png" width="96" height="96" />
+      <div flex_direction="column" gap="2">
+        <label text="Frame Shell" size="44" weight="bold" color="on_background" />
+        <label text="Built on Monado, WayVR, WiVRn" size="15" weight="bold" color="on_background" />
+      </div>
+    </div>
+  </template>
+</layout>
