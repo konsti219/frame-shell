@@ -6236,6 +6236,7 @@ dependencies = [
  "anyhow",
  "async-channel",
  "async-io",
+ "base64",
  "bytes",
  "interprocess",
  "libloading 0.8.9",

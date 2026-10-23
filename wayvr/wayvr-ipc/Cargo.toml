@@ -17,6 +17,7 @@ log.workspace = true
 serde.workspace = true
 slotmap.workspace = true
 smallvec.workspace = true
+base64 = "0.22"
 
 # client-only deps
 serde_json.workspace = true
