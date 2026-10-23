@@ -84,7 +84,22 @@ pub enum WlxModifyPanelCommand {
 	/// Height of an element: pixels, or a percentage of its parent with `%`
 	SetHeight(String),
 	/// Content of a <sprite> or <image>: svg, gif, png, jpeg or webp data
-	SetImageData(Vec<u8>),
+	SetImageData(#[serde(with = "base64_bytes")] Vec<u8>),
+}
+
+/// Image data as a base64 string rather than a JSON number array
+mod base64_bytes {
+	use base64::{Engine, engine::general_purpose::STANDARD};
+	use serde::{Deserialize, Deserializer, Serializer};
+
+	pub fn serialize<S: Serializer>(bytes: &[u8], serializer: S) -> Result<S::Ok, S::Error> {
+		serializer.serialize_str(&STANDARD.encode(bytes))
+	}
+
+	pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<u8>, D::Error> {
+		let text = <&str>::deserialize(deserializer)?;
+		STANDARD.decode(text).map_err(serde::de::Error::custom)
+	}
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
