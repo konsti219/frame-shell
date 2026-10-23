@@ -11,6 +11,7 @@ tar -C "$stage" -cf - . | ssh "$headset" 'tar -C ~/.local/state/frame-shell/depl
 scp "$root/headset/not-with-shell.conf" "$headset":.local/state/frame-shell/deploy/not-with-shell.conf
 scp "$root/headset/launcher" "$headset":.local/state/frame-shell/deploy/launcher
 scp "$root/headset/frame-shell.desktop" "$headset":.local/state/frame-shell/deploy/frame-shell.desktop
+scp "$root/wayvr/dash-frontend/assets/dashboard/frame_shell_logo.png" "$headset":.local/state/frame-shell/deploy/frame-shell.png
 scp "$root/headset/steamvr" "$root/headset/podman" "$headset":.local/state/frame-shell/deploy/
 scp "$root/headset/frame-shell.service" "$headset":.config/systemd/user/frame-shell.service
 ssh "$headset" 'systemctl --user daemon-reload'
@@ -29,6 +30,7 @@ mkdir -p "$HOME/.local/bin" "$HOME/.local/lib/frame-shell" "$HOME/.local/share/a
 install -m755 "$stage/launcher" "$HOME/.local/bin/frame-shell"
 # Listed in SteamVR's non-Steam apps: switches to the desktop session, which is the frame shell
 install -m644 "$stage/frame-shell.desktop" "$HOME/.local/share/applications/frame-shell.desktop"
+install -Dm644 "$stage/frame-shell.png" "$HOME/.local/share/icons/hicolor/256x256/apps/frame-shell.png"
 rm -f "$HOME/.local/share/wayvr/openxr-layer-control"
 # Remove the retired Plasma helper files; Desktop is built into the shell now
 rm -f "$HOME/.local/bin/frame-shell-desktop" "$HOME/.local/share/applications/deckard-nested-desktop.desktop" \

@@ -3,6 +3,6 @@ Type=Application
 Name=Frame Shell
 Comment=Switch to the frame shell (the Monado desktop session)
 Exec=steamosctl switch-to-desktop-mode
-Icon=desktop
+Icon=frame-shell
 Categories=Utility;
 X-Steam-Controller-Template=Desktop
