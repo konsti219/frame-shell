@@ -28,9 +28,9 @@ ENV SHADERC_LIB_DIR=/usr/lib/x86_64-linux-gnu
 RUN apt-get update && apt-get install -y --no-install-recommends libcurl4-openssl-dev:arm64 libpng-dev:arm64 libasound2-dev:arm64 libfontconfig-dev:arm64 libharfbuzz-dev:arm64 libfreetype-dev:arm64 && rm -rf /var/lib/apt/lists/*
 RUN apt-get update && apt-get install -y --no-install-recommends libopengl-dev:arm64 libdav1d-dev:arm64 && rm -rf /var/lib/apt/lists/*
 
-# ExecuTorch (XNNPACK) for the headset's eye model; its kernel codegen needs torchgen, which only ships in the torch wheel
+# ExecuTorch (XNNPACK) for the headset's eye model; its kernel codegen needs torchgen, which only ships in the torch wheel.
+# The selected operators are the eye model's that XNNPACK doesn't take, from Babble Frame Runtime's tools/build_executorch.sh
 COPY scripts/aarch64-toolchain.cmake /opt/aarch64-toolchain.cmake
-COPY scripts/build-executorch.sh /opt/build-executorch.sh
 RUN curl -fL 'https://download.pytorch.org/whl/cpu/torch-2.13.0%2Bcpu-cp313-cp313-manylinux_2_28_x86_64.whl' -o /tmp/torch.whl \
     && echo '3fbf9c9d1f3c10c2d59d04aca426dee9ccc6ceb32d255c61e93acc3b4f75fae6  /tmp/torch.whl' | sha256sum -c - \
     && unzip -q /tmp/torch.whl 'torchgen/*' -d /tmp/torchgen && rm /tmp/torch.whl \
@@ -40,7 +40,20 @@ RUN curl -fL 'https://download.pytorch.org/whl/cpu/torch-2.13.0%2Bcpu-cp313-cp31
         backends/xnnpack/third-party/FP16 backends/xnnpack/third-party/FXdiv backends/xnnpack/third-party/XNNPACK \
         backends/xnnpack/third-party/cpuinfo backends/xnnpack/third-party/pthreadpool \
         third-party/flatbuffers third-party/flatcc third-party/json third-party/gflags \
-    && CCACHE_DISABLE=1 PYTHONPATH=/tmp/torchgen bash /opt/build-executorch.sh /tmp/executorch /opt/executorch-arm64 \
+    && export CCACHE_DISABLE=1 PYTHONPATH=/tmp/torchgen \
+    && ops=aten::alias_copy.out,aten::as_strided_copy.out,aten::index.Tensor_out,aten::native_layer_norm.out \
+    && ops=$ops,aten::split_with_sizes_copy.out,aten::squeeze_copy.dims_out,aten::view_copy.out,aten::permute_copy.out \
+    && ops=$ops,aten::clone.out,aten::cat.out,aten::clamp.out,aten::mean.out,aten::add.out,aten::mul.out \
+    && cmake -S /tmp/executorch -B /tmp/et-build -G Ninja \
+        -DCMAKE_TOOLCHAIN_FILE=/opt/aarch64-toolchain.cmake -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/opt/executorch-arm64 -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+        -DPYTHON_EXECUTABLE=python3 -DEXECUTORCH_BUILD_XNNPACK=ON -DEXECUTORCH_XNNPACK_SHARED_WORKSPACE=OFF \
+        -DEXECUTORCH_BUILD_EXTENSION_MODULE=ON -DEXECUTORCH_BUILD_EXTENSION_DATA_LOADER=ON \
+        -DEXECUTORCH_BUILD_EXTENSION_FLAT_TENSOR=ON -DEXECUTORCH_BUILD_EXTENSION_NAMED_DATA_MAP=ON \
+        -DEXECUTORCH_BUILD_EXTENSION_TENSOR=ON -DEXECUTORCH_BUILD_PORTABLE_OPS=ON -DEXECUTORCH_SELECT_OPS_LIST="$ops" \
+        -DEXECUTORCH_ENABLE_LOGGING=OFF -DEXECUTORCH_BUILD_EXECUTOR_RUNNER=OFF -DEXECUTORCH_BUILD_DEVTOOLS=OFF \
+        -DEXECUTORCH_BUILD_PYBIND=OFF \
+    && cmake --build /tmp/et-build --parallel "$(nproc)" && cmake --install /tmp/et-build \
     && rm -rf /tmp/executorch /tmp/torchgen /tmp/et-build
 
 RUN apt-get update && apt-get install -y --no-install-recommends glslc && rm -rf /var/lib/apt/lists/*

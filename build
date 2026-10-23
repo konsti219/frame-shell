@@ -1,8 +1,0 @@
-#!/usr/bin/env bash
-set -euo pipefail
-root=$(cd -- "$(dirname -- "$0")" && pwd)
-case ${1:-} in
-    host) exec bash "$root/scripts/build-host.sh" ;;
-    headset) exec bash "$root/scripts/build-headset.sh" ;;
-    *) echo "usage: $0 {host|headset}" >&2; exit 1 ;;
-esac

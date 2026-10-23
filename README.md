@@ -9,12 +9,12 @@ repository owns headset tracking, passthrough, floor estimation, compositor and 
 ```sh
 git clone git+ssh://github.com_konsti219/konsti219/frame-shell.git
 cd frame-shell
-./build host
-./build headset
-./run-host
+just build-host
+just build-headset
+just run
 ```
 
-`./run-host` serves the development PC server separately from the system-installed WiVRn. It stops the installed
+`just` lists the recipes. `just run` serves the development PC server separately from the system-installed WiVRn. It stops the installed
 user unit while running, uses private state under `out/host/`, selects the development OpenXR runtime, and
 restores the installed service/runtime on exit. Normally launched Steam VR games use it. All servers,
 development and installed, share `${XDG_STATE_HOME:-~/.local/state}/frame-desktop/capture-token`.
@@ -23,10 +23,12 @@ Do not copy tokens into separate test directories: portal restore tokens are sin
 `FRAME_SHELL_CAPTURE_TOKEN` overrides the shared path; development runs migrate the previous `out/host/` tokens.
 
 ```sh
-./deploy                         # headset shell/client only; Monado must already be running
-./host app <command> <arguments>  # launch explicitly against the development runtime
-./host ctl list-paired
-./host stop                      # recover after a killed run-host
+just deploy                       # headset shell/client only; Monado must already be running
+just headset                      # build-headset, then deploy
+just all                          # also builds and deploys ../frame-monado (FRAME_MONADO), and builds the host
+just app <command> <arguments>    # launch explicitly against the development runtime
+just ctl list-paired
+just stop                         # recover after a killed just run
 ```
 
 Nix supplies host dependencies; Podman supplies the ARM cross-compilation SDK. No NixOS rebuild is needed.
@@ -49,7 +51,7 @@ Build/deploy the current frame-monado first: its shared `openxr_frame.json` sele
 The shell launcher also exposes Monado's IPC socket inside Steam's game containers.
 Its `VR_OVERRIDE` selects a bundled xrizer for OpenVR and Proton's VR initialization, using the same
 revision and Frame controller patches as the PC package (`nix/xrizer.json`). Both ARM64 and x86-64
-clients are built by `./build headset` and installed by `./deploy`; SteamVR's global runtime remains unchanged.
+clients are built by `just build-headset` and installed by `just deploy`; SteamVR's global runtime remains unchanged.
 The dashboard's "Battery / performance" menu shows the battery as SteamVR reads it (Valve's charger service in
 `/run/deckardcharger`) and switches between two performance modes: "Streaming optimized" (frame-monado's GPU cap,
 578 MHz) and "Performance" (uncapped, for native games). The mode is `frame.gpu_max_mhz` in Monado's config, applied
@@ -88,7 +90,7 @@ and it becomes the runtime's primary client.
 | PC host services: monitor capture, WayVR IPC, notifications, metrics, games | `desktop/src/` |
 | Shell ↔ host messages | `wayvr/wayvr-ipc/src/frame.rs` |
 | C ABIs (headset shell, PC host) | `wayvr/frame-abi/include/frame_abi.h` |
-| Build scripts | `build`, `scripts/` |
+| Build and deploy recipes | `justfile`, `scripts/`, `Containerfile` |
 | Headset launcher and service | `headset/` |
 
 These are ordinary tracked source directories. Edit, build, commit and push here; there are no authoritative
@@ -108,8 +110,8 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for process ownership, ABI, wire messages
 
 ## Monado dependency
 
-The headset runtime is independently built/deployed from `frame-monado`'s `main` branch. `./build headset`
-builds only the WiVRn client and WayVR; `./deploy` restarts only the shell and leaves Monado installed.
+The headset runtime is independently built/deployed from `frame-monado`'s `main` branch. `just build-headset`
+builds only the WiVRn client and WayVR; `just deploy` restarts only the shell and leaves Monado installed.
 
 The PC server needs WiVRn's different Monado revision. That committed source is on `frame-monado`'s `wivrn`
 branch, pinned in this repository's `flake.lock`. No runtime integration patches are applied during our builds.
@@ -120,7 +122,7 @@ To work on that dependency locally:
 git worktree add ../frame-monado-host wivrn
 
 # In frame-shell:
-FRAME_HOST_MONADO=../frame-monado-host ./build host
+FRAME_HOST_MONADO=../frame-monado-host just build-host
 ```
 
 Once the host runtime change is committed and pushed, update the pinned dependency with
@@ -131,7 +133,7 @@ Once the host runtime change is committed and pushed, update the pinned dependen
 WiVRn and WayVR are Git subtrees (squashed imports of upstream WiVRn and the WayVR fork), so their source is in a
 normal clone.
 
-Validate host changes with `./build host`, headset changes with `./build headset`, and protocol changes with
+Validate host changes with `just build-host`, headset changes with `just build-headset`, and protocol changes with
 both. Runtime changes belong in frame-monado. Deployment checks dynamic dependencies before replacing binaries.
 Headset logs are available with:
 
@@ -181,7 +183,7 @@ client's full-size pass (1.75 → 0.45 ms GPU) and a 3240² write and read per f
 ### Eye expressions
 
 The headset client runs Babble Frame Runtime's eye model (vendored in `wivrn/client/frame_eyes/babble/`, GPL-3.0;
-the model is downloaded by `./build headset`) on the raw eye-camera frames from Valve's `dsp_service`, through
+the model is downloaded by `just build-headset`) on the raw eye-camera frames from Valve's `dsp_service`, through
 ExecuTorch (cross-built into the build container). It gives per-eye openness, widen and pupil dilation, calibrated
 to the wearer after a few seconds and again each time the headset is put on; per-eye gaze comes from Valve's eye
 tracker (`/dev/shm/eye-server.mmap`) with the shell's click calibration. The `from_headset::frame_eyes` packet
