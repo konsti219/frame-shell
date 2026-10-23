@@ -150,7 +150,7 @@ wivrn::wivrn_session::wivrn_session(std::unique_ptr<wivrn_connection> connection
 	{
 		try
 		{
-			eye_osc_sender = std::make_unique<eye_osc>(conf.eye_osc, conf.eye_osc_prefix);
+			eye_osc_sender = std::make_unique<eye_osc>(conf.eye_osc);
 		}
 		catch (std::exception & e)
 		{

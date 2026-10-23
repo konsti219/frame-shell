@@ -185,17 +185,17 @@ the model is downloaded by `./build headset`) on the raw eye-camera frames from 
 ExecuTorch (cross-built into the build container). It gives per-eye openness, widen and pupil dilation, calibrated
 to the wearer after a few seconds and again each time the headset is put on; per-eye gaze comes from Valve's eye
 tracker (`/dev/shm/eye-server.mmap`) with the shell's click calibration. The `from_headset::frame_eyes` packet
-carries them over the stream socket, and the server sends them as VRCFT v2 avatar parameters
-(`v2/EyeLeftX/Y`, `v2/EyeRightX/Y`, `v2/EyeX/Y`, `v2/EyeLidLeft/Right` with widen above 0.75, `v2/EyeLid`,
-`v2/PupilDilation`, plus `EyeTrackingActive`) to VRChat's OSC port. VRChat's native eye tracking isn't sent.
+carries them over the stream socket, and the server sends them to VRChat's native tracking OSC endpoints: per-eye
+gaze as `/tracking/eye/LeftRightPitchYaw` (capped at ±45°, smoothed with a One Euro filter between Babble Frame Runtime's light and middle presets), the mean lid closure as `/tracking/eye/EyesClosedAmount`,
+and a `/tracking/face/v1` blob with the matching `EyeLook*` keys (45° is 1), `EyeClosed*`, `EyeWide*`, and pupil size
+as `EyeDilation*` above the wearer's baseline and `EyeConstrict*` below it.
 The WiVRn tab's eye tracking line shows the update rate and whether it is still calibrating.
 
 - Headset `client.json`: `eye_expressions` (default on), `eye_expressions_divisor` (one model update per that many
   camera frames, default 1). The cameras run at frame-monado's `frame.eye_tracking_fps` (default 36).
   At divisor 1, increasing 15 to 72 Hz measured about +0.5 W and +17% of one CPU core for the eye process
   plus shell in a panel-on idle test.
-- Server config: `eye-osc` (`host:port`, default `127.0.0.1:9000`; empty or `false` turns it off) and
-  `eye-osc-prefix` (default `/FT`).
+- Server config: `eye-osc` (`host:port`, default `127.0.0.1:9000`; empty or `false` turns it off).
 
 Server config `tracking-sample-ms` (default 6, upstream 3): the prediction step between the headset's tracking
 samples of a device. Each sample is a runtime query and a packet; 6 ms halves them (~0.25 W on the headset in the

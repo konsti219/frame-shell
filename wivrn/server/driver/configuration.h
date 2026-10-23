@@ -61,9 +61,8 @@ struct configuration
 	std::optional<float> lh_stick_deadzone;
 	// Prediction step of the headset's tracking samples, in ms (upstream: 3)
 	int tracking_sample_ms = 6;
-	// Steam Frame eye data as VRCFT avatar parameters over OSC: host:port (empty: off) and parameter prefix
+	// Steam Frame eye data to VRChat's native eye and face tracking OSC endpoints: host:port (empty: off)
 	std::string eye_osc = "127.0.0.1:9000";
-	std::string eye_osc_prefix = "/FT";
 	bool hid_forwarding = false;
 	bool tcp_only = false;
 	int port = wivrn::default_port;

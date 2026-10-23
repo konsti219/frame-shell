@@ -200,9 +200,6 @@ configuration::configuration()
 		if (auto it = json.find("eye-osc"); it != json.end())
 			eye_osc = it->is_string() ? it->get<std::string>() : "";
 
-		if (auto it = json.find("eye-osc-prefix"); it != json.end())
-			eye_osc_prefix = *it;
-
 		if (auto it = json.find("debug-gui"); it != json.end())
 			debug_gui = *it;
 

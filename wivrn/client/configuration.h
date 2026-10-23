@@ -87,7 +87,7 @@ public:
 	// Testing: drop this share of incoming video shards, in runs of about simulated_loss_burst shards
 	float simulated_loss_percent = 0;
 	uint32_t simulated_loss_burst = 10;
-	// Steam Frame lids and pupils from Babble's eye model plus per-eye gaze, sent for the PC's VRCFT parameters
+	// Steam Frame lids and pupils from Babble's eye model plus per-eye gaze, sent for VRChat's native eye and face tracking on the PC
 	bool eye_expressions = true;
 	// One eye model update per this many camera frames
 	uint32_t eye_expressions_divisor = 1;

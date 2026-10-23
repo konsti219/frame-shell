@@ -6,26 +6,35 @@
 
 #include "wivrn_packets.h"
 
-#include <chrono>
+#include <array>
+#include <span>
 #include <string>
 #include <string_view>
 
 namespace wivrn
 {
-// Sends the Steam Frame's eye data (from_headset::frame_eyes) as VRCFT v2 avatar parameters over OSC
+// Sends the Steam Frame's eye data (from_headset::frame_eyes) to VRChat's native eye and face tracking OSC endpoints
 class eye_osc
 {
-	int fd = -1;
-	std::string prefix;
-	bool active = false;
-	std::chrono::steady_clock::time_point last_active{};
+	// One Euro filter (https://gery.casiez.net/1euro/) state for one value
+	struct one_euro
+	{
+		float x = 0, dx = 0;
+		float step(float value, float dt);
+	};
 
-	void send_float(std::string_view name, float value);
-	void send_active(bool value);
+	int fd = -1;
+	// Per-eye pitch and yaw, normalized so 45° is 1
+	std::array<one_euro, 4> gaze_filter;
+	XrTime last_gaze = 0;
+
+	void send_message(const std::string & m);
+	void send_floats(std::string_view address, std::span<const float> values);
+	void send_blob(std::string_view address, std::span<const uint8_t> data);
 
 public:
-	// target is host:port, prefix the avatar parameter prefix (e.g. "/FT")
-	eye_osc(const std::string & target, std::string prefix);
+	// target is host:port
+	explicit eye_osc(const std::string & target);
 	eye_osc(const eye_osc &) = delete;
 	eye_osc & operator=(const eye_osc &) = delete;
 	~eye_osc();
