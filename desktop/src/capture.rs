@@ -169,7 +169,7 @@ fn capture(output: &Output, shared: &Shared) -> Result<()> {
                     }
                     ScreenCastResult::WaitingForUser
                         if notification.is_none()
-                            && (!restoring || requested.elapsed() > Duration::from_secs(2)) =>
+                            && (!restoring || requested.elapsed() > Duration::from_millis(500)) =>
                     {
                         notification = Some(
                             notify::Notification::show(
