@@ -259,20 +259,17 @@ void scenes::stream::operator()(to_headset::feature_control && control)
 			}
 			return;
 		case wivrn::to_headset::feature_control::microphone:
+			microphone_requested = control.state;
 			if (audio_handle)
-				audio_handle->set_mic_state(control.state);
+				audio_handle->set_mic_state(video_active && microphone_requested);
 			return;
 	}
 }
 
 void scenes::stream::operator()(to_headset::audio_stream_description && desc)
 {
-	if (not video_active)
-	{
-		standby_audio = std::move(desc);
-		return;
-	}
 	audio_handle.emplace(desc, *network_session, instance);
+	audio_handle->set_mic_state(video_active && microphone_requested);
 }
 
 void scenes::stream::operator()(to_headset::video_stream_description && desc)
@@ -417,11 +414,8 @@ void scenes::stream::apply_video_active()
 	if (not active)
 		teardown_video();
 	network_session->send_control(from_headset::video_active{.active = active});
-	if (active and standby_audio)
-	{
-		audio_handle.emplace(*standby_audio, *network_session, instance);
-		standby_audio.reset();
-	}
+	if (audio_handle)
+		audio_handle->set_mic_state(active && microphone_requested);
 	if (active and standby_video)
 	{
 		auto desc = std::move(*standby_video);

@@ -118,12 +118,12 @@ private:
 	const uint32_t shell_source = frame_shell::next_source();
 	std::shared_ptr<frame_shell::desktop_receiver> desktop;
 	// Whether this PC presents VR. On standby it keeps its session, monitors and applications, but has no video
-	// decoders or audio and sends no tracking; the descriptions wait here for when it is made active.
+	// decoders and sends no tracking; speaker audio remains available from every connected PC.
 	std::atomic<bool> video_active = true;
 	// Asked for by the lobby, applied on the network thread
 	std::atomic<bool> wanted_active = true;
 	std::optional<to_headset::video_stream_description> standby_video;
-	std::optional<to_headset::audio_stream_description> standby_audio;
+	bool microphone_requested = false;
 	std::chrono::steady_clock::time_point standby_keepalive{};
 	// A VR (non-overlay) application runs on this PC: since when
 	std::atomic<int64_t> vr_app_since = 0;
