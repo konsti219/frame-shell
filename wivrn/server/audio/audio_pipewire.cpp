@@ -257,10 +257,16 @@ struct pipewire_device : public audio_device
 		if (desc.speaker or desc.microphone)
 			thread = std::jthread(
 			        [this](std::stop_token) {
-				pw_main_loop_run(pw_loop.get());
-				speaker.reset();
-				microphone.reset();
-				; });
+				        pw_main_loop_run(pw_loop.get());
+				        for (auto * stream: {&speaker, &microphone})
+				        {
+					        if (!*stream)
+						        continue;
+					        // Callbacks retain access until PipeWire has stopped processing the stream.
+					        pw_stream_destroy(stream->get());
+					        (void)stream->release();
+				        }
+			        });
 	}
 };
 } // namespace
