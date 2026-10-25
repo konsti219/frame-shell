@@ -144,20 +144,24 @@ build-headset: _fetch-eye-model
     done
     EOF
 
-# Babble Frame Runtime's eye model (GPL-3.0-or-later) for the headset client
+# Babble Frame Runtime's eye kit (GPL-3.0-or-later) for the headset client
 _fetch-eye-model:
     #!/usr/bin/env bash
     set -euo pipefail
-    dest="{{headset_build}}/stage/frame-shell/eye_split96_uncapped_fp16.pte"
-    url=https://media.githubusercontent.com/media/Project-Babble/Babble-Frame-Runtime/511bf3772568224b95b0aa21875e163dd10f4ec5/runtime/resources/models/eye_split96_uncapped_fp16.pte
-    sha256=b09a6359dc267f0be41f14c29635254341f4f4674d885b21c3672619b09c4871
-    if [ -f "$dest" ] && echo "$sha256  $dest" | sha256sum -c --quiet - 2>/dev/null; then
-        exit 0
-    fi
-    mkdir -p "$(dirname "$dest")"
-    curl -fL "$url" -o "$dest.tmp"
-    echo "$sha256  $dest.tmp" | sha256sum -c --quiet -
-    mv "$dest.tmp" "$dest"
+    dir="{{headset_build}}/stage/frame-shell"
+    base=https://media.githubusercontent.com/media/Project-Babble/Babble-Frame-Runtime/e96a3d31d945ae6d7b17cecd5455a1f1052d6c5e/runtime/resources/models
+    rm -f "$dir/eye_split96_uncapped_fp16.pte"
+    for model in eye_kit_stage1_fp16.pte:82ceeeabe6d73991882529dacadebc7836d9d5f0be3bd20147bcd91051e8a47e \
+        eye_kit_stage2_fp16.pte:caeaaf14dc6a45af37ebf30ce20c215c4bf374b0271817ad1e506a7c17797afb; do
+        name=${model%%:*} sha256=${model#*:} dest="$dir/${model%%:*}"
+        if [ -f "$dest" ] && echo "$sha256  $dest" | sha256sum -c --quiet - 2>/dev/null; then
+            continue
+        fi
+        mkdir -p "$dir"
+        curl -fL "$base/$name" -o "$dest.tmp"
+        echo "$sha256  $dest.tmp" | sha256sum -c --quiet -
+        mv "$dest.tmp" "$dest"
+    done
 
 # Install the headset shell and restart it if Monado runs; FRAME_HEADSET overrides steamos@frame
 deploy:
@@ -200,7 +204,8 @@ deploy:
     install -m755 "$stage/wayvr" "$HOME/.local/bin/wayvr"
     install -m755 "$stage/"*.so* "$HOME/.local/lib/frame-shell/"
     cp -a "$stage/xrizer" "$HOME/.local/lib/frame-shell/"
-    install -Dm644 "$stage/eye_split96_uncapped_fp16.pte" "$HOME/.local/share/frame-shell/eye_split96_uncapped_fp16.pte"
+    install -Dm644 -t "$HOME/.local/share/frame-shell" "$stage/eye_kit_stage1_fp16.pte" "$stage/eye_kit_stage2_fp16.pte"
+    rm -f "$HOME/.local/share/frame-shell/eye_split96_uncapped_fp16.pte" "$stage/eye_split96_uncapped_fp16.pte"
     install -m644 "$stage/not-with-shell.conf" "$HOME/.config/systemd/user/monado-wivrn.service.d/not-with-shell.conf"
     install -m644 "$stage/not-with-shell.conf" "$HOME/.config/systemd/user/monado-wayvr.service.d/not-with-shell.conf"
     touch "$HOME/.config/steamframe-enable-shell"

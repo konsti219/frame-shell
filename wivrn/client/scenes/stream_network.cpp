@@ -296,7 +296,7 @@ void scenes::stream::operator()(to_headset::video_stream_description && desc)
 #if WIVRN_FRAME_EYES
 	if (not eye_tracker and application::get_config().eye_expressions)
 		eye_tracker = std::make_unique<frame_eyes::tracker>(
-		        xdg_data_home() / "frame-shell" / "eye_split96_uncapped_fp16.pte",
+		        xdg_data_home() / "frame-shell",
 		        application::get_config().eye_expressions_divisor,
 		        [this](from_headset::frame_eyes && eyes) {
 			        if (state_ == state::shutdown or not video_active)

@@ -182,10 +182,12 @@ client's full-size pass (1.75 → 0.45 ms GPU) and a 3240² write and read per f
 
 ### Eye expressions
 
-The headset client runs Babble Frame Runtime's eye model (vendored in `wivrn/client/frame_eyes/babble/`, GPL-3.0;
-the model is downloaded by `just build-headset`) on the raw eye-camera frames from Valve's `dsp_service`, through
-ExecuTorch (cross-built into the build container). It gives per-eye openness, widen and pupil dilation, calibrated
-to the wearer after a few seconds and again each time the headset is put on; per-eye gaze comes from Valve's eye
+The headset client runs Babble Frame Runtime 1.1's two-stage eye kit (vendored in `wivrn/client/frame_eyes/babble/`,
+GPL-3.0; the models are downloaded by `just build-headset`) on the raw eye-camera frames from Valve's `dsp_service`,
+through ExecuTorch (cross-built into the build container): stage 1 gives lid openness, pupil centre and widen per eye,
+stage 2 the pupil diameter in mm from a full-resolution crop around that centre. Lids are calibrated to the wearer
+(neutral, and how far the eyes close) after a few seconds and again each time the headset is put on; widen and
+pupil dilation are the mean of both eyes, as Babble sends them by default; per-eye gaze comes from Valve's eye
 tracker (`/dev/shm/eye-server.mmap`) with the shell's click calibration. The `from_headset::frame_eyes` packet
 carries them over the stream socket, and the server sends them to VRChat's native tracking OSC endpoints: per-eye
 gaze as `/tracking/eye/LeftRightPitchYaw` (capped at ±45°, smoothed with a One Euro filter between Babble Frame Runtime's light and middle presets), the mean lid closure as `/tracking/eye/EyesClosedAmount`,

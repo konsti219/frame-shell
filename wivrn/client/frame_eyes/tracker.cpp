@@ -13,7 +13,7 @@
 #include "camera/eye/eye_pairer.h"
 #include "core/clock.h"
 #include "model/executorch_runner.h"
-#include "model/half.h"
+#include "model/eye_kit.h"
 #include "model/image_ops.h"
 #include "model/postprocess/eye_post.h"
 
@@ -32,7 +32,7 @@ namespace
 // Control block bases seen in dsp_service builds
 constexpr uint32_t ctrl_base_candidates[] = {0x234000, 0x124000};
 
-// The model's training crops of the 512x512 frames
+// The eye kit's training crops of the 512x512 frames
 struct crop
 {
 	uint32_t y, x, h, w;
@@ -46,10 +46,13 @@ constexpr uint64_t retry_min_ns = 5'000'000'000;
 constexpr uint64_t retry_max_ns = 60'000'000'000;
 constexpr uint32_t max_layout_faults = 3;
 
-// Babble Frame Runtime's eye pipeline defaults
+// Babble Frame Runtime 1.1's eye pipeline defaults (runtime/resources/defaults.json)
 constexpr double ref_hz = 90;
-constexpr double calib_warmup_s = 2;
-constexpr double pupil_gate = 0.4, pupil_gate_hys = 0.1, pupil_hold_s = 0.1, pupil_rate = 0.6, pupil_base_s = 60;
+constexpr double calib_warmup_s = 3;
+constexpr double widen_seed = 0.15, widen_ceiling_max = 1.6, lid_saturation = 1.6, closed_seed = 0.3, calib_tol = 0.15;
+constexpr double kit_widen_gain = 0.8;
+constexpr uint32_t pupil_crop_px = 128;
+constexpr double pupil_gate = 0.4, pupil_gate_hys = 0.1, pupil_hold_s = 0.1, pupil_rate_mm = 0.06, pupil_base_s = 60;
 constexpr double pupil_gain = 2;
 
 void sleep_ns(uint64_t ns)
@@ -61,7 +64,7 @@ void sleep_ns(uint64_t ns)
 
 struct frame_eyes::tracker::impl
 {
-	std::filesystem::path model_path;
+	std::filesystem::path model_dir;
 	uint32_t divisor;
 	sender send;
 	std::function<XrTime()> now;
@@ -71,13 +74,9 @@ struct frame_eyes::tracker::impl
 	babble::EyePairer pairer;
 	eye_gaze gaze;
 
-	std::unique_ptr<babble::ExecuTorchRunner> model;
-	uint32_t res = 0;
-	size_t plane = 0;
-	std::vector<float> x;
-	std::array<float, 4> out{}; // lid and pupil per view
-	std::vector<uint16_t> half_in, half_out;
-	std::vector<uint8_t> view_l, view_r, flipped, small;
+	babble::EyeKit kit;
+	babble::EyeKit::Result result;
+	std::vector<uint8_t> view_l, view_r, flipped;
 
 	// Index 0 is the "left" ring (the wearer's right eye), 1 the "right" ring (the wearer's left eye)
 	std::vector<babble::eye::OpennessCalibrator> openness;
@@ -90,20 +89,8 @@ struct frame_eyes::tracker::impl
 	bool load_model()
 	{
 		babble::ExecuTorchRunner::set_threads(1);
-		model = std::make_unique<babble::ExecuTorchRunner>();
-		if (not model->load(model_path))
+		if (not kit.load(model_dir / "eye_kit_stage1_fp16.pte", model_dir / "eye_kit_stage2_fp16.pte", pupil_crop_px))
 			return false;
-		auto in = model->inputs();
-		auto out = model->outputs();
-		if (in.size() != 1 or out.size() != 1 or out[0].elements() != 4)
-			return false;
-		const auto & shape = in[0].shape;
-		if (shape.size() != 4 or shape[0] != 2 or shape[1] != 1 or shape[2] != shape[3] or shape[2] < 16 or shape[2] > 400)
-			return false;
-		res = uint32_t(shape[2]);
-		plane = size_t(res) * res;
-		x.resize(2 * plane);
-		small.resize(plane);
 		view_l.resize(size_t(crop_l.w) * crop_l.h);
 		view_r.resize(size_t(crop_r.w) * crop_r.h);
 		flipped.resize(view_r.size());
@@ -117,6 +104,12 @@ struct frame_eyes::tracker::impl
 		p.warmup = tuned.count(calib_warmup_s * tuned.ref_hz);
 		p.every = tuned.count(12);
 		p.peak_window = tuned.count(9);
+		p.trough_window = tuned.count(5);
+		p.closed_seed = closed_seed;
+		p.tol = calib_tol;
+		p.widen_seed = widen_seed;
+		p.ceiling_max = widen_ceiling_max;
+		p.saturation = lid_saturation;
 		return p;
 	}
 
@@ -133,7 +126,7 @@ struct frame_eyes::tracker::impl
 		for (int e = 0; e < 2; e++)
 		{
 			openness.emplace_back(openness_params(), babble::eye::kLidOneEuro);
-			pupils.emplace_back(pupil_gate, pupil_gate_hys, int(tuned.count(pupil_hold_s * tuned.ref_hz)), babble::eye::kPupilOneEuro, pupil_rate, 1, 1);
+			pupils.emplace_back(pupil_gate, pupil_gate_hys, int(tuned.count(pupil_hold_s * tuned.ref_hz)), babble::eye::kPupilOneEuroMm, pupil_rate_mm, 1, 1);
 		}
 		set_pupil_windows();
 		last_capture_ns = 0;
@@ -147,7 +140,7 @@ struct frame_eyes::tracker::impl
 			t.set_hold(int(tuned.count(pupil_hold_s * tuned.ref_hz)));
 		const auto p = openness_params();
 		for (auto & c: openness)
-			c.set_timing(p.skip, p.warmup, p.every, p.peak_window);
+			c.set_timing(p.skip, p.warmup, p.every, p.peak_window, p.trough_window);
 		set_pupil_windows();
 		spdlog::debug("Eyes: filters tuned for {:.0f} updates/s", hz);
 	}
@@ -162,7 +155,7 @@ struct frame_eyes::tracker::impl
 		return src != nullptr;
 	}
 
-	void prepare()
+	bool run_kit()
 	{
 		babble::img::View views[2] = {
 		        {view_l.data(), crop_l.w, crop_l.h, crop_l.w},
@@ -171,45 +164,14 @@ struct frame_eyes::tracker::impl
 		// For the right ring, rot90(2) and a mirror are the same as a vertical flip
 		babble::img::flip_vertical(views[1], {flipped.data(), crop_r.w, crop_r.h, crop_r.w});
 		views[1] = {flipped.data(), crop_r.w, crop_r.h, crop_r.w};
-		for (int v = 0; v < 2; v++)
-		{
-			babble::img::resize_area(views[v], {small.data(), res, res, res});
-			float * dst = x.data() + v * plane;
-			for (size_t i = 0; i < plane; i++)
-				dst[i] = (float(small[i]) / 255.0f - 0.5f) / 0.25f;
-		}
-	}
-
-	bool run_model()
-	{
-		const babble::TensorSpec &is = model->inputs()[0], &os = model->outputs()[0];
-		const void * in = x.data();
-		if (is.dtype == babble::DType::F16)
-		{
-			half_in.resize(is.elements());
-			babble::to_half(x.data(), half_in.data(), is.elements());
-			in = half_in.data();
-		}
-		void * o = out.data();
-		if (os.dtype == babble::DType::F16)
-		{
-			half_out.resize(os.elements());
-			o = half_out.data();
-		}
-		std::vector<babble::TensorView> iv{{const_cast<void *>(in), &is}};
-		std::vector<babble::TensorView> ov{{o, &os}};
-		if (not model->run(iv, ov))
-			return false;
-		if (os.dtype == babble::DType::F16)
-			babble::from_half(half_out.data(), out.data(), os.elements());
-		return true;
+		return kit.run({views[0], views[1]}, result);
 	}
 };
 
-frame_eyes::tracker::tracker(std::filesystem::path model, uint32_t divisor, sender send, std::function<XrTime()> now) :
+frame_eyes::tracker::tracker(std::filesystem::path model_dir, uint32_t divisor, sender send, std::function<XrTime()> now) :
         d(std::make_unique<impl>())
 {
-	d->model_path = std::move(model);
+	d->model_dir = std::move(model_dir);
 	d->divisor = std::clamp<uint32_t>(divisor, 1, 6);
 	d->send = std::move(send);
 	d->now = std::move(now);
@@ -248,7 +210,7 @@ void frame_eyes::tracker::run()
 
 	if (not d->load_model())
 	{
-		set_state("eye model missing or unusable: " + d->model_path.string());
+		set_state("eye model missing or unusable in " + d->model_dir.string());
 		return;
 	}
 
@@ -391,20 +353,26 @@ void frame_eyes::tracker::run()
 			}
 		}
 
-		d->prepare();
-		if (not d->run_model())
+		if (not d->run_kit())
 			continue;
 
-		std::array<double, 2> openness, widen;
+		std::array<double, 2> lid, widen;
 		std::array<std::optional<double>, 2> dilation;
 		for (int e = 0; e < 2; e++)
 		{
-			const auto r = d->openness[e].update(d->out[2 * e], dt);
-			openness[e] = r.openness;
-			widen[e] = r.widen;
-			auto p = d->pupils[e].update(openness[e], d->out[2 * e + 1], d->tuned.k(), dt);
+			const auto r = d->openness[e].update(d->result.lid[e], dt);
+			lid[e] = r.lid;
+			// The kit's Widen head replaces the Widen from the openness
+			widen[e] = d->kit.has_widen() ? std::clamp(d->result.widen[e] / kit_widen_gain, 0.0, 1.0) : r.widen;
+			auto p = d->pupils[e].update(r.openness, d->result.mm[e], d->tuned.k(), dt);
 			dilation[e] = babble::eye::dilation(p, pupil_gain);
 		}
+		// Both eyes get the mean, as Babble does by default; one eye's pupil until both have a baseline
+		widen[0] = widen[1] = (widen[0] + widen[1]) / 2;
+		if (dilation[0] and dilation[1])
+			dilation[0] = dilation[1] = (*dilation[0] + *dilation[1]) / 2;
+		else
+			dilation[0] = dilation[1] = dilation[0] ? dilation[0] : dilation[1];
 
 		std::array<XrVector3f, 2> gaze{};
 		const bool gaze_valid = d->gaze.read(gaze);
@@ -413,7 +381,7 @@ void frame_eyes::tracker::run()
 		        .timestamp = d->now() - XrTime(babble::mono_ns() - capture_ns),
 		        .gaze = gaze,
 		        .gaze_valid = gaze_valid,
-		        .openness = {float(std::clamp(openness[1], 0.0, 1.0)), float(std::clamp(openness[0], 0.0, 1.0))},
+		        .openness = {float(lid[1]), float(lid[0])},
 		        .widen = {float(widen[1]), float(widen[0])},
 		        .lids_valid = true,
 		        .dilation = {float(dilation[1].value_or(-1)), float(dilation[0].value_or(-1))},

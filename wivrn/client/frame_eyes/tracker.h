@@ -16,15 +16,15 @@
 
 namespace frame_eyes
 {
-// Lid openness, widen and pupil dilation from the Steam Frame's eye cameras (Babble's eye model on dsp_service
-// frames), with per-eye gaze from Valve's eye tracker
+// Lid openness, widen and pupil dilation from the Steam Frame's eye cameras (Babble's two-stage eye kit on
+// dsp_service frames), with per-eye gaze from Valve's eye tracker
 class tracker
 {
 public:
 	using sender = std::function<void(wivrn::from_headset::frame_eyes &&)>;
 
-	// One model update per `divisor` camera frames
-	tracker(std::filesystem::path model, uint32_t divisor, sender send, std::function<XrTime()> now);
+	// model_dir holds the eye kit (eye_kit_stage1_fp16.pte, eye_kit_stage2_fp16.pte); one update per `divisor` camera frames
+	tracker(std::filesystem::path model_dir, uint32_t divisor, sender send, std::function<XrTime()> now);
 	tracker(const tracker &) = delete;
 	tracker & operator=(const tracker &) = delete;
 	~tracker();

@@ -141,6 +141,7 @@ else()
             frame_eyes/eye_gaze.cpp
             frame_eyes/babble/camera/eye/dsp_client.cpp
             frame_eyes/babble/model/executorch_runner.cpp
+            frame_eyes/babble/model/eye_kit.cpp
             frame_eyes/babble/model/image_ops.cpp
             frame_eyes/babble/model/postprocess/eye_post.cpp
             frame_eyes/babble/model/postprocess/one_euro.cpp)
