@@ -52,7 +52,10 @@ no injected API layer or shared focus file.
 
 ## Desktop video
 
-One portal session, restore token and hardware H.264/HEVC encoder per monitor. `desktop_surface` announces a
+One portal session, restore token and hardware H.264/HEVC encoder per monitor. Restore tokens are per app (the
+portal derives it from the systemd scope), so the development server runs in its own scope like the installed
+service. The cast hands DMA-bufs to VA-API, and the encoder is always told its source is live so it never holds
+frames back. `desktop_surface` announces a
 monitor (codec, size, region in the desktop for pointer input) before its first frame. Access units travel as
 `desktop_video` shards on the stream socket, with FEC parity and resends on request (`desktop_nack`); a frame
 that can't be completed drops frames until the next keyframe (`desktop_keyframe`). Hidden monitors aren't encoded.

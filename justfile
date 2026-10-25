@@ -267,7 +267,10 @@ run:
         install -m600 -- "$build/capture-token" "$FRAME_SHELL_CAPTURE_TOKEN"
     fi
     export GST_REGISTRY="$build/gstreamer-registry.bin"
-    XDG_CONFIG_HOME="$build/config" nix develop "{{root}}" --command "$server" -f "{{root}}/server.json" --no-manage-active-runtime &
+    # The portal keys restore tokens by app, taken from the systemd scope: in a terminal's app-*.scope the tokens
+    # shared with the installed frame-shell.service don't match and every monitor asks again
+    XDG_CONFIG_HOME="$build/config" systemd-run --user --scope --quiet --collect --unit="frame-shell-dev-$$" -- \
+        nix develop "{{root}}" --command "$server" -f "{{root}}/server.json" --no-manage-active-runtime &
     server_pid=$!
     wait "$server_pid"
 

@@ -281,11 +281,30 @@ fn stream_codec(
     } else {
         bail!("No hardware {codec} encoder available (va{codec}enc/nv{codec}enc)");
     };
+    // DMA-bufs when the encoder path takes them: a shared-memory cast has the compositor read every frame back
+    // (tens of ms on Intel iGPUs)
     let pipeline = gst::parse::launch(&format!(
-        "pipewiresrc path={node} do-timestamp=true keepalive-time=100 ! queue max-size-buffers=2 leaky=downstream ! videorate name=capture_rate drop-only=true ! video/x-raw,framerate=60/1 ! {encoder} ! {parse} config-interval=-1 ! {caps},stream-format=byte-stream,alignment=au ! appsink name=encoded sync=false max-buffers=2 drop=true"
+        "pipewiresrc path={node} do-timestamp=true keepalive-time=100 ! queue max-size-buffers=2 leaky=downstream ! videorate name=capture_rate drop-only=true ! video/x-raw(memory:DMABuf),framerate=60/1;video/x-raw,framerate=60/1 ! {encoder} ! {parse} config-interval=-1 ! {caps},stream-format=byte-stream,alignment=au ! appsink name=encoded sync=false max-buffers=2 drop=true"
     ))?
     .downcast::<gst::Pipeline>()
     .map_err(|_| anyhow::anyhow!("Invalid capture pipeline"))?;
+    // VA encoders hold 4 frames unless upstream is live when their format is set, and pipewiresrc only reports live
+    // once its stream properties arrive: a held desktop frame waits for 4 more changes or keepalives
+    pipeline
+        .by_name("encoder")
+        .unwrap()
+        .static_pad("sink")
+        .unwrap()
+        .add_probe(gst::PadProbeType::QUERY_UPSTREAM, |_, info| {
+            if let Some(gst::PadProbeData::Query(query)) = &mut info.data
+                && let gst::QueryViewMut::Latency(latency) = query.view_mut()
+            {
+                latency.set(true, gst::ClockTime::ZERO, gst::ClockTime::NONE);
+                return gst::PadProbeReturn::Handled;
+            }
+            gst::PadProbeReturn::Ok
+        })
+        .unwrap();
     let sink = pipeline
         .by_name("encoded")
         .unwrap()
