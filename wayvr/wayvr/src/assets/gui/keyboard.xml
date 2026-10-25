@@ -159,6 +159,8 @@
   <!-- Frame shell: a PC's group, led by a button with the PC's actions; its screens and applications follow -->
   <blueprint name="menu_host">
     <context_menu>
+      <cell skip="${connected_skip}" text="Keep background on this PC" _press="::FrameShell pin_vr ${cookie}" _press2="::ContextMenuClose" />
+      <cell text="Automatic background selection" _press="::FrameShell auto_vr" _press2="::ContextMenuClose" />
       <cell text="${action_label}" _press="${action}" _press2="::ContextMenuClose" />
     </context_menu>
   </blueprint>
@@ -167,7 +169,7 @@
     <!-- None for the first group while the headset has nothing in the row -->
     <rectangle width="2" height="100%" color="primary" display="${separator}" />
     <div id="host_${idx}" gap="6" align_items="center">
-      <Button macro="button_style" id="hostbtn_${idx}" tooltip_str="${name}" _context_action="${action}" _context_action_label="${action_label}" _press_left="${action}" _press_right="::ContextMenuOpen menu_host">
+      <Button macro="button_style" id="hostbtn_${idx}" tooltip_str="${name} · ${status}" _context_action="${action}" _context_action_label="${action_label}" _context_cookie="${cookie}" _context_connected_skip="${connected_skip}" _press_left="${action}" _press_right="::ContextMenuOpen menu_host">
         <sprite width="38" height="38" src_builtin="@/keyboard/host.svg" />
         <rectangle display="${presenting_display}" new_pass="1" position="absolute" width="20" height="20" margin_top="-26" margin_left="26"
           align_items="center" justify_content="center" round="50%" color="primary" border="2" border_color="background">
@@ -180,9 +182,9 @@
   <!-- An application running on a PC or the headset; Steam games can be stopped -->
   <blueprint name="menu_client">
     <context_menu>
-      <cell text="Automatic blending" _press="::RuntimeMode ${source} ${client} auto" _press2="::ContextMenuClose" />
-      <cell text="Use as default app" _press="::RuntimeMode ${source} ${client} default" _press2="::ContextMenuClose" />
-      <cell text="Use as overlay" _press="::RuntimeMode ${source} ${client} overlay" _press2="::ContextMenuClose" />
+      <cell text="${auto_label}" _press="::RuntimeMode ${source} ${client} auto" _press2="::ContextMenuClose" />
+      <cell text="${default_label}" _press="::RuntimeMode ${source} ${client} default" _press2="::ContextMenuClose" />
+      <cell text="${overlay_label}" _press="::RuntimeMode ${source} ${client} overlay" _press2="::ContextMenuClose" />
       <cell skip="${stop_skip}" text="Stop" _press="::FrameShellStop ${source} ${app_id}" _press2="::ContextMenuClose" />
       <cell skip="${pin_skip}" text="Unpin" _press="::WvrPinnedRemove ${pin}" _press2="::ContextMenuClose" />
       <cell skip="${stop_skip}" text="Force stop" _press="::FrameShellStop ${source} ${app_id} force" _press2="::ContextMenuClose" />
@@ -190,14 +192,22 @@
   </blueprint>
 
   <template name="Client">
-    <Button macro="button_style" id="client_${idx}" tooltip_str="${name}" _context_source="${source}" _context_app_id="${app_id}" _context_client="${client}" _context_pin="${pin}" _context_pin_skip="${pin_skip}" _context_stop_skip="${stop_skip}" _press_left="${show}" _press_right="::ContextMenuOpen menu_client">
+    <Button macro="button_style" id="client_${idx}" tooltip_str="${name}" _context_source="${source}" _context_app_id="${app_id}" _context_client="${client}" _context_auto_label="${auto_label}" _context_default_label="${default_label}" _context_overlay_label="${overlay_label}" _context_pin="${pin}" _context_pin_skip="${pin_skip}" _context_stop_skip="${stop_skip}" _press_left="${show}" _press_right="::ContextMenuOpen menu_client">
       <sprite width="38" height="38" src="${icon_builtin}" src_ext="${icon}" parent_color="ignore" />
+      <rectangle display="${overlay_display}" new_pass="1" position="absolute" width="20" height="20" margin_top="-26" margin_left="26"
+        align_items="center" justify_content="center" round="50%" color="primary" border="2" border_color="background">
+        <sprite width="12" height="12" src_builtin="@/edit/panel.svg" color="background" parent_color="ignore" />
+      </rectangle>
     </Button>
   </template>
 
   <template name="ClientShow">
-    <Button macro="button_style" id="client_${idx}" tooltip_str="${name}" _context_source="${source}" _context_app_id="0" _context_client="${client}" _context_pin="${pin}" _context_pin_skip="${pin_skip}" _context_stop_skip="1" _press_left="${show}" _press_right="::ContextMenuOpen menu_client">
+    <Button macro="button_style" id="client_${idx}" tooltip_str="${name}" _context_source="${source}" _context_app_id="0" _context_client="${client}" _context_auto_label="${auto_label}" _context_default_label="${default_label}" _context_overlay_label="${overlay_label}" _context_pin="${pin}" _context_pin_skip="${pin_skip}" _context_stop_skip="1" _press_left="${show}" _press_right="::ContextMenuOpen menu_client">
       <sprite width="38" height="38" src_builtin="@/edit/3d.svg" />
+      <rectangle display="${overlay_display}" new_pass="1" position="absolute" width="20" height="20" margin_top="-26" margin_left="26"
+        align_items="center" justify_content="center" round="50%" color="primary" border="2" border_color="background">
+        <sprite width="12" height="12" src_builtin="@/edit/panel.svg" color="background" parent_color="ignore" />
+      </rectangle>
     </Button>
   </template>
 

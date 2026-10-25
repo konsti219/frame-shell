@@ -215,17 +215,29 @@ impl Runtime {
 		)
 	}
 
+	pub fn background_visible(&self, visible: bool) -> Result<()> {
+		let set = self.function::<unsafe extern "C" fn(*mut c_void, bool) -> i32>(
+			b"mnd_root_set_background_visible\0",
+		)?;
+		Self::check(
+			unsafe { set(self.root, visible) },
+			"Setting background visibility",
+		)
+	}
+
 	pub fn control(&self, client: u32, action: ClientAction) -> Result<()> {
 		let state = self
 			.clients()?
 			.into_iter()
 			.find(|state| state.id == client)
 			.context("Runtime client no longer running")?;
-		if matches!(action, ClientAction::Select) && !state.overlay {
+		if matches!(action, ClientAction::Select) && !state.overlay && !(state.primary && state.visible)
+		{
 			return self.set_primary(client);
 		}
 		let (mode, visible) = match action {
 			ClientAction::Select => (state.presentation_mode, !state.visible),
+			ClientAction::Show => (state.presentation_mode, true),
 			ClientAction::Automatic => (0, true),
 			ClientAction::Default => (1, true),
 			ClientAction::Overlay => (2, true),
@@ -237,7 +249,9 @@ impl Runtime {
 			unsafe { set(self.root, client, mode, visible) },
 			"Changing app presentation",
 		)?;
-		if matches!(action, ClientAction::Default) {
+		if matches!(action, ClientAction::Default)
+			|| (matches!(action, ClientAction::Show) && !state.overlay)
+		{
 			self.set_primary(client)?;
 		}
 		Ok(())

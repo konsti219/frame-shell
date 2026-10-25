@@ -516,7 +516,7 @@ scenes::stream::~stream()
 #ifndef __ANDROID__
 	if (frame_shell::enabled())
 	{
-		frame_shell::clear_stream_commands();
+		frame_shell::clear_stream_commands(shell_source, video_active);
 		frame_shell::forget_source(shell_source);
 		frame_shell::connected(shell_source, false, video_active);
 	}
@@ -759,16 +759,41 @@ bool scenes::stream::is_gui_interactable() const
 
 void scenes::stream::render(const XrFrameState & frame_state)
 {
-	if (state_ == state::shutdown)
+	render_into(frame_state, nullptr);
+}
+
+void scenes::stream::render_into(const XrFrameState & frame_state, scene * composition)
+{
+	frame_prepared = false;
+	if (composition && (state_ == state::shutdown || !video_active))
+		return;
+	if (!composition && state_ == state::shutdown)
 		application::pop_scene();
 #ifndef __ANDROID__
 	// Back to the lobby when on standby, or for it to present the PC that started a VR application
-	else if (not video_active or frame_shell::switch_wanted)
+	else if (!composition && (not video_active or frame_shell::switch_wanted))
 	{
 		application::pop_scene();
 		session.begin_frame();
 		session.end_frame(frame_state.predictedDisplayTime, {});
 		return;
+	}
+#endif
+
+#ifndef __ANDROID__
+	if (frame_shell::enabled())
+	{
+		const auto activity = frame_shell::activity(shell_source);
+		if (activity.known && !activity.visible)
+		{
+			if (composition)
+				return;
+			session.begin_frame();
+			session.enable_passthrough(system);
+			render_start(true, frame_state.predictedDisplayTime);
+			render_end();
+			return;
+		}
 	}
 #endif
 
@@ -781,12 +806,14 @@ void scenes::stream::render(const XrFrameState & frame_state)
 	if (not frame_state.shouldRender or decoders[0].empty() or decoders[1].empty() or state_ == state::shutdown)
 	{
 		// TODO: stop/restart video stream
+		if (composition)
+			return;
 		session.begin_frame();
 		session.end_frame(frame_state.predictedDisplayTime, {});
 		return;
 	}
 
-	if (state_ == state::stalled)
+	if (!composition && state_ == state::stalled)
 	{
 		network_session->send_control(from_headset::get_application_list{
 		        .language = application::get_messages_info().language,
@@ -821,7 +848,13 @@ void scenes::stream::render(const XrFrameState & frame_state)
 		}
 	}
 
-	session.begin_frame();
+	current_blit_handles = common_frame(frame_state.predictedDisplayTime);
+	if (composition && !wanted_background &&
+	    (!current_blit_handles[0] || !current_blit_handles[0]->view_info.alpha || !current_blit_handles[view_count]))
+		return;
+
+	if (!composition)
+		session.begin_frame();
 
 #if WIVRN_FEATURE_RENDERDOC
 	renderdoc_begin(*vk_instance);
@@ -836,9 +869,6 @@ void scenes::stream::render(const XrFrameState & frame_state)
 	command_buffer.resetQueryPool(*query_pool, 0, size_gpu_timestamps);
 	command_buffer.writeTimestamp(vk::PipelineStageFlagBits::eTopOfPipe, *query_pool, 0);
 
-	// Search for frame with desired display time on all decoders
-	// If no such frame exists, use the latest frame for each decoder
-	current_blit_handles = common_frame(frame_state.predictedDisplayTime);
 	std::array<XrPosef, view_count> pose;
 	std::array<XrFovf, view_count> fov;
 	std::array<wivrn::foveation_description, view_count> foveation;
@@ -1141,12 +1171,15 @@ void scenes::stream::render(const XrFrameState & frame_state)
 #endif
 		swapchain.release();
 
-		if (use_alpha)
-			session.enable_passthrough(system);
-		else
-			session.disable_passthrough();
+		if (!composition)
+		{
+			if (use_alpha)
+				session.enable_passthrough(system);
+			else
+				session.disable_passthrough();
+		}
 
-		render_start(use_alpha, frame_state.predictedDisplayTime);
+		render_start(use_alpha, frame_state.predictedDisplayTime, !composition);
 
 		// Add the layer with the streamed content
 		std::array<XrCompositionLayerProjectionView, view_count> layer_view;
@@ -1197,7 +1230,10 @@ void scenes::stream::render(const XrFrameState & frame_state)
 
 		try
 		{
-			render_end();
+			if (composition)
+				composition->append_layers(*this);
+			else
+				render_end();
 		}
 		catch (std::system_error & e)
 		{
@@ -1208,6 +1244,15 @@ void scenes::stream::render(const XrFrameState & frame_state)
 		}
 	}
 
+	frame_prepared = true;
+	if (!composition)
+		finish_frame(frame_state);
+}
+
+void scenes::stream::finish_frame(const XrFrameState & frame_state)
+{
+	if (!std::exchange(frame_prepared, false))
+		return;
 	// Network operations may be blocking, do them once everything was submitted
 	{
 		// Keep a copy of the feedback packets as they can be modified if they're encrypted
@@ -1241,6 +1286,11 @@ void scenes::stream::render(const XrFrameState & frame_state)
 
 	read_actions();
 
+	query_pool_filled = true;
+#ifndef __ANDROID__
+	if (frame_shell::enabled())
+		return;
+#endif
 	if (application::get_config().enable_stream_gui)
 	{
 		XrActionStateGetInfo get_info{
@@ -1267,7 +1317,6 @@ void scenes::stream::render(const XrFrameState & frame_state)
 		}
 	}
 
-	query_pool_filled = true;
 }
 
 void scenes::stream::exit()
@@ -1299,7 +1348,6 @@ void scenes::stream::teardown_video()
 		item.latest_frames.fill(nullptr);
 		item.decoder.reset();
 	}
-	audio_handle.reset();
 	if (state_ == state::streaming)
 		set_state(state::stalled);
 }

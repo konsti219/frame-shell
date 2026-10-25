@@ -49,8 +49,14 @@ static auto resolve_path(std::filesystem::path path)
 }
 
 static std::filesystem::path config_file;
-static std::filesystem::path known_keys_file = resolve_path(xdg_config_home() / "wivrn" / "known_keys.json");
-static std::filesystem::path cookie_file = resolve_path(xdg_config_home() / "wivrn" / "cookie");
+static std::filesystem::path identity_dir()
+{
+	if (const char * path = std::getenv("FRAME_SHELL_IDENTITY_DIR"))
+		return path;
+	return xdg_config_home() / "wivrn";
+}
+static std::filesystem::path known_keys_file = resolve_path(identity_dir() / "known_keys.json");
+static std::filesystem::path cookie_file = resolve_path(identity_dir() / "cookie");
 
 namespace wivrn
 {

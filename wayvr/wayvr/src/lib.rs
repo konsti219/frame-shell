@@ -443,5 +443,6 @@ fn ensure_single_instance(replace: bool) -> bool {
 mod eye_calibration;
 mod floor_estimate;
 mod frame_host;
+mod frame_hosts;
 mod frame_shell;
 mod headset_audio;

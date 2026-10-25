@@ -240,7 +240,7 @@ fn add_pin(
         |name| {
             crate::frame_shell::top_row_hosts()
                 .into_iter()
-                .find(|host| host.name == *name)
+                .find(|host| host.cookie == *name)
                 .map_or((None, Vec::new()), |host| (host.source, host.clients))
         },
     );
@@ -300,7 +300,39 @@ fn add_client(
 ) -> anyhow::Result<()> {
     let mut params = TemplateParams::new();
     params.insert_rc("idx", idx.to_string().into());
-    params.insert("name", client.name.as_str());
+    let role = if client.overlay { "Overlay" } else { "VR app" };
+    params.insert("name", &format!("{} · {role}", client.name));
+    params.insert(
+        "overlay_display",
+        if client.overlay { "flex" } else { "none" },
+    );
+    params.insert(
+        "auto_label",
+        &format!(
+            "Auto-detect: {role}{}",
+            if client.presentation_mode == 0 {
+                " ✓"
+            } else {
+                ""
+            }
+        ),
+    );
+    params.insert(
+        "default_label",
+        if client.presentation_mode == 1 {
+            "Force VR app ✓"
+        } else {
+            "Force VR app"
+        },
+    );
+    params.insert(
+        "overlay_label",
+        if client.presentation_mode == 2 {
+            "Force overlay ✓"
+        } else {
+            "Force overlay"
+        },
+    );
     params.insert("show", client.show.as_str());
     params.insert("pin_skip", if pin.is_some() { "0" } else { "1" });
     params.insert_rc("pin", pin.unwrap_or_default().to_string().into());
@@ -311,14 +343,7 @@ fn add_client(
             .map_or_else(|| "native".to_owned(), |s| s.to_string())
             .into(),
     );
-    params.insert(
-        "stop_skip",
-        if client.app_id.is_some() {
-            "0"
-        } else {
-            "1"
-        },
-    );
+    params.insert("stop_skip", if client.app_id.is_some() { "0" } else { "1" });
     let template = if let Some(app_id) = &client.app_id {
         params.insert_rc(
             "source",
@@ -404,37 +429,7 @@ fn rebuild_groups(
         native |= !children.is_empty();
     }
 
-    // PCs: known ones, then any that only remembered screens or pins name
-    let mut hosts = crate::frame_shell::top_row_hosts();
-    let mut extra = Vec::<String>::new();
-    for meta in me.last_metas.iter() {
-        if matches!(meta.category, OverlayCategory::Screen)
-            && let Some((prefix, _)) = meta.name.rsplit_once(' ')
-            && !hosts.iter().any(|h| h.screen_prefix == prefix)
-            && !extra.iter().any(|e| e == prefix)
-        {
-            extra.push(prefix.to_owned());
-        }
-    }
-    for pin in &pins {
-        if let Some(host) = &pin.host
-            && !hosts.iter().any(|h| h.name == *host)
-            && !extra.iter().any(|e| e == host)
-        {
-            extra.push(host.clone());
-        }
-    }
-    for name in extra {
-        hosts.push(crate::frame_shell::TopRowHost {
-            screen_prefix: name.clone(),
-            name,
-            cookie: String::new(),
-            source: None,
-            presenting: false,
-            clients: Vec::new(),
-        });
-    }
-
+    let hosts = crate::frame_shell::top_row_hosts();
     layout
         .common()
         .alterables
@@ -449,20 +444,16 @@ fn rebuild_groups(
             if host.presenting { "flex" } else { "none" },
         );
         params.insert("separator", if g > 0 || native { "flex" } else { "none" });
-        let (action, label) = if host.cookie.is_empty() {
-            (
-                format!("::FrameShellScreen {} ", host.screen_prefix),
-                "Connect / disconnect",
-            )
-        } else if !connected {
-            (format!("::FrameShell connect {}", host.cookie), "Connect")
-        } else if host.presenting {
-            ("::FrameShell disconnect".to_owned(), "Disconnect")
-        } else {
+        params.insert("status", host.status.as_str());
+        params.insert("cookie", host.cookie.as_str());
+        params.insert("connected_skip", if connected { "0" } else { "1" });
+        let (action, label) = if connected {
             (
                 format!("::FrameShell disconnect {}", host.cookie),
                 "Disconnect",
             )
+        } else {
+            (format!("::FrameShell connect {}", host.cookie), "Connect")
         };
         params.insert_rc("action", action.into());
         params.insert("action_label", label);
@@ -474,10 +465,7 @@ fn rebuild_groups(
 
         // Its screens
         for (i, meta) in me.last_metas.iter().enumerate() {
-            if !matches!(meta.category, OverlayCategory::Screen)
-                || meta.name.rsplit_once(' ').map(|(prefix, _)| prefix)
-                    != Some(host.screen_prefix.as_str())
-            {
+            if !matches!(meta.category, OverlayCategory::Screen) || !host.owns_screen(&meta.name) {
                 continue;
             }
             let mut params = TemplateParams::new();
@@ -489,7 +477,14 @@ fn rebuild_groups(
                     "none"
                 },
             );
-            params.insert_rc("display", screen_label(&meta.name).into());
+            params.insert_rc(
+                "display",
+                screen_label(
+                    &crate::frame_hosts::monitor_label(&meta.name)
+                        .unwrap_or_else(|| meta.name.to_string()),
+                )
+                .into(),
+            );
             params.insert_rc("idx", i.to_string().into());
             params.insert("name", meta.name.as_ref());
             parser_state.instantiate_template(doc_params, "Screen", layout, group, params)?;
@@ -501,14 +496,14 @@ fn rebuild_groups(
 
         // Its pins, which turn into the running game's button while it runs, then other running applications
         for (i, pin) in pins.iter().enumerate() {
-            if pin.host.as_deref() == Some(host.name.as_str()) {
+            if pin.host.as_deref() == Some(host.cookie.as_str()) {
                 add_pin(app, layout, parser_state, doc_params, group, i)?;
             }
         }
         for client in &host.clients {
             let pinned = client.app_id.as_ref().is_some_and(|id| {
                 pins.iter().any(|pin| {
-                    pin.host.as_deref() == Some(host.name.as_str()) && *pin.app_id == **id
+                    pin.host.as_deref() == Some(host.cookie.as_str()) && *pin.app_id == **id
                 })
             });
             if !pinned {

@@ -52,10 +52,68 @@ pub fn set_input_capture(paths: &[std::ffi::CString], pose_mask: u32) {
     }
 }
 
+pub fn publish_pc_routes() {
+    let entries: Vec<_> = crate::frame_hosts::pcs()
+        .into_iter()
+        .flat_map(|pc| {
+            pc.endpoints.into_iter().map(move |endpoint| {
+                (
+                    std::ffi::CString::new(endpoint).unwrap(),
+                    std::ffi::CString::new(pc.id.as_str()).unwrap(),
+                )
+            })
+        })
+        .collect();
+    let routes: Vec<_> = entries
+        .iter()
+        .map(|(endpoint, id)| frame_abi::frame_pc_route {
+            endpoint: endpoint.as_ptr(),
+            pc_id: id.as_ptr(),
+        })
+        .collect();
+    if let Some(Host(host)) = host().as_ref()
+        && let Some(send) = host.pc_routes
+    {
+        unsafe { send(host.user, routes.as_ptr(), routes.len()) };
+    }
+}
+
+pub fn runtime_clients(
+    source: u32,
+    clients: &[wayvr_ipc::frame::RuntimeClient],
+    known: bool,
+    composition_supported: bool,
+) {
+    let clients: Vec<_> = clients
+        .iter()
+        .map(|client| frame_abi::frame_runtime_client {
+            id: client.id,
+            overlay: client.overlay,
+            visible: client.visible,
+            primary: client.primary,
+        })
+        .collect();
+    if let Some(Host(host)) = host().as_ref()
+        && let Some(send) = host.runtime_clients
+    {
+        unsafe {
+            send(
+                host.user,
+                source,
+                clients.as_ptr(),
+                clients.len(),
+                known,
+                composition_supported,
+            )
+        };
+    }
+}
+
 pub static EMBEDDED: AtomicBool = AtomicBool::new(false);
 /// The WiVRn client's callbacks, from `run`
 static HOST: Mutex<Option<Host>> = Mutex::new(None);
 static CONNECTED: AtomicBool = AtomicBool::new(false);
+static REMOTE_LAYER_VISIBLE: AtomicBool = AtomicBool::new(false);
 static INPUT: Mutex<VecDeque<ShellInput>> = Mutex::new(VecDeque::new());
 /// PC monitors announced by the client, keyed by `surface_key`
 static SURFACES: Mutex<BTreeMap<u64, Surface>> = Mutex::new(BTreeMap::new());
@@ -64,10 +122,8 @@ static RUN: AtomicU64 = AtomicU64::new(0);
 /// Surface the PC pointer was last moved on
 static POINTER_SURFACE: AtomicU64 = AtomicU64::new(0);
 /// The WiVRn client's lobby (servers, connection) and stream (PC apps) state as JSON, with a change counter
-pub static LOBBY_STATE: Mutex<(u64, String, String)> =
-    Mutex::new((0, String::new(), String::new()));
-/// PCs connected besides the one presenting VR (the client's hosts_state), as JSON
-static HOSTS: Mutex<String> = Mutex::new(String::new());
+pub static LOBBY_STATE: Mutex<(u64, String)> = Mutex::new((0, String::new()));
+static STREAM_STATES: Mutex<BTreeMap<u32, serde_json::Value>> = Mutex::new(BTreeMap::new());
 /// Commands for the WiVRn client (`client-shell.h` lists them)
 static COMMANDS: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
 /// PIN digits typed on the PC panel so far
@@ -77,7 +133,7 @@ static POWER_MENU_REQUEST: AtomicBool = AtomicBool::new(false);
 static PAIRING_REQUEST: AtomicBool = AtomicBool::new(false);
 static SHOW_DASHBOARD: AtomicBool = AtomicBool::new(false);
 /// An application to start on a PC once connected to it: (host, app id, name)
-static PENDING_LAUNCH: Mutex<Option<(String, String, String)>> = Mutex::new(None);
+static PENDING_LAUNCH: Mutex<VecDeque<(String, String, String)>> = Mutex::new(VecDeque::new());
 /// Power key: milliseconds since `START` when pressed (0 = up), and whether the hold was handled
 static POWER_KEY_DOWN_MS: AtomicU64 = AtomicU64::new(0);
 static POWER_KEY_HELD: AtomicBool = AtomicBool::new(false);
@@ -150,6 +206,8 @@ pub fn send_host_message(source: u32, data: &[u8]) -> bool {
 struct Surface {
     visible: Option<bool>,
     name: Arc<str>,
+    connector: String,
+    registered: bool,
     /// Latest decoded frame from the client's V4L2 decoder, with its own reference to the DMA-buf
     frame: Option<(DesktopFrame, OwnedFd)>,
     /// `RUN` the overlay was spawned in
@@ -223,7 +281,7 @@ extern "C" fn lobby_state(json: *const std::ffi::c_char) {
     state.1 = json;
 }
 
-extern "C" fn stream_state(json: *const std::ffi::c_char) {
+extern "C" fn stream_state(source: u32, json: *const std::ffi::c_char) {
     let json = c_str(json);
     // The PC encodes its desktops with the headset's settings
     if let Ok(value) = serde_json::from_str::<serde_json::Value>(&json)
@@ -244,7 +302,9 @@ extern "C" fn stream_state(json: *const std::ffi::c_char) {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     state.0 += 1;
-    state.2 = json;
+    if let Ok(value) = serde_json::from_str(&json) {
+        STREAM_STATES.lock().unwrap().insert(source, value);
+    }
 }
 
 extern "C" fn command_poll(buffer: *mut std::ffi::c_char, size: usize) -> bool {
@@ -269,46 +329,8 @@ extern "C" fn command_poll(buffer: *mut std::ffi::c_char, size: usize) -> bool {
 /// `RUN` in which the remembered screens were spawned
 static SCREENS_SPAWNED_RUN: AtomicU64 = AtomicU64::new(0);
 
-fn screens_file() -> std::path::PathBuf {
-    let config = std::env::var_os("XDG_CONFIG_HOME")
-        .map(std::path::PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join(".config"))
-        })
-        .unwrap_or_default();
-    config.join("wayvr/frame-shell-screens")
-}
-
-/// PC screens seen in earlier sessions, one overlay name per line, sorted like the PC lists its outputs
 fn remembered_screens() -> Vec<String> {
-    let mut screens: Vec<String> = std::fs::read_to_string(screens_file())
-        .unwrap_or_default()
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .map(str::to_owned)
-        .collect();
-    screens.sort_by_key(|name| {
-        let digits = name.len() - name.trim_end_matches(|c: char| c.is_ascii_digit()).len();
-        let (prefix, number) = name.split_at(name.len() - digits);
-        (prefix.to_owned(), number.parse::<u64>().unwrap_or(0))
-    });
-    screens
-}
-
-fn remember_screen(name: &str) {
-    let mut screens = remembered_screens();
-    if screens.iter().any(|screen| screen == name) {
-        return;
-    }
-    screens.push(name.to_owned());
-    let path = screens_file();
-    if let Some(dir) = path.parent() {
-        let _ = std::fs::create_dir_all(dir);
-    }
-    if let Err(error) = std::fs::write(&path, screens.join("\n") + "\n") {
-        log::warn!("{}: {error}", path.display());
-    }
+    crate::frame_hosts::layouts()
 }
 
 /// A short text toast, the shell's feedback for quick actions
@@ -363,14 +385,39 @@ pub fn check_battery(app: &mut AppState) {
     .submit(app);
 }
 
-fn lobby_json() -> (serde_json::Value, serde_json::Value) {
-    let state = LOBBY_STATE
+fn registry_lobby(mut lobby: serde_json::Value) -> serde_json::Value {
+    let mut pcs = crate::frame_hosts::json();
+    for pc in pcs.as_array_mut().unwrap() {
+        if let Some(source) = pc["source"].as_u64() {
+            pc["stream"] = pc_stream(source as u32);
+            if !crate::frame_host::clients_known(source as u32) {
+                let status = pc["status"].as_str().unwrap_or_default();
+                pc["status"] = format!("{status} · Runtime state unavailable").into();
+            }
+        }
+    }
+    lobby["servers"] = pcs;
+    if let Some(source) = crate::frame_hosts::background_source()
+        && let Some(pc) = crate::frame_hosts::for_source(source)
+    {
+        lobby["server"] = pc.name.into();
+        lobby["server_id"] = pc.id.into();
+    }
+    lobby
+}
+fn pc_stream(source: u32) -> serde_json::Value {
+    let mut stream = STREAM_STATES
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    (
-        serde_json::from_str(&state.1).unwrap_or(serde_json::Value::Null),
-        serde_json::from_str(&state.2).unwrap_or(serde_json::Value::Null),
-    )
+        .unwrap()
+        .get(&source)
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+    stream["steam_running"] = crate::frame_host::games(source).unwrap_or_default().into();
+    stream["runtime_known"] = crate::frame_host::clients_known(source).into();
+    stream["running"] = crate::frame_host::clients(source).into_iter().map(|client| serde_json::json!({
+        "id": client.id, "name": client.name, "overlay": client.overlay, "active": client.primary, "visible": client.visible
+    })).collect();
+    stream
 }
 
 /// The WiVRn state for the dashboard, with the PIN pad's progress added
@@ -382,34 +429,17 @@ pub fn dashboard_state() -> Option<(u64, String, String)> {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .len();
-    let (version, lobby, stream) = LOBBY_STATE
+    let (version, lobby) = LOBBY_STATE
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .clone();
     let mut lobby: serde_json::Value =
         serde_json::from_str(&lobby).unwrap_or_else(|_| serde_json::json!({}));
+    lobby = registry_lobby(lobby);
     lobby["pin_typed"] = typed.into();
-    lobby["hosts"] = hosts();
-    let mut stream: serde_json::Value =
-        serde_json::from_str(&stream).unwrap_or_else(|_| serde_json::json!({}));
-    stream["steam_running"] = crate::frame_host::vr_source()
-        .and_then(crate::frame_host::games)
-        .unwrap_or_default()
-        .into();
+    let stream =
+        crate::frame_hosts::background_source().map_or_else(|| serde_json::json!({}), pc_stream);
     Some((version, lobby.to_string(), stream.to_string()))
-}
-
-/// Which PC (WiVRn server name) the stream is up with, if any
-fn connected_host() -> Option<String> {
-    let (lobby, stream) = lobby_json();
-    (lobby.get("state").and_then(serde_json::Value::as_str) == Some("connected"))
-        .then(|| {
-            stream
-                .get("server")
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_owned)
-        })
-        .flatten()
 }
 
 /// Starts an application on a PC; connects first (and starts it once connected) when needed
@@ -421,115 +451,92 @@ fn start_app_on(source: u32, app_id: &str) {
 pub fn launch_remote(app: &mut AppState, host: &str, app_id: &str, name: &str) {
     if let Some(source) = source_for_host(host) {
         start_app_on(source, app_id);
-        toast(app, format!("Starting {name} on {host}"));
+        let label =
+            crate::frame_hosts::for_source(source).map_or_else(|| host.to_owned(), |pc| pc.name);
+        toast(app, format!("Starting {name} on {label}"));
         return;
     }
-    let (lobby, _) = lobby_json();
-    let server = lobby
-        .get("servers")
-        .and_then(serde_json::Value::as_array)
-        .into_iter()
-        .flatten()
-        .find(|server| server.get("name").and_then(serde_json::Value::as_str) == Some(host));
-    let Some(cookie) = server
-        .and_then(|server| server.get("cookie"))
-        .and_then(serde_json::Value::as_str)
-    else {
+    let Some(pc) = crate::frame_hosts::resolve(host) else {
         toast(app, format!("{host} is not a known PC"));
         return;
     };
-    // Connected besides a PC already presenting VR, it presents once the application runs
-    send_command(&format!("connect {cookie}"));
-    *PENDING_LAUNCH
+    send_command(&format!("connect {}", pc.id));
+    PENDING_LAUNCH
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) =
-        Some((host.to_owned(), app_id.to_owned(), name.to_owned()));
-    toast(app, format!("Connecting to {host} to start {name}"));
+        .unwrap()
+        .push_back((pc.id, app_id.into(), name.into()));
+    toast(app, format!("Connecting to {} to start {name}", pc.name));
 }
 
-/// A known WiVRn server by its service name or the first label of its host name: (name, cookie)
-fn find_server(lobby: &serde_json::Value, host: &str) -> Option<(String, String)> {
-    let field = |server: &serde_json::Value, key: &str| {
-        server
-            .get(key)
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or_default()
-            .to_owned()
-    };
-    let servers = lobby.get("servers").and_then(serde_json::Value::as_array)?;
-    let server = servers
-        .iter()
-        .find(|server| field(server, "name") == host)
-        .or_else(|| {
-            servers.iter().find(|server| {
-                field(server, "hostname")
-                    .split('.')
-                    .next()
-                    .is_some_and(|short| short.eq_ignore_ascii_case(host))
-            })
-        })?;
-    Some((field(server, "name"), field(server, "cookie")))
-}
-
-/// Connects to the PC a screen belongs to unless it's already connecting or connected
 pub fn connect_screen_host(app: &mut AppState, screen: &str) {
-    let host = screen.rsplit_once(' ').map_or(screen, |(host, _)| host);
-    let (lobby, _) = lobby_json();
-    let Some((name, _)) = find_server(&lobby, host) else {
-        toast(app, format!("{host} is not a known PC"));
+    let Some(pc) = crate::frame_hosts::owner(screen) else {
+        toast(
+            app,
+            "This monitor has not been associated with a PC yet".into(),
+        );
         return;
     };
-    let state = lobby
-        .get("state")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or_default();
-    let server = lobby
-        .get("server")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or_default();
-    if server == name && matches!(state, "connected" | "connecting" | "pin") {
-        toast(app, format!("{screen}: waiting for its picture"));
-        return;
+    if pc.source.is_some()
+        || matches!(
+            pc.connection,
+            crate::frame_hosts::Connection::Connecting | crate::frame_hosts::Connection::Pairing
+        )
+    {
+        toast(app, format!("{}: waiting for its picture", pc.name));
+    } else {
+        connect_host(app, &pc.id, true);
     }
-    connect_host(app, host, true);
 }
 
-/// Connects to the PC a screen ("<PC host name> <output>") belongs to, or disconnects if it's the one streaming
 pub fn toggle_screen_host(app: &mut AppState, screen: &str) {
-    let host = screen.rsplit_once(' ').map_or(screen, |(host, _)| host);
-    let (lobby, _) = lobby_json();
-    let Some((name, _)) = find_server(&lobby, host) else {
-        toast(app, format!("{host} is not a known PC"));
-        return;
-    };
-    let active = source_for_host(&name).is_some()
-        || (lobby.get("server").and_then(serde_json::Value::as_str) == Some(name.as_str())
-            && matches!(
-                lobby.get("state").and_then(serde_json::Value::as_str),
-                Some("connecting" | "pin")
-            ));
-    connect_host(app, &name, !active);
+    if let Some(pc) = crate::frame_hosts::owner(screen) {
+        connect_host(app, &pc.id, pc.source.is_none());
+    }
 }
 
-/// Connects to (or disconnects from) a PC by service or host name
-pub fn connect_host(app: &mut AppState, host: &str, connect: bool) {
-    let (lobby, _) = lobby_json();
-    if !connect {
-        // The PC presenting VR, or one on standby
-        if connected_host().as_deref() == Some(host) {
-            send_command("disconnect");
-        } else if let Some((_, cookie)) = find_server(&lobby, host) {
-            send_command(&format!("disconnect {cookie}"));
-        }
-        toast(app, format!("Disconnecting from {host}"));
-        return;
+pub fn connect_host(app: &mut AppState, key: &str, connect: bool) {
+    if let Some(pc) = crate::frame_hosts::resolve(key) {
+        send_command(&format!(
+            "{} {}",
+            if connect { "connect" } else { "disconnect" },
+            pc.id
+        ));
+        toast(
+            app,
+            format!(
+                "{} {}",
+                if connect {
+                    "Connecting to"
+                } else {
+                    "Disconnecting from"
+                },
+                pc.name
+            ),
+        );
+    } else {
+        toast(app, format!("{key} is not a known PC"));
     }
-    match find_server(&lobby, host) {
-        Some((name, cookie)) => {
-            send_command(&format!("connect {cookie}"));
-            toast(app, format!("Connecting to {name}"));
+}
+
+fn migrate_pin_hosts(app: &mut AppState) {
+    let mut migrated = false;
+    for pin in &mut app.session.config.pinned_games {
+        let Some(key) = pin.host.as_deref() else {
+            continue;
+        };
+        if let Some(pc) = crate::frame_hosts::resolve(key)
+            && pc.id != key
+            && !pc.id.starts_with("legacy:")
+        {
+            pin.host = Some(pc.id);
+            app.session.config_dirty = true;
+            migrated = true;
         }
-        None => toast(app, format!("{host} is not a known PC")),
+    }
+    if migrated {
+        if let Err(error) = crate::config::save_settings(&app.session.config) {
+            log::warn!("Saving migrated PC pins: {error}");
+        }
     }
 }
 
@@ -772,7 +779,49 @@ fn watch_key_device(path: String) {
 }
 
 /// Queues a command line for the WiVRn client; PIN pad keys are collected here into one `pin` command.
-pub fn send_command(line: &str) {
+pub fn send_command(command: &str) {
+    let translated;
+    let command = if let Some((verb, rest)) = command.split_once(' ') {
+        if matches!(
+            verb,
+            "connect" | "disconnect" | "present" | "pin_vr" | "autoconnect" | "forget"
+        ) {
+            let (key, tail) = rest.split_once(' ').unwrap_or((rest, ""));
+            if crate::frame_hosts::resolve(key).is_some_and(|pc| pc.id.starts_with("legacy:")) {
+                crate::frame_host::error(
+                    "That PC has not been discovered yet; its saved monitor positions are retained"
+                        .into(),
+                );
+                return;
+            }
+            if matches!(verb, "disconnect" | "forget") {
+                let id = crate::frame_hosts::resolve(key).map(|pc| pc.id);
+                PENDING_LAUNCH
+                    .lock()
+                    .unwrap()
+                    .retain(|(host, _, _)| crate::frame_hosts::resolve(host).map(|pc| pc.id) != id);
+            }
+            if let Some(target) = crate::frame_hosts::target(key) {
+                if verb == "forget" {
+                    crate::frame_hosts::forget(key);
+                }
+                translated = format!(
+                    "{verb} {target}{}{}",
+                    if tail.is_empty() { "" } else { " " },
+                    tail
+                );
+                translated.as_str()
+            } else {
+                command
+            }
+        } else {
+            command
+        }
+    } else {
+        command
+    };
+
+    let line = command;
     let mut pin = PIN
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -841,6 +890,7 @@ extern "C" fn connected(source: u32, connected: bool, vr: bool) {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     state.0 += 1;
+    STREAM_STATES.lock().unwrap().remove(&source);
     if vr {
         COMMANDS
             .lock()
@@ -848,7 +898,6 @@ extern "C" fn connected(source: u32, connected: bool, vr: bool) {
             .retain(|command| {
                 !(command.starts_with("stop_app ") || command.starts_with("set_active_app "))
             });
-        state.2.clear();
     }
 }
 
@@ -869,10 +918,11 @@ extern "C" fn desktop_surface(info: *const DesktopSurface) {
         .trim()
         .into();
     log::info!("Desktop {name}: {}x{}", info.width, info.height);
-    remember_screen(&name);
     surfaces().entry(key).or_insert(Surface {
         visible: None,
         name,
+        connector: text(&info.name),
+        registered: false,
         frame: None,
         spawned: 0,
     });
@@ -993,21 +1043,31 @@ pub fn poll_surfaces(app: &mut AppState) {
             .enqueue(TaskType::Overlay(OverlayTask::ShowDashboard));
     }
     // Start what was waiting for a connection
-    let waiting = PENDING_LAUNCH
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .as_ref()
-        .map(|(host, _, _)| host.clone());
-    if let Some(waiting) = waiting
-        && let Some(source) = source_for_host(&waiting)
-        && let Some((host, app_id, name)) = PENDING_LAUNCH
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take()
-    {
-        start_app_on(source, &app_id);
-        toast(app, format!("Starting {name} on {host}"));
+    let waiting = std::mem::take(&mut *PENDING_LAUNCH.lock().unwrap());
+    for (host, app_id, name) in waiting {
+        if let Some(source) = source_for_host(&host) {
+            start_app_on(source, &app_id);
+            let label = crate::frame_hosts::for_source(source).map_or(host, |pc| pc.name);
+            toast(app, format!("Starting {name} on {label}"));
+        } else {
+            PENDING_LAUNCH
+                .lock()
+                .unwrap()
+                .push_back((host, app_id, name));
+        }
     }
+    for (&key, surface) in surfaces()
+        .iter_mut()
+        .filter(|(_, surface)| !surface.registered)
+    {
+        if let Some(name) =
+            crate::frame_hosts::monitor((key >> 32) as u32, &surface.connector, &surface.name)
+        {
+            surface.name = name.into();
+            surface.registered = true;
+        }
+    }
+    migrate_pin_hosts(app);
     let run = RUN.load(Ordering::Relaxed);
     // Screens of earlier sessions come back as placeholders until their PC streams them again
     if SCREENS_SPAWNED_RUN.swap(run, Ordering::Relaxed) != run {
@@ -1022,7 +1082,7 @@ pub fn poll_surfaces(app: &mut AppState) {
     }
     for (&key, surface) in surfaces()
         .iter_mut()
-        .filter(|(_, surface)| surface.spawned != run)
+        .filter(|(_, surface)| surface.registered && surface.spawned != run)
     {
         surface.spawned = run;
         let name = surface.name.clone();
@@ -1093,10 +1153,27 @@ extern "C" fn host_message(source: u32, data: *const u8, size: usize) {
     }
 }
 
-extern "C" fn hosts_state(json: *const std::ffi::c_char) {
-    *HOSTS
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = c_str(json);
+extern "C" fn hosts_state(pcs: *const frame_abi::frame_shell_pc, count: usize, selected: u32) {
+    let was_pairing = crate::frame_hosts::pcs()
+        .iter()
+        .any(|pc| pc.connection == crate::frame_hosts::Connection::Pairing);
+    let old = crate::frame_hosts::background_source();
+    unsafe { crate::frame_hosts::update(pcs, count, selected) };
+    publish_pc_routes();
+    crate::frame_host::sync_presentation();
+    if old != crate::frame_hosts::background_source() {
+        crate::frame_host::background_changed();
+    }
+    CONNECTED.store(crate::frame_host::vr_source().is_some(), Ordering::Relaxed);
+    if !was_pairing
+        && crate::frame_hosts::pcs()
+            .iter()
+            .any(|pc| pc.connection == crate::frame_hosts::Connection::Pairing)
+    {
+        PIN.lock().unwrap().clear();
+        PAIRING_REQUEST.store(true, Ordering::Relaxed);
+        SHOW_DASHBOARD.store(true, Ordering::Relaxed);
+    }
     bump_lobby_state();
 }
 
@@ -1518,7 +1595,7 @@ pub fn remote_connected() -> bool {
 pub fn watch_metrics(
     app: &AppState,
 ) -> Option<&crate::backend::openxr::monado_state::MonadoWatchMetrics> {
-    if remote_connected() {
+    if remote_connected() && REMOTE_LAYER_VISIBLE.load(Ordering::Relaxed) {
         app.remote_metrics
             .as_ref()
             .filter(|(updated, _)| updated.elapsed() < std::time::Duration::from_secs(2))
@@ -1536,30 +1613,9 @@ pub fn remote_game_running(host: &str, app_id: &str) -> bool {
         .is_some_and(|games| games.iter().any(|game| game == app_id))
 }
 
-/// The PCs connected besides the one presenting VR: [{"cookie", "name", "state", "detail", "source"}]
-fn hosts() -> serde_json::Value {
-    let json = HOSTS
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .clone();
-    serde_json::from_str(&json).unwrap_or_else(|_| serde_json::json!([]))
-}
-
-/// A connected PC's source number, by WiVRn server name
+/// Resolve a persistent PC ID or an unambiguous legacy label to its current connection.
 fn source_for_host(host: &str) -> Option<u32> {
-    if connected_host().as_deref() == Some(host) {
-        return crate::frame_host::vr_source();
-    }
-    hosts()
-        .as_array()?
-        .iter()
-        .find(|pc| {
-            pc.get("name").and_then(serde_json::Value::as_str) == Some(host)
-                && pc.get("state").and_then(serde_json::Value::as_str) == Some("connected")
-        })
-        .and_then(|pc| pc.get("source"))
-        .and_then(serde_json::Value::as_u64)
-        .map(|source| source as u32)
+    crate::frame_hosts::resolve(host)?.source
 }
 
 // ---- Keyboard top row: one group per PC, and the headset's own clients ----
@@ -1573,71 +1629,47 @@ pub struct RunningClient {
     pub show: String,
     pub client_id: u32,
     pub selected: bool,
+    pub overlay: bool,
+    pub presentation_mode: u32,
 }
 
-/// A PC in the keyboard's top row; its screens are the overlays named "<screen_prefix> <output>"
+/// A PC in the keyboard's top row, identified by its server cookie and connection source.
 pub struct TopRowHost {
     pub name: String,
-    pub screen_prefix: String,
     pub cookie: String,
-    /// Its connection's source number, if connected
     pub source: Option<u32>,
     pub presenting: bool,
     pub clients: Vec<RunningClient>,
+    pub status: String,
 }
-
-/// Known PCs that are found on the network or connected, with what runs on them
-pub fn top_row_hosts() -> Vec<TopRowHost> {
-    let (lobby, _) = lobby_json();
-    let field = |value: &serde_json::Value, key: &str| {
-        value
-            .get(key)
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or_default()
-            .to_owned()
-    };
-    let presenting_name = connected_host();
-    let standby = hosts();
-    let mut out = Vec::new();
-    for server in lobby
-        .get("servers")
-        .and_then(serde_json::Value::as_array)
-        .into_iter()
-        .flatten()
-    {
-        let name = field(server, "name");
-        let cookie = field(server, "cookie");
-        let listed = standby
-            .as_array()
-            .is_some_and(|pcs| pcs.iter().any(|pc| field(pc, "cookie") == cookie));
-        let source = source_for_host(&name);
-        let visible = server
-            .get("visible")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false);
-        if !visible && !listed && source.is_none() {
-            continue;
-        }
-        // Screens are named after the PC's hostname; an address (manually added PCs) names none
-        let hostname = field(server, "hostname");
-        let short = hostname.split('.').next().unwrap_or_default();
-        let screen_prefix = if short.is_empty() || short.chars().all(|c| c.is_ascii_digit()) {
-            name.clone()
-        } else {
-            short.to_owned()
-        };
-        let presenting = presenting_name.as_deref() == Some(name.as_str());
-        let clients = source.map_or_else(Vec::new, pc_clients);
-        out.push(TopRowHost {
-            name,
-            screen_prefix,
-            cookie,
-            source,
-            presenting,
-            clients,
-        });
+impl TopRowHost {
+    pub fn owns_screen(&self, name: &str) -> bool {
+        crate::frame_hosts::owner(name).is_some_and(|pc| pc.id == self.cookie)
     }
-    out
+}
+pub fn top_row_hosts() -> Vec<TopRowHost> {
+    let background = crate::frame_hosts::background_source();
+    crate::frame_hosts::pcs()
+        .into_iter()
+        .map(|pc| {
+            let presenting = pc.source.is_some() && pc.source == background;
+            let mut status = pc.status(presenting);
+            if pc
+                .source
+                .is_some_and(|s| !crate::frame_host::clients_known(s))
+            {
+                status.push_str(" · Runtime state unavailable");
+            }
+            TopRowHost {
+                name: pc.name,
+                cookie: pc.id,
+                source: pc.source,
+                presenting,
+                clients: pc.source.map_or_else(Vec::new, pc_clients),
+                status,
+            }
+        })
+        .collect()
 }
 
 /// A runtime's clients as running applications; `source` is the PC's, None for the headset
@@ -1653,11 +1685,15 @@ fn running_clients(
             app_id: client.steam_app_id,
             show: format!("::RuntimeFocus {target} {}", client.id),
             client_id: client.id,
-            selected: if client.overlay {
-                client.visible
-            } else {
-                client.primary
-            },
+            overlay: client.overlay,
+            presentation_mode: client.presentation_mode,
+            selected: client.visible
+                && (client.overlay || client.primary)
+                && source.is_none_or(|source| {
+                    (crate::frame_hosts::background_source() == Some(source)
+                        || (client.overlay && crate::frame_host::composition_supported(source)))
+                        && REMOTE_LAYER_VISIBLE.load(Ordering::Relaxed)
+                }),
         })
         .collect()
 }
@@ -1688,8 +1724,14 @@ fn native_runtime<T>(
 /// The headset's own clients, not the shell's (WayVR and the WiVRn client run in this process)
 pub fn native_clients(_app: &AppState) -> Vec<RunningClient> {
     let own = std::process::id() as i32;
-    let clients = native_runtime(|runtime| runtime.clients())
-        .unwrap_or_default()
+    let clients = native_runtime(|runtime| runtime.clients()).unwrap_or_default();
+    REMOTE_LAYER_VISIBLE.store(
+        clients
+            .iter()
+            .any(|c| c.pid == own && c.name == "WiVRn" && c.visible),
+        Ordering::Relaxed,
+    );
+    let clients = clients
         .into_iter()
         .filter(|client| client.pid != own)
         .collect();
@@ -1706,23 +1748,37 @@ pub fn control_client(source: Option<u32>, client: u32, action: wayvr_ipc::frame
         native_runtime(|runtime| runtime.control(client, action));
         return;
     };
-    if crate::frame_host::vr_source() != Some(source)
-        && let Some(cookie) = hosts().as_array().and_then(|pcs| {
-            pcs.iter()
-                .find(|pc| {
-                    pc.get("source").and_then(serde_json::Value::as_u64) == Some(u64::from(source))
-                })
-                .and_then(|pc| pc.get("cookie").and_then(serde_json::Value::as_str))
-                .map(str::to_owned)
-        })
-    {
-        send_command(&format!("present {cookie}"));
+    if !crate::frame_host::is_connected(source) {
+        crate::frame_host::error("That PC is no longer connected".into());
+        return;
     }
-    let is_default = matches!(action, wayvr_ipc::frame::ClientAction::Default)
-        || (matches!(action, wayvr_ipc::frame::ClientAction::Select)
-            && crate::frame_host::clients(source)
-                .iter()
-                .any(|c| c.id == client && !c.overlay));
+    if !crate::frame_host::clients_known(source) {
+        crate::frame_host::error("The PC's runtime state is currently unavailable".into());
+        return;
+    }
+    let state = crate::frame_host::clients(source)
+        .into_iter()
+        .find(|c| c.id == client);
+    let action = if matches!(action, wayvr_ipc::frame::ClientAction::Select)
+        && state.as_ref().is_some_and(|c| !c.overlay)
+        && !(state.as_ref().is_some_and(|c| c.primary && c.visible)
+            && crate::frame_hosts::background_source() == Some(source)
+            && REMOTE_LAYER_VISIBLE.load(Ordering::Relaxed))
+    {
+        wayvr_ipc::frame::ClientAction::Show
+    } else {
+        action
+    };
+    let is_default = matches!(
+        action,
+        wayvr_ipc::frame::ClientAction::Default | wayvr_ipc::frame::ClientAction::Show
+    );
+    if is_default
+        && crate::frame_hosts::background_source() != Some(source)
+        && let Some(pc) = crate::frame_hosts::for_source(source)
+    {
+        send_command(&format!("present {}", pc.id));
+    }
     if is_default {
         let own = std::process::id() as i32;
         native_runtime(|runtime| {
@@ -1736,10 +1792,14 @@ pub fn control_client(source: Option<u32>, client: u32, action: wayvr_ipc::frame
             Ok(())
         });
     }
-    crate::frame_host::send(
-        source,
-        &wayvr_ipc::frame::ShellMessage::ClientAction { client, action },
-    );
+    let command = if matches!(action, wayvr_ipc::frame::ClientAction::Show)
+        && !crate::frame_host::composition_supported(source)
+    {
+        wayvr_ipc::frame::ShellMessage::FocusClient(client)
+    } else {
+        wayvr_ipc::frame::ShellMessage::ClientAction { client, action }
+    };
+    crate::frame_host::send(source, &command);
 }
 
 /// Changes when what the keyboard's top row shows of PCs and clients does
@@ -1747,13 +1807,36 @@ pub fn top_row_signature(app: &AppState) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     for host in top_row_hosts() {
-        (&host.name, &host.cookie, host.source, host.presenting).hash(&mut hasher);
+        (
+            &host.name,
+            &host.cookie,
+            host.source,
+            host.presenting,
+            &host.status,
+        )
+            .hash(&mut hasher);
         for client in &host.clients {
-            (&client.name, &client.app_id, &client.show, client.selected).hash(&mut hasher);
+            (
+                &client.name,
+                &client.app_id,
+                &client.show,
+                client.selected,
+                client.overlay,
+                client.presentation_mode,
+            )
+                .hash(&mut hasher);
         }
     }
     for client in native_clients(app) {
-        (&client.name, &client.app_id, &client.show, client.selected).hash(&mut hasher);
+        (
+            &client.name,
+            &client.app_id,
+            &client.show,
+            client.selected,
+            client.overlay,
+            client.presentation_mode,
+        )
+            .hash(&mut hasher);
     }
     hasher.finish()
 }

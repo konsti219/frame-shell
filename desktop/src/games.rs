@@ -2,20 +2,35 @@ use crate::Output;
 use std::{sync::mpsc::Receiver, time::Duration};
 use wayvr_ipc::frame::HostMessage;
 
-pub fn run(output: &Output, stop_requests: &Receiver<(String, bool)>) {
+pub enum Command {
+    Stop(String, bool),
+    Refresh,
+}
+
+/// Sends the running games when they change (or on `Refresh`)
+pub fn run(output: &Output, commands: &Receiver<Command>) {
+    let mut sent = None;
     loop {
-        for (app_id, force) in stop_requests.try_iter() {
-            if let Err(error) = stop(&app_id, force) {
-                output.send(&HostMessage::Error(format!(
-                    "Stopping PC game failed: {error}"
-                )));
+        for command in commands.try_iter() {
+            match command {
+                Command::Stop(app_id, force) => {
+                    if let Err(error) = stop(&app_id, force) {
+                        output.send(&HostMessage::Error(format!(
+                            "Stopping PC game failed: {error}"
+                        )));
+                    }
+                }
+                Command::Refresh => sent = None,
             }
         }
         match list_running_games() {
             Ok(games) => {
                 let ids: std::collections::BTreeSet<_> =
                     games.into_iter().map(|game| game.app_id).collect();
-                output.send(&HostMessage::Games(ids.into_iter().collect()));
+                if sent.as_ref() != Some(&ids) {
+                    output.send(&HostMessage::Games(ids.iter().cloned().collect()));
+                    sent = Some(ids);
+                }
             }
             Err(error) => eprintln!("Running PC games: {error}"),
         }
@@ -90,11 +105,11 @@ pub fn stop(app_id: &str, force_kill: bool) -> anyhow::Result<()> {
             app_id, game.pid, force_kill
         );
 
-        let _ = std::process::Command::new("pkill")
+        std::process::Command::new("pkill")
             .arg(if force_kill { "-9" } else { "-15" })
             .arg("-P")
             .arg(format!("{}", game.pid))
-            .spawn()?;
+            .status()?;
     }
 
     Ok(())

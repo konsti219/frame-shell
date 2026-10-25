@@ -34,7 +34,7 @@ bool simulated_loss()
 
 uint32_t next_source()
 {
-	static std::atomic<uint32_t> next = 0;
+	static std::atomic<uint32_t> next = 1;
 	return next++;
 }
 

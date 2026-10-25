@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
+#include "configuration.h"
 #include "fec.h"
 #include "frame_host.h"
 #include "util/u_logging.h"
+#include "version.h"
 #include "wivrn_packets.h"
 #include "wivrn_uinput.h"
 #include <array>
@@ -111,8 +113,16 @@ public:
 	{
 		char hostname[256] = "PC";
 		gethostname(hostname, sizeof(hostname) - 1);
+		const auto pc_id = server_cookie();
+		const auto version = std::string(display_version());
+		const frame_host_identity identity{
+		        .id = pc_id.c_str(),
+		        .name = hostname,
+		        .build = std::getenv("FRAME_SHELL_BUILD_KIND") ? std::getenv("FRAME_SHELL_BUILD_KIND") : "packaged",
+		        .version = version.c_str(),
+		};
 		host = std::make_unique<frame_host_session>(frame_host_session::callbacks{
-		        .surface = [this, source = std::string(hostname)](const frame_host_surface & surface) {
+		                                                    .surface = [this, source = std::string(hostname)](const frame_host_surface & surface) {
 			        {
 				        std::scoped_lock lock(mutex);
 				        regions[surface.id] = {surface.region[0], surface.region[1], surface.region[2], surface.region[3]};
@@ -125,20 +135,17 @@ public:
 			                .source = source,
 			                .removed = false,
 			                .codec = surface.codec == 1 ? video_codec::h265 : video_codec::h264,
-			        });
-		        },
-		        .surface_removed = [this](uint32_t id) {
+			        }); },
+		                                                    .surface_removed = [this](uint32_t id) {
 			        {
 				        std::scoped_lock lock(mutex);
 				        regions.erase(id);
 			        }
-			        sender.send_control(to_headset::desktop_surface{.surface = id, .removed = true});
-		        },
-		        .video = [this](uint32_t surface, std::span<const uint8_t> data) { send_video(surface, data); },
-		        .message = [this](std::span<const uint8_t> data) {
-			        sender.send_control(to_headset::shell_message{.payload = {data.begin(), data.end()}});
-		        },
-		});
+			        sender.send_control(to_headset::desktop_surface{.surface = id, .removed = true}); },
+		                                                    .video = [this](uint32_t surface, std::span<const uint8_t> data) { send_video(surface, data); },
+		                                                    .message = [this](std::span<const uint8_t> data) { sender.send_control(to_headset::shell_message{.payload = {data.begin(), data.end()}}); },
+		                                            },
+		                                            identity);
 	}
 
 	void operator()(from_headset::shell_input && event)

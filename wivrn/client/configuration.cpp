@@ -258,6 +258,7 @@ configuration::configuration(xr::system & system, xr::session & session, const s
 			                .txt = {{"cookie", (std::string)i["cookie"]}}
 
 			        }};
+			data.remembered = true;
 			servers.emplace(data.service.txt["cookie"], data);
 		}
 
@@ -382,7 +383,7 @@ void configuration::save()
 
 	for (auto & [cookie, server_data]: servers)
 	{
-		if (server_data.autoconnect or server_data.manual)
+		if (server_data.autoconnect or server_data.manual or server_data.remembered)
 		{
 			ss << "{";
 			ss << "\"autoconnect\":" << std::boolalpha << server_data.autoconnect << ",";

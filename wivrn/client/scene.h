@@ -165,7 +165,7 @@ protected:
 	xr::swapchain & get_swapchain(vk::Format format, int32_t width, int32_t height, int sample_count, uint32_t array_size);
 	void clear_swapchains();
 
-	void render_start(bool passthrough, XrTime predicted_display_time);
+	void render_start(bool passthrough, XrTime predicted_display_time, bool render_scene = true);
 
 	void add_projection_layer(
 	        XrCompositionLayerFlags flags,
@@ -208,6 +208,12 @@ public:
 
 	void set_focused(bool status);
 	virtual void render(const XrFrameState &) = 0;
+	void append_layers(scene & other)
+	{
+		for (auto & entry: other.layers)
+			layers.push_back(std::move(entry));
+		other.layers.clear();
+	}
 	virtual void on_xr_event(const xr::event &);
 
 	virtual bool on_input_key_down(uint8_t key_code);

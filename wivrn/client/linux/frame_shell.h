@@ -1,33 +1,35 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
-#include <atomic>
-#include <cstdlib>
-#include <cstdio>
-#include <cstdint>
-#include <cstddef>
-#include <deque>
-#include <map>
-#include <memory>
-#include <mutex>
-#include <utility>
-#include <optional>
-#include <span>
-#include <string>
-#include <string_view>
-#include <vector>
-#include <dlfcn.h>
-#include <stdexcept>
-#include <thread>
-#include <algorithm>
-#include <charconv>
-#include <cmath>
 #include "configuration.h"
 #include "decoder/decoder.h"
 #include "frame_abi.h"
 #include "input_paths.h"
+#include <algorithm>
 #include <array>
+#include <atomic>
+#include <charconv>
+#include <chrono>
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <deque>
+#include <dlfcn.h>
+#include <map>
+#include <memory>
+#include <mutex>
+#include <optional>
+#include <set>
+#include <span>
 #include <spdlog/fmt/fmt.h>
 #include <spdlog/spdlog.h>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <thread>
+#include <utility>
+#include <vector>
 
 namespace frame_shell
 {
@@ -68,12 +70,76 @@ inline bool input_poll(input * event) { return api->input_poll(event); }
 inline void desktop_surface(const desktop_surface_info * info) { api->desktop_surface(info); }
 inline void connected(uint32_t source, bool value, bool vr) { api->connected(source, value, vr); }
 inline void lobby_state(const char * json) { api->lobby_state(json); }
-inline void stream_state(const char * json) { api->stream_state(json); }
+inline void stream_state(uint32_t source, const char * json)
+{
+	api->stream_state(source, json);
+}
 inline void host_message(uint32_t source, std::span<const uint8_t> data) { api->host_message(source, data.data(), data.size()); }
-inline void hosts_state(const char * json) { api->hosts_state(json); }
+inline void hosts_state(const frame_shell_pc * pcs, size_t count, uint32_t selected)
+{
+	api->hosts_state(pcs, count, selected);
+}
+
+inline std::atomic<bool> switch_wanted{false};
+
+inline std::mutex routes_mutex;
+inline std::map<std::string, std::string> routes;
+inline std::string pc_id(const std::string & endpoint)
+{
+	std::scoped_lock lock(routes_mutex);
+	auto it = routes.find(endpoint);
+	return it == routes.end() ? endpoint : it->second;
+}
+inline bool same_pc(const std::string & a, const std::string & b)
+{
+	return pc_id(a) == pc_id(b);
+}
+
+struct runtime_activity
+{
+	bool initialized = false, known = false, visible = true, overlay_visible = false, composition_supported = false;
+	std::set<uint32_t> defaults;
+	int64_t since = 0;
+};
+inline std::mutex activity_mutex;
+inline std::map<uint32_t, runtime_activity> activities;
+inline runtime_activity activity(uint32_t source)
+{
+	std::scoped_lock lock(activity_mutex);
+	auto it = activities.find(source);
+	return it == activities.end() ? runtime_activity{} : it->second;
+}
+inline void runtime_clients(uint32_t source, const frame_runtime_client * clients, size_t count, bool known, bool composition_supported)
+{
+	std::scoped_lock lock(activity_mutex);
+	auto & activity = activities[source];
+	activity.known = known;
+	activity.composition_supported = composition_supported;
+	if (!known)
+		return;
+	activity.visible = std::any_of(clients, clients + count, [](const auto & client) { return client.visible; });
+	const bool overlay_visible = std::any_of(clients, clients + count, [](const auto & client) { return client.overlay && client.visible; });
+	if (overlay_visible != activity.overlay_visible)
+		switch_wanted = true;
+	activity.overlay_visible = overlay_visible;
+	std::set<uint32_t> defaults;
+	for (size_t i = 0; i < count; ++i)
+		if (!clients[i].overlay)
+			defaults.insert(clients[i].id);
+	bool added = std::ranges::any_of(defaults, [&](auto id) { return !activity.defaults.contains(id); });
+	if (defaults.empty())
+		activity.since = 0;
+	else if (!activity.initialized)
+		activity.since = 1;
+	else if (added)
+		activity.since = std::chrono::steady_clock::now().time_since_epoch().count();
+	if (activity.defaults != defaults)
+		switch_wanted = true;
+	activity.initialized = true;
+	activity.defaults = std::move(defaults);
+}
 
 // A PC on standby started a VR application: the presenting stream gives way so the lobby can switch
-inline std::atomic<bool> switch_wanted{false};
 
 // The shell asked for a PC (cookie) to present VR ("present <cookie>"), handled by the lobby
 inline std::mutex present_mutex;
@@ -130,6 +196,10 @@ inline std::vector<input> take_input(uint32_t source)
 // A PC went away: what was queued for it is moot
 inline void forget_source(uint32_t source)
 {
+	{
+		std::scoped_lock lock(activity_mutex);
+		activities.erase(source);
+	}
     {
         std::scoped_lock lock(host_messages_mutex);
         host_messages.erase(source);
@@ -252,11 +322,12 @@ inline std::mutex command_mutex;
 inline std::deque<std::string> command_queue;
 
 // Commands for a PC that are moot once disconnected
-inline void clear_stream_commands()
+inline void clear_stream_commands(uint32_t source, bool background)
 {
     std::scoped_lock lock(command_mutex);
-    std::erase_if(command_queue, [](const auto & command) {
-        return command.starts_with("stop_app ") || command.starts_with("set_active_app ");
+    const auto prefix = fmt::format("on {} ", source);
+    std::erase_if(command_queue, [&](const auto & command) {
+	    return command.starts_with(prefix) || (background && (command.starts_with("stop_app ") || command.starts_with("set_active_app ")));
     });
 }
 
@@ -267,8 +338,14 @@ std::optional<std::string> take_command(Accept && accept)
     auto & queue = command_queue;
     char buffer[512];
     while (command_poll(buffer, sizeof(buffer))) {
-        queue.emplace_back(buffer);
-        if (queue.size() > 32) queue.pop_front();
+	    std::string_view command(buffer);
+	    if (command.starts_with("connect ") || command.starts_with("disconnect") ||
+		command.starts_with("pin_vr ") || command == "auto_vr" || command.starts_with("pin ") ||
+		command == "pin_cancel" || command.starts_with("autoconnect ") || command.starts_with("forget "))
+		    switch_wanted = true;
+	    queue.emplace_back(buffer);
+	    if (queue.size() > 32)
+		    queue.pop_front();
     }
     for (auto it = queue.begin(); it != queue.end(); ++it) {
         if (accept(*it)) {
@@ -285,8 +362,8 @@ class runtime
     std::jthread thread;
     void * library = nullptr;
     frame_shell_host host{
-            .user = nullptr,
-            .release_desktop_frame = [](void *, uint64_t id) {
+	    .user = nullptr,
+	    .release_desktop_frame = [](void *, uint64_t id) {
                 std::shared_ptr<void> handle;
                 std::scoped_lock lock(held_mutex);
                 if (auto it = held_frames.find(id); it != held_frames.end())
@@ -294,19 +371,21 @@ class runtime
                     // Dropped after the lock: giving the buffer back may wake the decoder
                     handle = std::move(it->second);
                     held_frames.erase(it);
-                }
-            },
-            .send_host_message = [](void *, uint32_t source, const uint8_t * data, size_t size) {
+                } },
+	    .send_host_message = [](void *, uint32_t source, const uint8_t * data, size_t size) {
                 std::scoped_lock lock(host_messages_mutex);
                 auto & queue = host_messages[source];
                 if (queue.size() < 256)
-                    queue.emplace_back(data, data + size);
-            },
-            .set_input_capture = [](void *, const char * const * paths, size_t count, uint32_t pose_mask) {
-                set_input_capture(paths, count, pose_mask);
-            },
+                    queue.emplace_back(data, data + size); },
+	    .set_input_capture = [](void *, const char * const * paths, size_t count, uint32_t pose_mask) { set_input_capture(paths, count, pose_mask); },
+	    .runtime_clients = [](void *, uint32_t source, const frame_runtime_client * clients, size_t count, bool known, bool composition_supported) { runtime_clients(source, clients, count, known, composition_supported); },
+	    .pc_routes = [](void *, const frame_pc_route * entries, size_t count) {
+                std::scoped_lock lock(routes_mutex);
+                routes.clear();
+                for (size_t i = 0; i < count; ++i) routes[entries[i].endpoint] = entries[i].pc_id; },
     };
-public:
+
+    public:
     runtime()
     {
         const char * path = std::getenv("FRAME_SHELL_LIBRARY");

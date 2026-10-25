@@ -63,7 +63,7 @@ pub struct WvrPinLaunchParams {
 	pub name: String,
 	pub app_id: String,
 	pub icon: Option<String>,
-	/// PC the game is on (WiVRn server name), none for a local game
+	/// Persistent PC ID; legacy server names are migrated by the shell, none for a local game
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub host: Option<String>,
 }

@@ -45,6 +45,14 @@ pub struct Host {
 	pub autoconnect: bool,
 	/// Added by address rather than discovered: never shows as visible
 	pub manual: bool,
+	pub source: Option<u32>,
+	pub connection: String,
+	pub detail: String,
+	pub status: String,
+	pub presenting: bool,
+	pub build: String,
+	pub version: String,
+	pub stream: Value,
 }
 
 /// The WiVRn client's lobby and stream state, parsed
@@ -60,8 +68,6 @@ pub struct WivrnState {
 	pub stream: Value,
 	pub settings: Value,
 	pub game_running: bool,
-	/// PCs connected besides the one presenting VR: cookie, state ("connecting", "pin", "connected", "error"), detail
-	pub standby: Vec<(Rc<str>, String, String)>,
 }
 
 fn text(value: &Value, key: &str) -> String {
@@ -89,13 +95,23 @@ impl WivrnState {
 				compatible: flag(server, "compatible"),
 				autoconnect: flag(server, "autoconnect"),
 				manual: flag(server, "manual"),
+				source: server.get("source").and_then(Value::as_u64).map(|s| s as u32),
+				connection: text(server, "state"),
+				detail: text(server, "detail"),
+				status: text(server, "status"),
+				presenting: flag(server, "presenting"),
+				build: text(server, "build"),
+				version: text(server, "version"),
+				stream: server.get("stream").cloned().unwrap_or(Value::Null),
 			})
 			.collect();
 		Self {
-			game_running: stream
-				.get("running")
-				.and_then(Value::as_array)
-				.is_some_and(|apps| apps.iter().any(|app| !flag(app, "overlay"))),
+			game_running: text(&lobby, "state") == "connected"
+				&& (!flag(&stream, "runtime_known")
+					|| stream
+						.get("running")
+						.and_then(Value::as_array)
+						.is_some_and(|apps| apps.iter().any(|app| !flag(app, "overlay")))),
 			settings: if text(&lobby, "state") == "connected" {
 				stream.get("settings").or_else(|| lobby.get("settings"))
 			} else {
@@ -108,34 +124,17 @@ impl WivrnState {
 			detail: text(&lobby, "detail"),
 			hosts,
 			pin_typed: lobby.get("pin_typed").and_then(Value::as_u64).unwrap_or(0) as usize,
-			standby: lobby
-				.get("hosts")
-				.and_then(Value::as_array)
-				.into_iter()
-				.flatten()
-				.map(|pc| (text(pc, "cookie").into(), text(pc, "state"), text(pc, "detail")))
-				.collect(),
 			stream,
 		}
 	}
 
-	/// Whether this PC is the one being connected to or streamed from
 	pub fn is_active(&self, host: &Host) -> bool {
-		!self.server.is_empty() && *host.name == *self.server && self.state != "idle" && self.state != "error"
+		matches!(host.connection.as_str(), "connecting" | "pin" | "connected")
 	}
-
 	pub fn connected_to(&self, host: &Host) -> bool {
-		self.is_active(host) && self.state == "connected"
+		host.source.is_some() && host.connection == "connected"
 	}
 
-	/// This PC's connection while another presents VR, if any: (state, detail)
-	pub fn standby_host(&self, host: &Host) -> Option<(&str, &str)> {
-		self
-			.standby
-			.iter()
-			.find(|(cookie, _, _)| *cookie == host.cookie)
-			.map(|(_, state, detail)| (state.as_str(), detail.as_str()))
-	}
 }
 
 pub struct TabWivrn<T> {
@@ -199,13 +198,20 @@ impl<T> Tab<T> for TabWivrn<T> {
 		}
 
 		let dragging = self.cells.iter().any(|cell| {
-			["bitrate", "resolution", "foveation", "desktop_bitrate", "fec", "frame_margin"]
-				.iter()
-				.any(|id| {
-					cell
-						.fetch_component_as::<ComponentSlider>(id)
-						.is_ok_and(|slider| slider.is_dragging())
-				})
+			[
+				"bitrate",
+				"resolution",
+				"foveation",
+				"desktop_bitrate",
+				"fec",
+				"frame_margin",
+			]
+			.iter()
+			.any(|id| {
+				cell
+					.fetch_component_as::<ComponentSlider>(id)
+					.is_ok_and(|slider| slider.is_dragging())
+			})
 		});
 		// Apply after release so a state update cannot interrupt the drag
 		if let Some((key, value, changed)) = self.pending_setting
@@ -337,34 +343,13 @@ impl<T> TabWivrn<T> {
 			return Ok(());
 		};
 		let active = wivrn.is_active(host);
-		let standby = wivrn.standby_host(host);
-		let status = if let Some((state, detail)) = standby {
-			match state {
-				"connected" => "Connected, on standby: presents VR once a VR application runs on it".to_owned(),
-				"connecting" => format!("Connecting: {detail}"),
-				"pin" => "Pairing: enter the PIN shown on the PC".to_owned(),
-				_ => format!("Not connected: {detail}"),
-			}
-		} else if active {
-			match wivrn.state.as_str() {
-				"connected" => "Connected".to_owned(),
-				"connecting" => format!("Connecting: {}", wivrn.detail),
-				"pin" => "Pairing: enter the PIN shown on the PC".to_owned(),
-				_ => wivrn.state.clone(),
-			}
-		} else if !host.visible && !host.manual {
-			"Not found on the network".to_owned()
-		} else if !host.compatible {
-			"Incompatible WiVRn version".to_owned()
-		} else if wivrn.state == "error" && *host.name == *wivrn.server {
-			format!("Not connected: {}", wivrn.detail)
-		} else {
-			"Not connected".to_owned()
-		};
-		let can_connect = !active
-			&& (host.visible || host.manual)
-			&& host.compatible
-			&& standby.is_none_or(|(state, _)| state == "error");
+		let status = format!(
+			"{}{}{}",
+			host.status,
+			if host.version.is_empty() { "" } else { " · " },
+			host.version
+		);
+		let can_connect = !active && host.compatible;
 
 		let mut params = TemplateParams::new();
 		params.insert("name", &host.name);
@@ -374,7 +359,7 @@ impl<T> TabWivrn<T> {
 		params.insert("connect_label", "Connect");
 		params.insert(
 			"show_disconnect",
-			if active || standby.is_some_and(|(state, _)| state != "error") {
+			if active {
 				"flex"
 			} else {
 				"none"
@@ -382,7 +367,7 @@ impl<T> TabWivrn<T> {
 		);
 		params.insert(
 			"disconnect_label",
-			if standby.is_some_and(|(state, _)| state != "connected") || (active && wivrn.state != "connected") {
+			if host.connection != "connected" {
 				"Cancel"
 			} else {
 				"Disconnect"
@@ -402,11 +387,7 @@ impl<T> TabWivrn<T> {
 				.tasks
 				.get_button_click_callback(Task::Command(format!("connect {}", host.cookie))),
 		);
-		let disconnect = if standby.is_some() {
-			format!("disconnect {}", host.cookie)
-		} else {
-			"disconnect".to_owned()
-		};
+		let disconnect = format!("disconnect {}", host.cookie);
 		self
 			.button(page, "btn_disconnect")?
 			.on_click(self.tasks.get_button_click_callback(Task::Command(disconnect)));
@@ -426,7 +407,7 @@ impl<T> TabWivrn<T> {
 		}
 		forget.on_click(self.tasks.get_button_click_callback(Task::Forget(host.cookie.clone())));
 
-		if (active && wivrn.state == "pin") || standby.is_some_and(|(state, _)| state == "pin") {
+		if host.connection == "pin" {
 			let shown: String = (0..6).map(|i| if i < wivrn.pin_typed { '•' } else { '-' }).collect();
 			let mut params = TemplateParams::new();
 			params.insert("pin", &shown);
@@ -529,7 +510,10 @@ impl<T> TabWivrn<T> {
 				settings.get("foveation").and_then(Value::as_f64).unwrap_or(1.0) as f32 * 100.0,
 			),
 			("fec", settings.get("fec").and_then(Value::as_f64).unwrap_or(0.0) as f32),
-			("frame_margin", settings.get("frame_margin").and_then(Value::as_f64).unwrap_or(1.0) as f32),
+			(
+				"frame_margin",
+				settings.get("frame_margin").and_then(Value::as_f64).unwrap_or(1.0) as f32,
+			),
 			(
 				"desktop_bitrate",
 				settings
@@ -615,12 +599,25 @@ impl<T> TabWivrn<T> {
 				format!(
 					"Eye tracking: {:.0} updates/s{}{}",
 					eyes.get("update_hz").and_then(Value::as_f64).unwrap_or(0.0),
-					if eyes.get("calibrated").and_then(Value::as_bool).unwrap_or(false) { "" } else { ", calibrating" },
-					if eyes.get("gaze").and_then(Value::as_bool).unwrap_or(false) { "" } else { ", no gaze" }
+					if eyes.get("calibrated").and_then(Value::as_bool).unwrap_or(false) {
+						""
+					} else {
+						", calibrating"
+					},
+					if eyes.get("gaze").and_then(Value::as_bool).unwrap_or(false) {
+						""
+					} else {
+						", no gaze"
+					}
 				)
 			})
 			.unwrap_or_default();
-		for (id, text) in [("video_debug", debug), ("network_status", network), ("vr_debug", vr), ("eyes_debug", eyes)] {
+		for (id, text) in [
+			("video_debug", debug),
+			("network_status", network),
+			("vr_debug", vr),
+			("eyes_debug", eyes),
+		] {
 			let mut common = layout.common();
 			let mut label = self.cells[cell].fetch_widget_as::<WidgetLabel>(common.state, id)?;
 			label.set_text(&mut common, Translation::from_raw_text_string(text));

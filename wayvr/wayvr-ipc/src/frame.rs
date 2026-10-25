@@ -23,6 +23,17 @@ pub enum HostMessage {
 	IpcOpen(u32),
 	Ipc(u32, PacketClient),
 	IpcClose(u32),
+	Identity(HostIdentity),
+	RuntimeUnavailable,
+	CompositionSupported,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostIdentity {
+	pub id: String,
+	pub name: String,
+	pub build: String,
+	pub version: String,
 }
 
 /// Headset to PC
@@ -46,6 +57,8 @@ pub enum ShellMessage {
 	},
 	Ipc(u32, PacketServer),
 	IpcClose(u32),
+	BackgroundVisible(bool),
+	RequestState,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -119,6 +132,7 @@ pub enum ClientAction {
 	Automatic,
 	Default,
 	Overlay,
+	Show,
 }
 
 /// An OpenXR runtime client with an active session (frame shell runtimes, through libmonado)

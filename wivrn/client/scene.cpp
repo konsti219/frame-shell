@@ -293,7 +293,7 @@ void scene::clear_swapchains()
 	swapchains.clear();
 }
 
-void scene::render_start(bool passthrough, XrTime predicted_display_time_)
+void scene::render_start(bool passthrough, XrTime predicted_display_time_, bool render_scene)
 {
 	blend_mode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
 	predicted_display_time = predicted_display_time_;
@@ -303,7 +303,7 @@ void scene::render_start(bool passthrough, XrTime predicted_display_time_)
 	for (swapchain_entry & swapchain: swapchains)
 		swapchain.used = false;
 
-	if (renderer)
+	if (renderer && render_scene)
 		renderer->start_frame();
 
 	if (passthrough)

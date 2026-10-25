@@ -74,17 +74,11 @@ pub fn run(output: &Output, proxy: &Proxy) {
             match listener.accept() {
                 Ok((stream, _)) => {
                     let id = proxy.next.fetch_add(1, Ordering::Relaxed);
-                    let Ok(writer) = stream.try_clone() else {
+                    let (Ok(writer), Ok(socket)) = (stream.try_clone(), stream.try_clone()) else {
                         continue;
                     };
                     let (replies, receiver) = mpsc::channel();
-                    lock(&proxy.connections).insert(
-                        id,
-                        Connection {
-                            socket: stream.try_clone().expect("cloning IPC socket"),
-                            replies,
-                        },
-                    );
+                    lock(&proxy.connections).insert(id, Connection { socket, replies });
                     output.send(&HostMessage::IpcOpen(id));
                     scope.spawn(move || {
                         thread::scope(|writers| {

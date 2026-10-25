@@ -261,7 +261,7 @@ void scenes::stream::operator()(to_headset::feature_control && control)
 		case wivrn::to_headset::feature_control::microphone:
 			microphone_requested = control.state;
 			if (audio_handle)
-				audio_handle->set_mic_state(video_active && microphone_requested);
+				audio_handle->set_mic_state(background_active && microphone_requested);
 			return;
 	}
 }
@@ -269,7 +269,7 @@ void scenes::stream::operator()(to_headset::feature_control && control)
 void scenes::stream::operator()(to_headset::audio_stream_description && desc)
 {
 	audio_handle.emplace(desc, *network_session, instance);
-	audio_handle->set_mic_state(video_active && microphone_requested);
+	audio_handle->set_mic_state(background_active && microphone_requested);
 }
 
 void scenes::stream::operator()(to_headset::video_stream_description && desc)
@@ -385,20 +385,26 @@ void scenes::stream::operator()(to_headset::application_icon && icon)
 
 void scenes::stream::operator()(to_headset::running_applications && apps)
 {
-	bool vr = std::ranges::any_of(apps.applications, [](const auto & app) { return not app.overlay; });
-	bool first = not std::exchange(running_apps_seen, true);
-	if (not vr)
-		vr_app_since = 0;
-	else if (first)
-		vr_app_since = 1;
-	else if (vr_app_since == 0)
+#ifndef __ANDROID__
+	if (!frame_shell::enabled())
+#endif
 	{
-		vr_app_since = std::chrono::steady_clock::now().time_since_epoch().count();
+		bool vr = std::ranges::any_of(apps.applications, [](const auto & app) { return not app.overlay; });
+		bool first = not std::exchange(running_apps_seen, true);
+		if (not vr)
+			vr_app_since = 0;
+		else if (first)
+			vr_app_since = 1;
+		else if (vr_app_since == 0)
+		{
+			vr_app_since = std::chrono::steady_clock::now().time_since_epoch().count();
 #ifndef __ANDROID__
 		if (not video_active)
 			frame_shell::switch_wanted = true;
 #endif
 	}
+	}
+
 	*running_applications.lock() = std::move(apps);
 }
 
@@ -406,6 +412,13 @@ void scenes::stream::operator()(to_headset::running_applications && apps)
 // description then sets up the decoders and tracking as on connection.
 void scenes::stream::apply_video_active()
 {
+	const bool background = wanted_background;
+	if (background != background_active)
+	{
+		background_active = background;
+		if (audio_handle)
+			audio_handle->set_mic_state(background_active && microphone_requested);
+	}
 	bool active = wanted_active;
 	if (active == video_active)
 		return;
@@ -415,7 +428,7 @@ void scenes::stream::apply_video_active()
 		teardown_video();
 	network_session->send_control(from_headset::video_active{.active = active});
 	if (audio_handle)
-		audio_handle->set_mic_state(active && microphone_requested);
+		audio_handle->set_mic_state(background_active && microphone_requested);
 	if (active and standby_video)
 	{
 		auto desc = std::move(*standby_video);
@@ -472,7 +485,7 @@ void scenes::stream::poll_shell()
 		if (command->starts_with("setting "))
 		{
 			if (command->starts_with("setting resolution ") &&
-			    std::ranges::any_of(running_applications.lock()->applications, [](const auto & app) { return !app.overlay; }))
+			    (!frame_shell::activity(shell_source).known || !frame_shell::activity(shell_source).defaults.empty()))
 				continue;
 			auto & config = application::get_config();
 			if (not frame_shell::apply_setting(config, *command))
@@ -519,6 +532,16 @@ void scenes::stream::poll_shell()
 		}
 	}
 
+	if (auto now = std::chrono::steady_clock::now(); now >= shell_next_apps_query)
+	{
+		shell_next_apps_query = now + std::chrono::seconds(30);
+		network_session->send_control(from_headset::get_application_list{
+		        .language = application::get_messages_info().language,
+		        .country = application::get_messages_info().country,
+		        .variant = application::get_messages_info().variant,
+		});
+	}
+
 	// The PC's running applications, for the shell's app list
 	if (auto now = std::chrono::steady_clock::now(); now >= shell_next_running_query)
 	{
@@ -529,9 +552,9 @@ void scenes::stream::poll_shell()
 	for (auto & message: frame_shell::take_host_messages(shell_source))
 		network_session->send_control(from_headset::shell_message{.payload = std::move(message)});
 
-	// This runs per received packet batch: the state for the shell only every 100 ms, from the PC presenting VR
+	// Publish each connection's stream state at most every 100 ms.
 	auto now = std::chrono::steady_clock::now();
-	if (now < shell_next_state or not active)
+	if (now < shell_next_state)
 		return;
 	shell_next_state = now + std::chrono::milliseconds(100);
 #if WIVRN_FRAME_EYES
@@ -568,7 +591,7 @@ void scenes::stream::poll_shell()
 	if (json != shell_state)
 	{
 		shell_state = json;
-		frame_shell::stream_state(shell_state.c_str());
+		frame_shell::stream_state(shell_source, shell_state.c_str());
 	}
 }
 #endif

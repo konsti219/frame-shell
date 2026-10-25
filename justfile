@@ -226,14 +226,8 @@ run:
     [ -x "$server" ] || { echo "Run just build-host first" >&2; exit 1; }
     config="${XDG_CONFIG_HOME:-$HOME/.config}"
     mkdir -p "$build/config/wivrn"
-    if { [ ! -f "$build/config/wivrn/cookie" ] || [ ! -f "$build/config/wivrn/known_keys.json" ]; } && [ -f "$config/wivrn/cookie" ]; then
-        for state in cookie known_keys.json; do
-            if [ -f "$config/wivrn/$state" ]; then
-                cp -- "$config/wivrn/$state" "$build/config/wivrn/$state"
-                chmod 600 "$build/config/wivrn/$state"
-            fi
-        done
-    fi
+    export FRAME_SHELL_IDENTITY_DIR="$config/wivrn"
+    export FRAME_SHELL_BUILD_KIND=development
     was_active=false
     if systemctl --user is-active --quiet frame-shell.service; then
         was_active=true

@@ -34,6 +34,8 @@
 #include "driver/configuration.h"
 #include "driver/wivrn_connection.h"
 #include "exit_codes.h"
+#include "frame_abi.h"
+#include "hostname.h"
 #include "ipc_server_cb.h"
 #include "protocol_version.h"
 #include "start_application.h"
@@ -44,7 +46,6 @@
 #include "wivrn_ipc.h"
 #include "wivrn_packets.h"
 #include "wivrn_sockets.h"
-#include "frame_abi.h"
 
 #include "wivrn_server_dbus.h"
 
@@ -385,6 +386,8 @@ void start_publishing()
 			        {"protocol", protocol_string},
 			        {"version", wivrn::display_version()},
 			        {"cookie", server_cookie()},
+			        {"pc_name", wivrn::hostname()},
+			        {"build", std::getenv("FRAME_SHELL_BUILD_KIND") ? std::getenv("FRAME_SHELL_BUILD_KIND") : "packaged"},
 			};
 			auto configuration = wivrn::configuration();
 			publisher.emplace(poll_api, configuration.hostname, "_wivrn._tcp", configuration.port, TXT);

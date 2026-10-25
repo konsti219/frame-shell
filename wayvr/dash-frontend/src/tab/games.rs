@@ -237,7 +237,7 @@ impl<T> TabGames<T> {
 		};
 
 		let apps: Vec<AppManifest> = if wivrn.connected_to(host) {
-			wivrn
+			host
 				.stream
 				.get("apps")
 				.and_then(serde_json::Value::as_array)
@@ -290,7 +290,7 @@ impl<T> TabGames<T> {
 		if !wivrn.connected_to(host) {
 			let (text, connect) = if wivrn.is_active(host) {
 				(format!("Connecting to {}…", host.name), false)
-			} else if !host.visible {
+			} else if !host.visible && !host.manual {
 				(format!("{} is not on the network", host.name), false)
 			} else {
 				(format!("Not connected to {}", host.name), true)
@@ -312,7 +312,7 @@ impl<T> TabGames<T> {
 			layout: &mut frontend.layout,
 			parent_id: self.id_game_list,
 			steam_utils: &steam_utils,
-			remote: Some((host.name.clone(), apps)),
+			remote: Some((host.cookie.clone(), apps)),
 		})?);
 		self.refresh_running(frontend, wivrn, &host.cookie)?;
 		Ok(())
@@ -323,12 +323,15 @@ impl<T> TabGames<T> {
 		state: &WivrnState,
 		cookie: &Rc<str>,
 	) -> anyhow::Result<()> {
-		let steam = state
+		let Some(host) = state.hosts.iter().find(|host| host.cookie == *cookie) else {
+			return Ok(());
+		};
+		let steam = host
 			.stream
 			.get("steam_running")
 			.cloned()
 			.unwrap_or_else(|| serde_json::json!([]));
-		let sessions = state
+		let sessions = host
 			.stream
 			.get("running")
 			.cloned()

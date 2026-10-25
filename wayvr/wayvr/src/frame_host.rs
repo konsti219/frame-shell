@@ -25,11 +25,12 @@ pub enum IpcEvent {
 
 /// One connected PC
 struct Pc {
-    /// It streams VR, rather than only its monitors
-    vr: bool,
     games: Option<(Instant, Vec<String>)>,
     /// Its runtime's clients
     clients: Vec<RuntimeClient>,
+    clients_known: bool,
+    composition_supported: bool,
+    sent_background: Option<bool>,
     sent_settings: Option<DesktopSettings>,
 }
 
@@ -74,35 +75,40 @@ pub fn is_connected(source: u32) -> bool {
 
 /// The connected PCs, and whether each streams VR
 pub fn sources() -> Vec<(u32, bool)> {
+    let background = crate::frame_hosts::background_source();
     state()
         .pcs
-        .iter()
-        .map(|(&source, pc)| (source, pc.vr))
+        .keys()
+        .map(|&source| (source, Some(source) == background))
         .collect()
 }
 
-/// The PC streaming VR
 pub fn vr_source() -> Option<u32> {
-    state()
-        .pcs
-        .iter()
-        .find(|(_, pc)| pc.vr)
-        .map(|(&source, _)| source)
+    crate::frame_hosts::background_source().filter(|&source| is_connected(source))
 }
 
-/// A PC connected, or changed role (presenting VR or standing by)
-pub fn connected(source: u32, vr: bool) {
+pub fn background_changed() {
+    state().frames.clear();
+}
+
+pub fn connected(source: u32, _background: bool) {
     let mut state = state();
-    let pc = state.pcs.entry(source).or_insert(Pc {
-        vr,
-        games: None,
-        clients: Vec::new(),
-        sent_settings: None,
-    });
-    pc.vr = vr;
-    if !vr {
-        state.frames.clear();
+    if state.pcs.contains_key(&source) {
+        return;
     }
+    state.pcs.insert(
+        source,
+        Pc {
+            games: None,
+            clients: Vec::new(),
+            clients_known: false,
+            composition_supported: false,
+            sent_background: None,
+            sent_settings: None,
+        },
+    );
+    drop(state);
+    crate::frame_shell::send_host_message(source, &ShellMessage::RequestState.encode());
 }
 
 /// A message from a PC
@@ -119,7 +125,7 @@ pub fn receive(source: u32, data: &[u8]) {
     let Some(pc) = state.pcs.get_mut(&source) else {
         return;
     };
-    let vr = pc.vr;
+    let vr = crate::frame_hosts::background_source() == Some(source);
     match message {
         HostMessage::Games(games) => {
             let changed = pc.games.as_ref().is_none_or(|(_, old)| *old != games);
@@ -128,8 +134,33 @@ pub fn receive(source: u32, data: &[u8]) {
                 crate::frame_shell::bump_lobby_state();
             }
         }
+        HostMessage::Identity(identity) => {
+            crate::frame_hosts::identity(source, identity);
+            crate::frame_shell::publish_pc_routes();
+            crate::frame_shell::bump_lobby_state();
+        }
+        HostMessage::CompositionSupported => {
+            pc.composition_supported = true;
+            crate::frame_shell::runtime_clients(source, &pc.clients, pc.clients_known, true);
+        }
+        HostMessage::RuntimeUnavailable => {
+            if pc.clients_known {
+                log::warn!("PC connection {source}: runtime state unavailable");
+            }
+            pc.clients_known = false;
+            crate::frame_shell::runtime_clients(source, &[], false, pc.composition_supported);
+            crate::frame_shell::bump_lobby_state();
+        }
         HostMessage::Clients(clients) => {
-            if pc.clients != clients {
+            if !pc.clients_known {
+                log::info!(
+                    "PC connection {source}: runtime state available ({} XR clients)",
+                    clients.len()
+                );
+            }
+            crate::frame_shell::runtime_clients(source, &clients, true, pc.composition_supported);
+            if !pc.clients_known || pc.clients != clients {
+                pc.clients_known = true;
                 pc.clients = clients;
                 crate::frame_shell::bump_lobby_state();
             }
@@ -159,15 +190,43 @@ pub fn receive(source: u32, data: &[u8]) {
         }
         HostMessage::IpcClose(id) => state.ipc.push_back(IpcEvent::Close(source, id)),
     }
+    drop(guard);
+    sync_presentation();
+}
+
+pub fn composition_supported(source: u32) -> bool {
+    state()
+        .pcs
+        .get(&source)
+        .is_some_and(|pc| pc.composition_supported)
+}
+
+pub fn sync_presentation() {
+    let background = crate::frame_hosts::background_source();
+    let mut state = state();
+    for (&source, pc) in &mut state.pcs {
+        let visible = background == Some(source);
+        if pc.composition_supported
+            && pc.sent_background != Some(visible)
+            && crate::frame_shell::send_host_message(
+                source,
+                &ShellMessage::BackgroundVisible(visible).encode(),
+            )
+        {
+            pc.sent_background = Some(visible);
+        }
+    }
 }
 
 /// A PC's connection ended
 pub fn disconnected(source: u32) {
+    let was_background = crate::frame_hosts::background_source() == Some(source);
+    crate::frame_hosts::disconnected(source);
     let mut state = state();
-    let Some(pc) = state.pcs.remove(&source) else {
+    let Some(_pc) = state.pcs.remove(&source) else {
         return;
     };
-    if pc.vr {
+    if was_background {
         state.frames.clear();
     }
     state.ipc.retain(|event| match event {
@@ -223,8 +282,17 @@ pub fn clients(source: u32) -> Vec<RuntimeClient> {
     state()
         .pcs
         .get(&source)
+        .filter(|pc| pc.clients_known)
         .map(|pc| pc.clients.clone())
         .unwrap_or_default()
+}
+
+pub fn error(message: String) {
+    state().errors.push_back(message);
+}
+
+pub fn clients_known(source: u32) -> bool {
+    state().pcs.get(&source).is_some_and(|pc| pc.clients_known)
 }
 
 /// Whether a games list went stale since the last call

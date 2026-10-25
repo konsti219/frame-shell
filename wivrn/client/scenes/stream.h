@@ -122,6 +122,9 @@ private:
 	std::atomic<bool> video_active = true;
 	// Asked for by the lobby, applied on the network thread
 	std::atomic<bool> wanted_active = true;
+	std::atomic<bool> wanted_background = true;
+	bool background_active = true;
+	bool frame_prepared = false;
 	std::optional<to_headset::video_stream_description> standby_video;
 	bool microphone_requested = false;
 	std::chrono::steady_clock::time_point standby_keepalive{};
@@ -281,9 +284,22 @@ public:
 	// Steady clock nanoseconds since a VR application started on this PC, 0 without one
 	int64_t vr_app_started() const
 	{
+#ifndef __ANDROID__
+		if (frame_shell::enabled())
+		{
+			const auto activity = frame_shell::activity(shell_source);
+			return activity.known ? activity.since : 0;
+		}
+#endif
 		return vr_app_since;
 	}
 
+	void set_background_active(bool active)
+	{
+		wanted_background = active;
+	}
+	void render_into(const XrFrameState &, scene * composition);
+	void finish_frame(const XrFrameState &);
 	void render(const XrFrameState &) override;
 	void on_focused() override;
 	void on_unfocused() override;
@@ -354,6 +370,7 @@ public:
 	std::chrono::steady_clock::time_point shell_next_state{};
 	uint16_t shell_encoded_width = 0, shell_encoded_height = 0;
 	std::chrono::steady_clock::time_point shell_next_running_query{};
+	std::chrono::steady_clock::time_point shell_next_apps_query{};
 	// The Wi-Fi link to the PC (signal, rates) as JSON for the shell
 	std::mutex network_status_mutex;
 	std::string network_status = "null";

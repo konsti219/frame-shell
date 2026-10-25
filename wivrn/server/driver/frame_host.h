@@ -45,7 +45,7 @@ private:
 	}
 
 public:
-	explicit frame_host_session(callbacks handlers_) :
+	explicit frame_host_session(callbacks handlers_, const frame_host_identity & identity) :
 	        handlers(std::move(handlers_))
 	{
 		frame_host_callbacks c{
@@ -63,7 +63,7 @@ public:
 			        guarded([&] { static_cast<frame_host_session *>(user)->handlers.message({data, size}); });
 		        },
 		};
-		host = frame_host_start(&c);
+		host = frame_host_start(&c, &identity);
 		if (!host)
 			throw std::runtime_error("Frame shell host services failed to start");
 	}

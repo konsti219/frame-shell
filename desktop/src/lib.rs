@@ -137,21 +137,26 @@ impl Shared {
 
 struct Host {
     output: Output,
+    identity: wayvr_ipc::frame::HostIdentity,
     shared: Arc<Shared>,
-    games: Sender<(String, bool)>,
-    focus: Sender<(u32, wayvr_ipc::frame::ClientAction)>,
+    games: Sender<games::Command>,
+    focus: Sender<clients::Command>,
     proxy: Arc<ipc_proxy::Proxy>,
     threads: Vec<JoinHandle<()>>,
 }
 
 impl Host {
-    fn start(callbacks: frame_host_callbacks) -> anyhow::Result<Self> {
+    fn start(
+        callbacks: frame_host_callbacks,
+        identity: wayvr_ipc::frame::HostIdentity,
+    ) -> anyhow::Result<Self> {
         gstreamer::init()?;
         let output = Output {
             callbacks: Arc::new(Callbacks(callbacks)),
             stop: Arc::default(),
             open: Arc::new(RwLock::new(true)),
         };
+        output.send(&HostMessage::Identity(identity.clone()));
         let shared = Arc::new(Shared::default());
         let (games, games_rx) = mpsc::channel();
         let (focus, focus_rx) = mpsc::channel();
@@ -193,6 +198,7 @@ impl Host {
         spawn("capture", Box::new(move || capture::run(&worker, &state)));
         Ok(Self {
             output,
+            identity,
             shared,
             games,
             focus,
@@ -214,16 +220,26 @@ impl Host {
             }
             ShellMessage::StopGame { app_id, force } => {
                 if app_id.parse::<u64>().is_ok() {
-                    let _ = self.games.send((app_id, force));
+                    let _ = self.games.send(games::Command::Stop(app_id, force));
                 }
             }
             ShellMessage::FocusClient(client) => {
-                let _ = self
-                    .focus
-                    .send((client, wayvr_ipc::frame::ClientAction::Select));
+                let _ = self.focus.send(clients::Command::Client(
+                    client,
+                    wayvr_ipc::frame::ClientAction::Select,
+                ));
             }
             ShellMessage::ClientAction { client, action } => {
-                let _ = self.focus.send((client, action));
+                let _ = self.focus.send(clients::Command::Client(client, action));
+            }
+            ShellMessage::RequestState => {
+                self.output
+                    .send(&HostMessage::Identity(self.identity.clone()));
+                let _ = self.focus.send(clients::Command::Refresh);
+                let _ = self.games.send(games::Command::Refresh);
+            }
+            ShellMessage::BackgroundVisible(visible) => {
+                let _ = self.focus.send(clients::Command::Background(visible));
             }
             ShellMessage::Ipc(connection, packet) => self.proxy.send(connection, &packet),
             ShellMessage::IpcClose(connection) => self.proxy.close(connection),
@@ -246,8 +262,10 @@ impl Host {
 
 /// Checks the definitions below against frame_abi.h's declarations
 const _: () = {
-    let _: unsafe extern "C" fn(*const frame_host_callbacks) -> *mut frame_host =
-        frame_abi::frame_host_start;
+    let _: unsafe extern "C" fn(
+        *const frame_host_callbacks,
+        *const frame_abi::frame_host_identity,
+    ) -> *mut frame_host = frame_abi::frame_host_start;
     let _: unsafe extern "C" fn(*mut frame_host, *const u8, usize) = frame_abi::frame_host_receive;
     let _: unsafe extern "C" fn(*mut frame_host, u32) = frame_abi::frame_host_request_keyframe;
     let _: unsafe extern "C" fn(*mut frame_host) = frame_abi::frame_host_stop;
@@ -256,11 +274,24 @@ const _: () = {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn frame_host_start(
     callbacks: *const frame_host_callbacks,
+    identity: *const frame_abi::frame_host_identity,
 ) -> *mut frame_host {
     let Some(callbacks) = (unsafe { callbacks.as_ref() }).copied() else {
         return std::ptr::null_mut();
     };
-    match std::panic::catch_unwind(|| Host::start(callbacks)) {
+    let identity = unsafe { identity.as_ref() }.expect("host identity");
+    let text = |p| {
+        unsafe { std::ffi::CStr::from_ptr(p) }
+            .to_string_lossy()
+            .into_owned()
+    };
+    let identity = wayvr_ipc::frame::HostIdentity {
+        id: text(identity.id),
+        name: text(identity.name),
+        build: text(identity.build),
+        version: text(identity.version),
+    };
+    match std::panic::catch_unwind(|| Host::start(callbacks, identity)) {
         Ok(Ok(host)) => Box::into_raw(Box::new(host)).cast(),
         Ok(Err(error)) => {
             eprintln!("Frame host: {error:#}");

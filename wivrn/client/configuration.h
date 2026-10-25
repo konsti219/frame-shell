@@ -67,6 +67,7 @@ public:
 		bool compatible;
 
 		wivrn_discover::service service;
+		bool remembered = false;
 	};
 
 	std::map<std::string, server_data> servers;
