@@ -388,7 +388,7 @@ impl ParserState {
 						let (key, value) = (attrib.name(), attrib.value());
 
 						match key {
-							"text" => title = Some(Translation::from_raw_text(value)),
+							"text" => title = Some(Translation::from_raw_text_string(replace_vars(value, template_params).to_string())),
 							"translation" => title = Some(Translation::from_translation_key(value)),
 							"tooltip" => tooltip = Some(Translation::from_translation_key(value)),
 							"tooltip_str" => tooltip = Some(Translation::from_raw_text(value)),
@@ -396,7 +396,6 @@ impl ParserState {
 							"sprite_src_builtin" => sprite_src_builtin = Some(value.into()),
 							"skip" => {
 								let resolved = replace_vars(value, template_params);
-								//FIXME: this is always empty
 								if &*resolved == "1" {
 									continue 'children;
 								}
