@@ -79,7 +79,7 @@ private:
 	{
 		uint64_t timestamp = 0;
 		wivrn::from_headset::feedback feedback;
-		wivrn::to_headset::video_stream_data_shard::view_info_t view_info;
+		wivrn::to_headset::video_frame_info::view_info_t view_info;
 	};
 
 	struct ready_output
@@ -190,7 +190,7 @@ public:
 	void push_data(std::span<std::span<const uint8_t>> data, uint64_t frame_index, bool partial) override;
 	void frame_completed(
 	        const wivrn::from_headset::feedback & feedback,
-	        const wivrn::to_headset::video_stream_data_shard::view_info_t & view_info) override;
+	        const wivrn::to_headset::video_frame_info::view_info_t & view_info) override;
 
 	// Whether iris has taken no input for this long while all OUTPUT buffers are queued
 	bool stalled(std::chrono::steady_clock::duration limit);

@@ -740,14 +740,6 @@ struct desktop_keyframe
 	uint32_t surface;
 };
 
-// Shards of a desktop frame that didn't arrive, for the server to send again; all of them if `shards` is empty
-struct desktop_nack
-{
-	uint32_t surface;
-	uint32_t frame;
-	std::vector<uint16_t> shards;
-};
-
 // Parity shards per video frame, in percent of its data shards (0: none), and the frame margin: how much earlier
 // than the slowest 0.5% of frames need the PC aims to have frames decoded before the headset picks them (ms)
 struct link_settings
@@ -771,15 +763,14 @@ struct frame_eyes
 	std::array<float, 2> dilation;
 };
 
-// Data shards of a video frame that didn't arrive, for the server to send again
+// Data shards of a video frame (to_headset::video_shard) that didn't arrive, for the server to send again; all of
+// the frame's shards if none are named
 struct video_nack
 {
+	uint32_t stream;
 	uint32_t generation;
-	uint8_t stream_item_idx;
-	uint64_t frame_idx;
+	uint64_t frame;
 	std::vector<uint16_t> shards;
-	// Also every shard from this one on: the frame's end didn't arrive, so its size is unknown
-	std::optional<uint16_t> tail_from;
 };
 
 // Stream size or codec changed during a session; the server rebuilds its encoders
@@ -853,7 +844,6 @@ using packets = std::variant<
         link_settings,
         stream_settings,
         video_nack,
-        desktop_nack,
         frame_eyes,
         video_active>;
 } // namespace from_headset
@@ -933,22 +923,9 @@ struct video_stream_description
 	bool operator==(const video_stream_description &) const = default;
 };
 
-class video_stream_data_shard
+// What a VR frame carries besides its video, serialized at the start of its data
+struct video_frame_info
 {
-public:
-	inline static const size_t max_payload_size = 1380;
-	// Identifier of stream:
-	// 0 left
-	// 1 right
-	// 2 alpha
-	uint8_t stream_item_idx;
-	uint32_t generation = 0;
-	// Counter increased for each frame
-	uint64_t frame_idx;
-	// Identifier of the shard within the frame
-	uint16_t shard_idx;
-
-	// Position information, must be present on first video shard
 	struct view_info_t
 	{
 		// ns in headset time referential
@@ -960,9 +937,8 @@ public:
 		// True when the frame contains an alpha channel
 		bool alpha;
 	};
-	std::optional<view_info_t> view_info;
+	view_info_t view_info;
 
-	// Information about timing, on last video shard
 	struct timing_info_t
 	{
 		XrTime encode_begin;
@@ -970,25 +946,25 @@ public:
 		XrTime send_begin;
 		XrTime send_end;
 	};
-	std::optional<timing_info_t> timing_info;
-	// Actual video data, may contain multiple NAL units
-	std::span<uint8_t> payload;
-
-	// Container for the data, read payload instead
-	data_holder data;
+	timing_info_t timing_info;
 };
 
-// Parity for a frame's data shards (see fec.h), sent after them
-struct video_stream_parity_shard
+// One shard of a video frame, VR or a PC monitor, on the stream socket (shard_stream.h): data shards, then parity
+struct video_shard
 {
+	// Room for a parity block (fec.h); data shards are no larger
+	inline static const size_t max_payload_size = 1408;
+	// VR: 0 left, 1 right, 2 alpha; a PC monitor's video is desktop_streams + its surface
+	inline static const uint32_t desktop_streams = 0x100;
+	uint32_t stream;
+	// VR: the video_stream_description it was encoded for; 0 for monitors
 	uint32_t generation = 0;
-	uint8_t stream_item_idx;
-	uint64_t frame_idx;
+	uint64_t frame;
+	uint16_t index;
 	uint16_t data_count;
-	uint16_t parity_idx;
 	uint16_t parity_count;
-	std::span<uint8_t> payload;
-	data_holder data;
+	uint32_t frame_size;
+	std::vector<uint8_t> payload;
 };
 
 struct haptics
@@ -1056,7 +1032,7 @@ struct application_icon
 	std::vector<std::byte> image; // In PNG
 };
 
-// A PC monitor streamed to the shell as H.264/HEVC (desktop_video); sent before its first frame and again when it
+// A PC monitor streamed to the shell as H.264/HEVC (video_shard); sent before its first frame and again when it
 // changes or goes away.
 struct desktop_surface
 {
@@ -1072,19 +1048,6 @@ struct desktop_surface
 // A message from the PC's frame shell host services for the shell (frame_abi.h), opaque here
 struct shell_message
 {
-	std::vector<uint8_t> payload;
-};
-
-// One shard of a desktop surface's encoded access unit, on the stream socket like the VR video
-struct desktop_video
-{
-	inline static const size_t max_payload_size = 1400;
-	uint32_t surface;
-	uint32_t frame;
-	uint16_t shard;
-	uint16_t shard_count;
-	uint16_t parity_count = 0;
-	uint32_t frame_size;
 	std::vector<uint8_t> payload;
 };
 
@@ -1109,8 +1072,7 @@ using packets = std::variant<
         audio_stream_description,
         video_stream_description,
         audio_data,
-        video_stream_data_shard,
-        video_stream_parity_shard,
+        video_shard,
         haptics,
         timesync_query,
         tracking_control,
@@ -1121,7 +1083,6 @@ using packets = std::variant<
         application_icon,
         running_applications,
         desktop_surface,
-        desktop_video,
         shell_message>;
 } // namespace to_headset
 } // namespace wivrn

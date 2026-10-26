@@ -192,7 +192,6 @@ public:
 	void operator()(from_headset::video_nack &&);
 	void operator()(from_headset::frame_eyes &&);
 	void operator()(from_headset::video_active &&);
-	void operator()(from_headset::desktop_nack &&);
 	void operator()(from_headset::timesync_response &&);
 	void operator()(from_headset::feedback &&);
 	void operator()(from_headset::battery &&);

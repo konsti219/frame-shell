@@ -5,9 +5,7 @@
 #include "fec.h"
 
 #include "leopard.h"
-#include "wivrn_serialization.h"
 #include <algorithm>
-#include <cstring>
 #include <cstdlib>
 #include <memory>
 #include <mutex>
@@ -46,45 +44,6 @@ uint16_t parity_count(size_t data_count, uint8_t percent)
 	if (percent == 0 or data_count == 0)
 		return 0;
 	return std::min<size_t>(data_count, std::max<size_t>(1, (data_count * percent + 99) / 100));
-}
-
-std::vector<uint8_t> block(const to_headset::video_stream_data_shard & shard)
-{
-	serialization_packet packet;
-	packet.serialize(shard);
-	std::vector<uint8_t> result(block_size, 0);
-	size_t size = 2;
-	for (const auto & span: (std::vector<std::span<uint8_t>> &)packet)
-	{
-		if (size + span.size() > block_size)
-			throw std::logic_error("Video shard exceeds the FEC block size");
-		memcpy(result.data() + size, span.data(), span.size());
-		size += span.size();
-	}
-	uint16_t length = size - 2;
-	memcpy(result.data(), &length, 2);
-	return result;
-}
-
-std::optional<to_headset::video_stream_data_shard> shard(std::span<const uint8_t> block)
-{
-	if (block.size() < 2)
-		return std::nullopt;
-	uint16_t length;
-	memcpy(&length, block.data(), 2);
-	if (length + 2u > block.size())
-		return std::nullopt;
-	std::shared_ptr<uint8_t[]> memory(new uint8_t[length]);
-	memcpy(memory.get(), block.data() + 2, length);
-	try
-	{
-		deserialization_packet packet(memory, {memory.get(), length});
-		return packet.deserialize<to_headset::video_stream_data_shard>();
-	}
-	catch (std::exception &)
-	{
-		return std::nullopt;
-	}
 }
 
 std::vector<std::vector<uint8_t>> encode(std::span<const std::vector<uint8_t>> data, uint16_t parity_count)

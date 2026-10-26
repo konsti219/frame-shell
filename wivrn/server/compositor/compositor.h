@@ -53,7 +53,7 @@ public:
 		image_allocation image;
 		vk::raii::ImageView view_y;
 		vk::raii::ImageView view_cbcr;
-		to_headset::video_stream_data_shard::view_info_t view_info{};
+		to_headset::video_frame_info::view_info_t view_info{};
 		uint64_t frame_index;
 	};
 

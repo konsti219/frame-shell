@@ -70,7 +70,7 @@ struct decoder::ffmpeg_blit_handle : public wivrn::decoder::blit_handle
 
 	ffmpeg_blit_handle(
 	        const wivrn::from_headset::feedback & feedback,
-	        const wivrn::to_headset::video_stream_data_shard::view_info_t & view_info,
+	        const wivrn::to_headset::video_frame_info::view_info_t & view_info,
 	        vk::ImageView image_view,
 	        vk::Image image,
 	        vk::Extent2D extent,
@@ -203,7 +203,7 @@ void decoder::push_data(std::span<std::span<const uint8_t>> data, uint64_t frame
 	this->frame_index = frame_index;
 }
 
-void decoder::frame_completed(const wivrn::from_headset::feedback & feedback, const wivrn::to_headset::video_stream_data_shard::view_info_t & view_info)
+void decoder::frame_completed(const wivrn::from_headset::feedback & feedback, const wivrn::to_headset::video_frame_info::view_info_t & view_info)
 {
 	spdlog::trace("ffmpeg decoder:frame_completed {}", frame_index);
 	AVPacket packet{};

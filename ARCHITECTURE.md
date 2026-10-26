@@ -58,7 +58,11 @@ portal derives it from the systemd scope), so the development server runs in its
 service. The cast hands DMA-bufs to VA-API, and the encoder is always told its source is live so it never holds
 frames back. `desktop_surface` announces a
 monitor (codec, size, region in the desktop for pointer input) before its first frame. Access units travel as
-`desktop_video` shards on the stream socket, with FEC parity and resends on request (`desktop_nack`); a frame
+`video_shard` packets on the stream socket, using the same per-stream sharding, FEC and retransmission
+implementation as VR video (`wivrn/common/shard_stream.*`). Every shard carries its frame size and shard counts;
+`video_nack` requests missing shards. VR metadata is serialized before the encoded bytes. Each VR encoder and
+monitor owns separate recovery state. VR decodes complete frames immediately; desktops decode in order, waiting
+up to 40 ms for recovery. A desktop frame
 that can't be completed drops frames until the next keyframe (`desktop_keyframe`). Hidden monitors aren't encoded.
 Decoded frames are NV12 DMA-bufs that stay out of the decoder until WayVR releases them.
 

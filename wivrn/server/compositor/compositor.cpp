@@ -900,8 +900,8 @@ void compositor::set_frame_margin(float ms)
 void compositor::on_nack(const from_headset::video_nack & nack)
 {
 	std::lock_guard lock{encoders_mutex};
-	if (nack.generation == stream_generation and nack.stream_item_idx < encoders.size() and encoders[nack.stream_item_idx])
-		encoders[nack.stream_item_idx]->resend(nack);
+	if (nack.generation == stream_generation and nack.stream < encoders.size() and encoders[nack.stream])
+		encoders[nack.stream]->resend(nack);
 }
 
 void compositor::on_feedback(const from_headset::feedback & feedback, const clock_offset & o)

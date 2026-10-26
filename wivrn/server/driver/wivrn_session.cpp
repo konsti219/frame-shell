@@ -1552,7 +1552,10 @@ void wivrn::wivrn_session::operator()(from_headset::link_settings && event)
 
 void wivrn::wivrn_session::operator()(from_headset::video_nack && nack)
 {
-	compositor.on_nack(nack);
+	if (nack.stream < to_headset::video_shard::desktop_streams)
+		compositor.on_nack(nack);
+	else if (desktop)
+		desktop->resend(nack);
 }
 
 void wivrn::wivrn_session::operator()(from_headset::video_active && event)
@@ -1570,10 +1573,4 @@ void wivrn::wivrn_session::operator()(from_headset::desktop_keyframe && event)
 {
 	if (desktop)
 		(*desktop)(std::move(event));
-}
-
-void wivrn::wivrn_session::operator()(from_headset::desktop_nack && nack)
-{
-	if (desktop)
-		(*desktop)(std::move(nack));
 }

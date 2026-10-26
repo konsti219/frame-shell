@@ -29,7 +29,7 @@ struct raw_blit_handle : public wivrn::decoder::blit_handle
 
 	raw_blit_handle(
 	        const wivrn::from_headset::feedback & feedback,
-	        const wivrn::to_headset::video_stream_data_shard::view_info_t & view_info,
+	        const wivrn::to_headset::video_frame_info::view_info_t & view_info,
 	        vk::ImageView image_view,
 	        vk::Image image,
 	        vk::Extent2D extent,
@@ -200,7 +200,7 @@ void raw_decoder::push_data(std::span<std::span<const uint8_t>> data, uint64_t f
 
 void raw_decoder::frame_completed(
         const from_headset::feedback & feedback,
-        const to_headset::video_stream_data_shard::view_info_t & view_info)
+        const to_headset::video_frame_info::view_info_t & view_info)
 {
 	auto item = get_free();
 	if (not item)

@@ -301,7 +301,7 @@ public:
 	void operator()(to_headset::pin_check_4 &&) {};
 	void operator()(to_headset::handshake &&) {};
 	void operator()(to_headset::server_message &&);
-	void operator()(to_headset::video_stream_data_shard &&);
+	void operator()(to_headset::video_shard &&);
 	void operator()(to_headset::haptics &&);
 	void operator()(to_headset::timesync_query &&);
 	void operator()(to_headset::tracking_control &&);
@@ -314,8 +314,6 @@ public:
 	void operator()(to_headset::application_icon &&);
 	void operator()(to_headset::running_applications &&);
 	void operator()(to_headset::desktop_surface &&);
-	void operator()(to_headset::desktop_video &&);
-	void operator()(to_headset::video_stream_parity_shard &&);
 	void operator()(to_headset::shell_message &&);
 	void operator()(audio_data &&);
 

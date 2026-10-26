@@ -156,7 +156,7 @@ std::shared_ptr<scenes::stream> scenes::stream::create(std::unique_ptr<wivrn_ses
 	        self->shell_source, self->device, self->physical_device, self->queue_family_index,
 	        frame_shell::desktop_receiver::link{
 	                .keyframe = [s = self.get()](from_headset::desktop_keyframe && packet) { s->network_session->send_control(std::move(packet)); },
-	                .nack = [s = self.get()](from_headset::desktop_nack && packet) { s->network_session->send_stream(std::move(packet)); },
+	                .nack = [s = self.get()](from_headset::video_nack && packet) { s->network_session->send_stream(std::move(packet)); },
 	        });
 #endif
 	self->display_time_period = XrDuration(1'000'000'000.0 / std::max(guessed_fps, 1.0f));

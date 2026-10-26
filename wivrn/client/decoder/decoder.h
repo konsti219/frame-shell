@@ -41,7 +41,7 @@ public:
 	struct blit_handle
 	{
 		wivrn::from_headset::feedback feedback;
-		wivrn::to_headset::video_stream_data_shard::view_info_t view_info;
+		wivrn::to_headset::video_frame_info::view_info_t view_info;
 		vk::ImageView image_view = nullptr;
 		vk::Image image = nullptr;
 		vk::Extent2D extent{};
@@ -78,7 +78,7 @@ public:
 
 	virtual void frame_completed(
 	        const from_headset::feedback & feedback,
-	        const to_headset::video_stream_data_shard::view_info_t & view_info) = 0;
+	        const to_headset::video_frame_info::view_info_t & view_info) = 0;
 
 	virtual vk::Sampler sampler() = 0;
 

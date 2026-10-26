@@ -21,7 +21,7 @@
  */
 
 #include "stream.h"
-#include "fec.h"
+#include "wivrn_serialization.h"
 #include "utils/json_string.h"
 #if WIVRN_USE_V4L2
 #include "decoder/v4l2/v4l2_decoder.h"
@@ -202,41 +202,43 @@ void scenes::stream::operator()(to_headset::server_message && message)
 	}
 }
 
-void scenes::stream::operator()(to_headset::video_stream_data_shard && shard)
+void scenes::stream::operator()(to_headset::video_shard && shard)
 {
+	if (shard.stream >= to_headset::video_shard::desktop_streams)
+	{
+#ifndef __ANDROID__
+		if (desktop)
+			(*desktop)(std::move(shard));
+#endif
+		return;
+	}
 	std::shared_lock lock(decoder_mutex);
 	if (not video_stream_description or shard.generation != video_stream_description->generation)
 		return;
 #ifndef __ANDROID__
-    if (frame_shell::enabled() && shard.view_info && shell_encoded_width && shell_encoded_height) {
-        const auto & parameters = shard.view_info->foveation[0];
-        if (parameters.x.source_size && parameters.y.source_size) {
-            auto extent = stream_defoveator::defoveated_size(parameters);
-            bool active = extent.width > shell_encoded_width || extent.height > shell_encoded_height;
-            auto debug = fmt::format(R"({{"encoded_width":{},"encoded_height":{},"render_width":{},"render_height":{},"foveated":{}}})",
-                shell_encoded_width, shell_encoded_height, extent.width, extent.height, active);
-            if (debug != shell_video_debug) {
-                spdlog::info("Received VR foveation: {}x{} encoded, {}x{} rendered per eye; {}", shell_encoded_width, shell_encoded_height, extent.width, extent.height, active ? "active" : "off");
-                shell_video_debug = std::move(debug);
-            }
-        }
-    }
-#endif
-	uint8_t idx = shard.stream_item_idx;
-	if (idx >= decoders.size() or not decoders[idx].decoder)
+	if (frame_shell::enabled() and shard.index == 0 and shell_encoded_width and shell_encoded_height and
+	    shard.payload.size() >= serialized_size(to_headset::video_frame_info{}))
 	{
-		// We don't know (yet?) about this stream, ignore packet
-		return;
+		deserialization_packet packet({}, shard.payload);
+		const auto info = packet.deserialize<to_headset::video_frame_info>();
+		const auto & parameters = info.view_info.foveation[0];
+		if (parameters.x.source_size and parameters.y.source_size)
+		{
+			auto extent = stream_defoveator::defoveated_size(parameters);
+			bool active = extent.width > shell_encoded_width or extent.height > shell_encoded_height;
+			auto debug = fmt::format(R"({{"encoded_width":{},"encoded_height":{},"render_width":{},"render_height":{},"foveated":{}}})",
+			                         shell_encoded_width, shell_encoded_height, extent.width, extent.height, active);
+			if (debug != shell_video_debug)
+			{
+				spdlog::info("Received VR foveation: {}x{} encoded, {}x{} rendered per eye; {}", shell_encoded_width, shell_encoded_height, extent.width, extent.height, active ? "active" : "off");
+				shell_video_debug = std::move(debug);
+			}
+		}
 	}
-	decoders[idx].decoder->push_shard(std::move(shard));
-}
-
-void scenes::stream::operator()(to_headset::video_stream_parity_shard && parity)
-{
-	std::shared_lock lock(decoder_mutex);
-	if (video_stream_description and parity.generation == video_stream_description->generation and
-	    parity.stream_item_idx < decoders.size() and decoders[parity.stream_item_idx].decoder)
-		decoders[parity.stream_item_idx].decoder->push_parity(std::move(parity));
+#endif
+	auto idx = shard.stream;
+	if (idx < decoders.size() and decoders[idx].decoder)
+		decoders[idx].decoder->push_shard(std::move(shard));
 }
 
 void scenes::stream::operator()(to_headset::feature_control && control)
@@ -426,13 +428,6 @@ void scenes::stream::operator()(to_headset::desktop_surface && surface)
 #endif
 }
 
-void scenes::stream::operator()(to_headset::desktop_video && video)
-{
-#ifndef __ANDROID__
-	if (desktop)
-		(*desktop)(std::move(video));
-#endif
-}
 
 #ifndef __ANDROID__
 static bool is_stream_command(std::string_view command)

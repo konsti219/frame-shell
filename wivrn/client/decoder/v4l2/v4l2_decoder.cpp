@@ -217,7 +217,7 @@ struct decoder::v4l2_blit_handle : public wivrn::decoder::blit_handle
 	std::shared_ptr<recycler> recycle;
 
 	v4l2_blit_handle(const wivrn::from_headset::feedback & feedback,
-	                 const wivrn::to_headset::video_stream_data_shard::view_info_t & view_info,
+	                 const wivrn::to_headset::video_frame_info::view_info_t & view_info,
 	                 vk::ImageView image_view,
 	                 vk::Image image,
 	                 vk::Extent2D extent,
@@ -1007,7 +1007,7 @@ void decoder::abandon_assembling_frame()
 }
 
 void decoder::frame_completed(const wivrn::from_headset::feedback & feedback,
-                              const wivrn::to_headset::video_stream_data_shard::view_info_t & view_info)
+                              const wivrn::to_headset::video_frame_info::view_info_t & view_info)
 {
 	rethrow_worker_exception();
 	if (dropped_frame_index && *dropped_frame_index == feedback.frame_index)

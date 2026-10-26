@@ -21,6 +21,7 @@
 
 #include "driver/clock_offset.h"
 #include "idr_handler.h"
+#include "shard_stream.h"
 #include "wivrn_packets.h"
 
 #include <atomic>
@@ -96,24 +97,14 @@ private:
 	uint8_t encode_slot = 0;
 
 	std::mutex mutex;
-	// The last frames' data shards as fec::block, to send again what the headset reports missing
-	struct sent_frame
-	{
-		uint64_t frame_idx = -1;
-		std::vector<std::vector<uint8_t>> shards;
-	};
-	std::array<sent_frame, 8> sent;
-
-	// temporary data
+	shards::sender recovery;
 	wivrn_session * cnx = nullptr;
-
-	// shard to send
-	to_headset::video_stream_data_shard shard;
-	// The frame's data shards as erasure code blocks, for its parity shards (fec.h); parity in percent, 0: none
-	std::vector<std::vector<uint8_t>> fec_blocks;
+	uint64_t frame_index = 0;
+	to_headset::video_frame_info frame_info;
+	std::vector<uint8_t> frame_data;
+	bool frame_control = false;
 	uint8_t fec_percent = 0;
 
-	to_headset::video_stream_data_shard::timing_info_t timing_info;
 	clock_offset clock;
 
 	std::ofstream video_dump;
@@ -150,7 +141,7 @@ public:
 	void set_framerate(float framerate);
 
 	void encode(wivrn_session & cnx,
-	            const to_headset::video_stream_data_shard::view_info_t & view_info,
+	            const to_headset::video_frame_info::view_info_t & view_info,
 	            uint64_t frame_index);
 
 protected:

@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "desktop_receiver.h"
 #include "application.h"
-#include "fec.h"
 #include "linux/frame_shell.h"
 #include <algorithm>
 #include <atomic>
@@ -113,88 +112,54 @@ void desktop_receiver::frame_lost(desktop_stream & stream)
 	}
 }
 
-void desktop_receiver::operator()(to_headset::desktop_video && video)
+void desktop_receiver::operator()(to_headset::video_shard && video)
 {
 #if WIVRN_USE_V4L2
-	auto it = streams.find(video.surface);
-	if (it == streams.end() || !it->second->decoder)
+	auto it = streams.find(video.stream - to_headset::video_shard::desktop_streams);
+	if (it == streams.end() or not it->second->decoder)
 		return;
 	auto & stream = *it->second;
-	if (video.shard_count == 0 or video.parity_count > video.shard_count or
-	    uint32_t(video.shard_count) + video.parity_count > 65535 or
-	    video.shard >= uint32_t(video.shard_count) + video.parity_count or
-	    video.frame_size == 0 or video.payload.empty() or
-	    (video.parity_count and (video.payload.size() != fec::block_size or
-	                             video.frame_size > size_t(video.shard_count) * fec::block_size or
-	                             video.frame_size <= size_t(video.shard_count - 1) * fec::block_size)))
+	if (stream.last_frame and video.frame <= *stream.last_frame)
 		return;
-	if (stream.last_frame and int32_t(video.frame - *stream.last_frame) <= 0)
-		return;
-
-	auto & frame = stream.pending[video.frame];
-	if (frame.shards.empty())
-	{
-		frame.shards.assign(video.shard_count, {});
-		frame.parity.assign(video.parity_count, {});
-		frame.size = video.frame_size;
-	}
-	if (video.shard_count != frame.shards.size() or video.parity_count != frame.parity.size() or video.frame_size != frame.size)
-		return;
-	if (not frame.complete)
-	{
-		if (video.shard < video.shard_count)
-		{
-			if (frame.shards[video.shard].empty())
-			{
-				frame.shards[video.shard] = std::move(video.payload);
-				++frame.received;
-			}
-		}
-		else
-			frame.parity[video.shard - video.shard_count] = std::move(video.payload);
-		if (frame.received == frame.shards.size() or fec::decode(frame.shards, frame.parity))
-		{
-			if (not frame.parity.empty())
-				frame.shards.back().resize(frame.size - (frame.shards.size() - 1) * fec::block_size);
-			frame.complete = true;
-		}
-	}
-	deliver_frames(it);
+	if (stream.recovery.add(std::move(video)))
+		deliver_frames(it);
 #endif
 }
 
 // Decodes a monitor's complete frames in order. Once a later frame arrives, an incomplete one asks for what it lacks
-// (from_headset::desktop_nack) and later frames wait; if that doesn't come back in time it's given up and decoding
+// (from_headset::video_nack) and later frames wait; if that doesn't come back in time it's given up and decoding
 // resumes at the next keyframe.
 void desktop_receiver::deliver_frames(streams_t::iterator it)
 {
 	auto & stream = *it->second;
-	while (not stream.pending.empty())
+	while (not stream.recovery.frames.empty())
 	{
-		uint32_t expected = stream.last_frame ? *stream.last_frame + 1 : stream.pending.begin()->first;
-		if (auto first = stream.pending.find(expected); first != stream.pending.end() and first->second.complete)
+		uint64_t expected = stream.last_frame ? *stream.last_frame + 1 : stream.recovery.frames.begin()->first;
+		if (auto first = stream.recovery.frames.find(expected); first != stream.recovery.frames.end() and first->second.complete)
 		{
 			auto frame = std::move(first->second);
-			stream.pending.erase(first);
+			stream.recovery.frames.erase(first);
 			stream.last_frame = expected;
+			stream.requests = 0;
 			if (not decode_frame(it, frame))
 				return;
 			continue;
 		}
 		// Nothing later yet: it may still be arriving
-		if (std::prev(stream.pending.end())->first == expected)
+		if (std::prev(stream.recovery.frames.end())->first == expected)
 			return;
 		// A frame missing altogether gets an empty entry, which asks for all its shards
-		auto & missing = stream.pending[expected];
+		auto & missing = stream.recovery.frames[expected];
 		auto now = std::chrono::steady_clock::now();
-		if ((missing.requests == 0 or (missing.requests == 1 and now - missing.requested > std::chrono::milliseconds(10))))
+		if ((stream.requests == 0 or (stream.requests == 1 and now - stream.requested > std::chrono::milliseconds(10))))
 		{
-			if (missing.requests++ == 0)
-				missing.requested = now;
-			from_headset::desktop_nack nack{.surface = stream.surface, .frame = expected};
-			for (size_t i = 0; i < missing.shards.size(); ++i)
-				if (missing.shards[i].empty())
-					nack.shards.push_back(i);
+			if (stream.requests++ == 0)
+				stream.requested = now;
+			from_headset::video_nack nack{
+			        .stream = to_headset::video_shard::desktop_streams + stream.surface,
+			        .generation = 0, .frame = expected,
+			        .shards = stream.recovery.missing(missing, 2),
+			};
 			try
 			{
 				sender.nack(std::move(nack));
@@ -204,22 +169,23 @@ void desktop_receiver::deliver_frames(streams_t::iterator it)
 			}
 			return;
 		}
-		if (now - missing.requested < std::chrono::milliseconds(40) and stream.pending.size() < 8)
+		if (now - stream.requested < std::chrono::milliseconds(40) and stream.recovery.frames.size() < 8)
 			return;
-		stream.pending.erase(expected);
+		stream.recovery.frames.erase(expected);
 		stream.last_frame = expected;
+		stream.requests = 0;
 		frame_lost(stream);
 	}
 }
 
 // False if the decoder failed and the stream was replaced
-bool desktop_receiver::decode_frame(streams_t::iterator it, desktop_stream::pending_frame & frame)
+bool desktop_receiver::decode_frame(streams_t::iterator it, shards::receiver::frame & frame)
 {
 #if WIVRN_USE_V4L2
 	auto & stream = *it->second;
 	if (stream.wait_keyframe)
 	{
-		if (not wivrn::decoder::has_sps(frame.shards.front(), stream.codec))
+		if (not wivrn::decoder::has_sps(frame.payload(0), stream.codec))
 		{
 			frame_lost(stream);
 			return true;
@@ -229,7 +195,9 @@ bool desktop_receiver::decode_frame(streams_t::iterator it, desktop_stream::pend
 
 	try
 	{
-		std::vector<std::span<const uint8_t>> chunks(frame.shards.begin(), frame.shards.end());
+		std::vector<std::span<const uint8_t>> chunks;
+		for (size_t i = 0; i < frame.data.size(); ++i)
+			chunks.push_back(frame.payload(i));
 		stream.decoder->push_data(chunks, stream.frame_index, false);
 		// iris sometimes stops taking input of one session when several start together
 		if (auto v4l2 = std::dynamic_pointer_cast<wivrn::v4l2::decoder>(stream.decoder); v4l2 and v4l2->stalled(std::chrono::seconds(1)))

@@ -89,7 +89,7 @@ public:
 
 	void frame_completed(
 	        const wivrn::from_headset::feedback & feedback,
-	        const wivrn::to_headset::video_stream_data_shard::view_info_t & view_info) override;
+	        const wivrn::to_headset::video_frame_info::view_info_t & view_info) override;
 
 	vk::Sampler sampler() override
 	{

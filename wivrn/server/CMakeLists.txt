@@ -229,7 +229,7 @@ if (WIVRN_BUILD_SERVER)
 	pkg_check_modules(FRAME_HOST REQUIRED IMPORTED_TARGET gstreamer-1.0 gstreamer-base-1.0 gstreamer-app-1.0 dbus-1 xkbcommon libpipewire-0.3)
 	target_include_directories(wivrn-server PRIVATE ${FRAME_ABI_INCLUDE_DIR})
 	# Needs the packets' OpenXR types, which wivrn-common is built without
-	target_sources(wivrn-server PRIVATE ../common/fec.cpp)
+	target_sources(wivrn-server PRIVATE ../common/fec.cpp ../common/shard_stream.cpp)
 	target_link_libraries(wivrn-server PRIVATE leopard)
 	target_link_libraries(wivrn-server PRIVATE ${FRAME_HOST_LIBRARY} PkgConfig::FRAME_HOST PkgConfig::glib2 dl m rt util)
 

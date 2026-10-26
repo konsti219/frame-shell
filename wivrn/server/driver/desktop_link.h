@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 #include "configuration.h"
-#include "fec.h"
+#include "shard_stream.h"
 #include "frame_host.h"
 #include "util/u_logging.h"
 #include "version.h"
@@ -9,7 +9,6 @@
 #include "wivrn_uinput.h"
 #include <array>
 #include <atomic>
-#include <limits>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -34,23 +33,19 @@ class desktop_link
 	// Streamed monitors: where each one lies in the PC's whole desktop (x, y, w, h), for pointer input
 	std::mutex mutex;
 	std::map<uint32_t, std::array<float, 4>> regions;
-	// Next frame number of each monitor's video
-	std::map<uint32_t, uint32_t> frames;
-	// Each surface's last frames as sent (data and parity shards), to send again what the headset reports missing
-	struct sent_frame
+	// Each monitor's video: its next frame number and its shards as sent, to send again what the headset misses
+	struct video_stream
 	{
-		uint32_t frame = -1;
-		std::vector<to_headset::desktop_video> shards;
+		uint64_t frame = 0;
+		shards::sender shards;
 	};
-	std::map<uint32_t, std::array<sent_frame, 8>> sent;
+	std::map<uint32_t, video_stream> videos;
 
 	// Last: its callbacks use the members above until it is destroyed
 	std::unique_ptr<frame_host_session> host;
 
-	template <typename T>
-	void send_all_stream(std::vector<T> & packets)
+	void send_all_stream(std::vector<to_headset::video_shard> & packets)
 	{
-		// Sending encrypts the payloads in place: these are copies of what's kept
 		for (auto & packet: packets)
 		{
 			try
@@ -63,43 +58,16 @@ class desktop_link
 		}
 	}
 
-	// Shards an access unit for the stream socket (UDP when available): the headset drops incomplete frames and
-	// asks for a keyframe, instead of video holding up control messages
+	// An access unit, in shards for the stream socket (UDP when available): the headset drops incomplete frames
+	// and asks for a keyframe, instead of video holding up control messages
 	void send_video(uint32_t surface, std::span<const uint8_t> data)
 	{
 		const uint8_t percent = sender.has_stream() ? fec_percent.load() : 0;
-		const size_t shard_size = percent ? fec::block_size : to_headset::desktop_video::max_payload_size;
-		const size_t count = std::max<size_t>(1, (data.size() + shard_size - 1) / shard_size);
-		const auto parity_count = fec::parity_count(count, percent);
-		if (count + parity_count > std::numeric_limits<uint16_t>::max())
-			throw std::logic_error("Desktop frame exceeds the shard index range");
-		std::vector<to_headset::desktop_video> shards;
-		shards.reserve(count + parity_count);
-		std::vector<std::vector<uint8_t>> blocks;
+		std::vector<to_headset::video_shard> shards;
 		{
 			std::scoped_lock lock(mutex);
-			uint32_t frame = frames[surface]++;
-			for (size_t shard = 0; shard < count; ++shard)
-			{
-				auto begin = data.begin() + std::min(data.size(), shard * shard_size);
-				auto end = data.begin() + std::min(data.size(), (shard + 1) * shard_size);
-				std::vector<uint8_t> payload(begin, end);
-				if (percent)
-				{
-					payload.resize(fec::block_size);
-					blocks.push_back(payload);
-				}
-				shards.push_back({.surface = surface, .frame = frame, .shard = uint16_t(shard), .shard_count = uint16_t(count), .parity_count = parity_count, .frame_size = uint32_t(data.size()), .payload = std::move(payload)});
-			}
-			if (percent)
-			{
-				auto parity = fec::encode(blocks, parity_count);
-				for (size_t i = 0; i < parity.size(); ++i)
-					shards.push_back({.surface = surface, .frame = frame, .shard = uint16_t(count + i), .shard_count = uint16_t(count), .parity_count = parity_count, .frame_size = uint32_t(data.size()), .payload = std::move(parity[i])});
-			}
-			auto & kept = sent[surface][frame % 8];
-			kept.frame = frame;
-			kept.shards = shards;
+			auto & video = videos[surface];
+			shards = video.shards.frame(to_headset::video_shard::desktop_streams + surface, 0, video.frame++, data, percent);
 		}
 		send_all_stream(shards);
 	}
@@ -140,6 +108,7 @@ public:
 			        {
 				        std::scoped_lock lock(mutex);
 				        regions.erase(id);
+				        videos.erase(id);
 			        }
 			        sender.send_control(to_headset::desktop_surface{.surface = id, .removed = true}); },
 		                                                    .video = [this](uint32_t surface, std::span<const uint8_t> data) { send_video(surface, data); },
@@ -174,23 +143,16 @@ public:
 		host->request_keyframe(event.surface);
 	}
 
-	void operator()(from_headset::desktop_nack && nack)
+	// Sends again what the headset misses of a monitor's frame
+	void resend(const from_headset::video_nack & nack)
 	{
-		std::vector<to_headset::desktop_video> shards;
+		std::vector<to_headset::video_shard> shards;
 		{
 			std::scoped_lock lock(mutex);
-			auto it = sent.find(nack.surface);
-			if (it == sent.end())
+			auto it = videos.find(nack.stream - to_headset::video_shard::desktop_streams);
+			if (it == videos.end())
 				return;
-			const auto & kept = it->second[nack.frame % 8];
-			if (kept.frame != nack.frame)
-				return;
-			if (nack.shards.empty())
-				shards = kept.shards;
-			else
-				for (auto index: nack.shards)
-					if (index < kept.shards.size())
-						shards.push_back(kept.shards[index]);
+			shards = it->second.shards.resend(nack);
 		}
 		send_all_stream(shards);
 	}
