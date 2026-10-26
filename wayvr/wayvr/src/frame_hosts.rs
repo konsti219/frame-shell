@@ -171,6 +171,11 @@ pub fn layouts() -> Vec<String> {
 pub fn monitor_label(screen: &str) -> Option<String> {
     screen.split_once(' ').map(|(_, connector)| connector.to_owned())
 }
+/// A screen as people know it: its PC's name and connector, the connector alone for a PC no longer known
+pub fn screen_title(screen: &str) -> String {
+    let connector = monitor_label(screen).unwrap_or_else(|| screen.to_owned());
+    owner(screen).map_or(connector.clone(), |pc| format!("{} {connector}", pc.name))
+}
 /// The client's key for a PC, for commands
 pub fn target(id: &str) -> Option<String> {
     resolve(id).map(|pc| pc.endpoint)

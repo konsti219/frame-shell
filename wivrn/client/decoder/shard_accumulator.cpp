@@ -64,9 +64,10 @@ void shard_accumulator::push_shard(to_headset::video_shard && shard)
 	}
 	else
 	{
-		if (index > next_frame + 1)
-			next_frame = index - 1;
-		if (index > next_frame and not recovery.frames.contains(next_frame))
+		// At the start or after a jump, frames never seen are given up rather than asked for whole
+		if (next_frame == 0 or index > next_frame + 1)
+			next_frame = recovery.frames.contains(index - 1) ? index - 1 : index;
+		else if (index > next_frame and not recovery.frames.contains(next_frame))
 		{
 			recovery.frames[next_frame] = {};
 			feedbacks[next_frame] = {.generation = generation, .frame_index = next_frame, .stream_index = stream_index};

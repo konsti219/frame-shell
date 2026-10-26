@@ -303,14 +303,20 @@ void video_encoder::encode(wivrn_session & cnx,
 
 void video_encoder::resend(const from_headset::video_nack & nack)
 {
-	std::lock_guard lock(mutex);
-	if (not cnx)
-		return;
-	for (auto & shard: recovery.resend(nack))
+	// Sent without the lock, so the next frame's SendData isn't held up
+	wivrn_session * session;
+	std::vector<to_headset::video_shard> shards;
+	{
+		std::lock_guard lock(mutex);
+		session = cnx;
+		if (session)
+			shards = recovery.resend(nack);
+	}
+	for (auto & shard: shards)
 	{
 		try
 		{
-			cnx->send_stream(std::move(shard));
+			session->send_stream(std::move(shard));
 		}
 		catch (const std::system_error &)
 		{

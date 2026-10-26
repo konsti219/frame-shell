@@ -355,7 +355,7 @@ impl DesktopOverlay {
             (),
             NewGuiPanelParams {
                 extra_vars: [
-                    ("name".into(), self.name.as_ref().into()),
+                    ("name".into(), crate::frame_hosts::screen_title(&self.name).into()),
                     ("panel_w".into(), panel_w.to_string().into()),
                     ("panel_h".into(), panel_h.to_string().into()),
                 ]
