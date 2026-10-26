@@ -20,9 +20,6 @@ namespace frame_shell
 // A new number for a connected PC: the shell keys its monitors and messages by it
 uint32_t next_source();
 
-// Testing (simulated_loss_percent): whether to drop this video shard
-bool simulated_loss();
-
 // One PC's monitors (desktop_surface, desktop_video), each decoded by its own V4L2 decoder sized for it, whose
 // frames go to the shell under the PC's source number. Packets arrive on one network thread.
 class desktop_receiver : public wivrn::frame_sink, public std::enable_shared_from_this<desktop_receiver>

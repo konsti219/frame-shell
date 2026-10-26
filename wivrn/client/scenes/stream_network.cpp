@@ -202,12 +202,8 @@ void scenes::stream::operator()(to_headset::server_message && message)
 	}
 }
 
-using frame_shell::simulated_loss;
-
 void scenes::stream::operator()(to_headset::video_stream_data_shard && shard)
 {
-	if (simulated_loss())
-		return;
 	std::shared_lock lock(decoder_mutex);
 	if (not video_stream_description or shard.generation != video_stream_description->generation)
 		return;
@@ -237,8 +233,6 @@ void scenes::stream::operator()(to_headset::video_stream_data_shard && shard)
 
 void scenes::stream::operator()(to_headset::video_stream_parity_shard && parity)
 {
-	if (simulated_loss())
-		return;
 	std::shared_lock lock(decoder_mutex);
 	if (video_stream_description and parity.generation == video_stream_description->generation and
 	    parity.stream_item_idx < decoders.size() and decoders[parity.stream_item_idx].decoder)
@@ -340,8 +334,6 @@ void scenes::stream::operator()(to_headset::timesync_query && query)
 
 void scenes::stream::operator()(audio_data && data)
 {
-	if (simulated_loss())
-		return;
 	if (audio_handle)
 		(*audio_handle)(std::move(data));
 }
@@ -361,8 +353,6 @@ void scenes::stream::send_feedback(const wivrn::from_headset::feedback & feedbac
 // Asks for lost video shards again, over the stream socket so that they come back within the frame
 void scenes::stream::send_nack(wivrn::from_headset::video_nack && nack)
 {
-	if (not application::get_config().retransmit)
-		return;
 	try
 	{
 		network_session->send_stream(std::move(nack));

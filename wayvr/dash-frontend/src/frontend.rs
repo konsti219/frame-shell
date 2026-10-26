@@ -18,7 +18,6 @@ use wgui::{
 	theme::WguiTheme,
 	widget::{label::WidgetLabel, rectangle::WidgetRectangle, sprite::WidgetSprite},
 	windowing::{
-		context_menu::{self, ContextMenu},
 		window::{WguiWindow, WguiWindowParams, WguiWindowParamsExtra, WguiWindowPlacement},
 	},
 };
@@ -39,7 +38,6 @@ use crate::{
 		settings::TabSettings, welcome::TabWelcome, wivrn::TabWivrn,
 	},
 	util::{
-		is_exec_installed,
 		popup_manager::{MountPopupOnceParams, PopupHolder, PopupManager, PopupManagerParams},
 		toast_manager::ToastManager,
 	},
@@ -79,7 +77,6 @@ pub struct Frontend<T> {
 	toast_manager: ToastManager,
 	timestep: Timestep,
 	sounds_to_play: Vec<SoundType>,
-	context_menu_power: ContextMenu,
 	popup_dialog_box: PopupHolder<views::dialog_box::View>,
 
 	window_audio_settings: WguiWindow,
@@ -235,7 +232,6 @@ impl<T: 'static> Frontend<T> {
 			window_audio_settings: WguiWindow::default(),
 			menu_audio: None,
 			audio_syncing: Rc::new(Cell::new(false)),
-			context_menu_power: Default::default(),
 			window_power: WguiWindow::default(),
 			menu_power: None,
 			window_playspace: WguiWindow::default(),
@@ -326,49 +322,6 @@ impl<T: 'static> Frontend<T> {
 		Ok(())
 	}
 
-	fn power_action_confirm(&mut self, power_action: PowerAction) {
-		let translation_key = match power_action {
-			PowerAction::Suspend => "POWER_OPTIONS.SUSPEND_ARE_YOU_SURE",
-			PowerAction::Poweroff => "POWER_OPTIONS.SHUTDOWN_ARE_YOU_SURE",
-		};
-
-		let tasks = self.tasks.clone();
-		views::dialog_box::mount_popup(
-			self.popup_dialog_box.clone(),
-			self.tasks.clone(),
-			views::dialog_box::Params {
-				globals: self.globals.clone(),
-				message: Translation::from_translation_key(translation_key),
-				entries: views::dialog_box::get_entries_yes_no(),
-				on_action_click: Box::new(move |action| {
-					if action == "yes" {
-						tasks.push(task_for_power_action(power_action));
-					}
-				}),
-			},
-		);
-	}
-
-	fn process_power_action(&mut self, action: &str, data: &mut T) {
-		match action {
-			"restart" => {
-				self.interface.restart(data);
-			}
-			"close" => {
-				self.interface.close(data);
-			}
-			"suspend" => {
-				self.power_action_confirm(PowerAction::Suspend);
-			}
-			"shutdown" => {
-				self.power_action_confirm(PowerAction::Poweroff);
-			}
-			_ => {
-				unreachable!()
-			}
-		}
-	}
-
 	fn tick(&mut self, params: FrontendUpdateParams<T>) -> anyhow::Result<FrontendUpdateResult> {
 		// fixme: timer events instead of this thing
 		if self.ticks.is_multiple_of(1000) {
@@ -383,10 +336,6 @@ impl<T: 'static> Frontend<T> {
 			general_config: self.interface.general_config(params.data),
 			config_change_kind: &mut config_change_kind,
 		})?;
-
-		if let context_menu::TickResult::Action(action) = self.context_menu_power.tick(&mut self.layout, &mut self.state)? {
-			self.process_power_action(&action, params.data);
-		}
 
 		{
 			// always 30 times per second
@@ -663,18 +612,6 @@ impl<T: 'static> Frontend<T> {
 		Ok(())
 	}
 
-	fn action_show_power_settings(&mut self, source_id: WidgetID) -> anyhow::Result<()> {
-		self.context_menu_power.open(context_menu::OpenParams {
-			on_custom_attribs: None,
-			position: source_id.into(),
-			blueprint: context_menu::Blueprint::Template {
-				template_name: "context_menu_power_options".into(),
-				template_params: Default::default(),
-			},
-		});
-		Ok(())
-	}
-
 	fn action_show_audio_settings(&mut self) -> anyhow::Result<()> {
 		let state = self.open_shell_menu(
 			&self.window_audio_settings.clone(),
@@ -947,22 +884,3 @@ impl<T: 'static> Frontend<T> {
 	}
 }
 
-#[derive(Debug, Clone, Copy)]
-pub enum PowerAction {
-	Suspend,
-	Poweroff,
-}
-
-pub fn task_for_power_action(action: PowerAction) -> FrontendTask {
-	for cmd in ["systemctl", "loginctl"] {
-		if is_exec_installed(cmd) {
-			let (command, args) = match action {
-				PowerAction::Suspend => (cmd.to_string(), vec!["suspend".to_string()]),
-				PowerAction::Poweroff => (cmd.to_string(), vec!["poweroff".to_string()]),
-			};
-			log::debug!("Command line for {action:?}: {command} {}", args.join(" "));
-			return FrontendTask::RunCommand(command, args);
-		}
-	}
-	FrontendTask::PushToast(Translation::from_translation_key("POWER_OPTIONS.NOT_SUPPORTED"))
-}

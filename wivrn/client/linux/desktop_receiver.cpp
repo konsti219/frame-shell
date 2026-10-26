@@ -5,7 +5,6 @@
 #include "linux/frame_shell.h"
 #include <algorithm>
 #include <atomic>
-#include <random>
 #include <cstdio>
 #include <spdlog/spdlog.h>
 #if WIVRN_USE_V4L2
@@ -16,22 +15,6 @@ using namespace wivrn;
 
 namespace frame_shell
 {
-// Testing (simulated_loss_percent): whether to drop this video shard, losing runs like Wi-Fi does
-bool simulated_loss()
-{
-	const auto & config = application::get_config();
-	if (config.simulated_loss_percent <= 0)
-		return false;
-	thread_local std::minstd_rand random{std::random_device{}()};
-	thread_local bool losing = false;
-	float burst = std::max(1u, config.simulated_loss_burst);
-	std::uniform_real_distribution<float> uniform;
-	// Two-state model: runs average `burst` shards, and the share lost matches the setting
-	float enter = config.simulated_loss_percent / 100 / burst / (1 - config.simulated_loss_percent / 100);
-	losing = losing ? uniform(random) >= 1 / burst : uniform(random) < enter;
-	return losing;
-}
-
 uint32_t next_source()
 {
 	static std::atomic<uint32_t> next = 1;
@@ -133,8 +116,6 @@ void desktop_receiver::frame_lost(desktop_stream & stream)
 void desktop_receiver::operator()(to_headset::desktop_video && video)
 {
 #if WIVRN_USE_V4L2
-	if (simulated_loss())
-		return;
 	auto it = streams.find(video.surface);
 	if (it == streams.end() || !it->second->decoder)
 		return;
@@ -188,7 +169,6 @@ void desktop_receiver::operator()(to_headset::desktop_video && video)
 void desktop_receiver::deliver_frames(streams_t::iterator it)
 {
 	auto & stream = *it->second;
-	const bool retransmit = application::get_config().retransmit;
 	while (not stream.pending.empty())
 	{
 		uint32_t expected = stream.last_frame ? *stream.last_frame + 1 : stream.pending.begin()->first;
@@ -207,7 +187,7 @@ void desktop_receiver::deliver_frames(streams_t::iterator it)
 		// A frame missing altogether gets an empty entry, which asks for all its shards
 		auto & missing = stream.pending[expected];
 		auto now = std::chrono::steady_clock::now();
-		if (retransmit and (missing.requests == 0 or (missing.requests == 1 and now - missing.requested > std::chrono::milliseconds(10))))
+		if ((missing.requests == 0 or (missing.requests == 1 and now - missing.requested > std::chrono::milliseconds(10))))
 		{
 			if (missing.requests++ == 0)
 				missing.requested = now;
@@ -224,7 +204,7 @@ void desktop_receiver::deliver_frames(streams_t::iterator it)
 			}
 			return;
 		}
-		if (retransmit and now - missing.requested < std::chrono::milliseconds(40) and stream.pending.size() < 8)
+		if (now - missing.requested < std::chrono::milliseconds(40) and stream.pending.size() < 8)
 			return;
 		stream.pending.erase(expected);
 		stream.last_frame = expected;

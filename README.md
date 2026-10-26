@@ -151,7 +151,7 @@ Error correction (WiVRn tab, `fec_percent` in the headset's `client.json`, defau
 parity to every VR and desktop frame; it applies live and costs only its share of the bitrate. Over home Wi-Fi at
 100 Mbit/s, 10% repairs about half the lost frames.
 
-Retransmission (`retransmit` in `client.json`, default on): when a frame's packets go missing,
+Retransmission: when a frame's packets go missing,
 the headset asks for exactly those (or, for VR, everything after the last one received when the frame's end didn't
 arrive), and the PC resends them from the last 8 frames it keeps per stream. A complete newer VR frame isn't held
 back for an older one's resend: the encoder only references frames the headset confirmed, so it decodes on its own.
@@ -167,9 +167,6 @@ the headset asks for the rest after 3 ms instead of waiting for the next frame.
 Speaker and microphone audio go over the stream socket (UDP) instead of the TCP control connection, whose resends
 after a lost packet stall everything behind it (up to its ~200 ms timeout). Each chunk is sent again two chunks
 (~6 ms) later and the receiver puts them back in order.
-
-For testing, `simulated_loss_percent` and `simulated_loss_burst` in the headset's `client.json` drop that share of
-incoming video packets in runs of about that many packets.
 
 The WiVRn tab shows the Wi-Fi link (signal, rates) and the VR stream's freezes over 50 ms in the last 5 s.
 

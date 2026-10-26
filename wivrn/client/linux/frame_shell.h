@@ -222,9 +222,9 @@ inline std::string settings_json(const configuration & config)
         case wivrn::video_codec::raw: codec = "raw"; break;
         }
     }
-    return fmt::format(R"({{"bitrate":{},"max_bitrate":{},"fec":{},"frame_margin":{},"retransmit":{},"resolution":{},"foveation":{},"max_foveation":{},"codec":"{}","foveation_debug":{},"desktop_bitrate":{},"desktop_codec":"{}","codec_support":{{"h264":{},"h265":{},"av1":{}}}}})",
+    return fmt::format(R"({{"bitrate":{},"max_bitrate":{},"fec":{},"frame_margin":{},"resolution":{},"foveation":{},"max_foveation":{},"codec":"{}","foveation_debug":{},"desktop_bitrate":{},"desktop_codec":"{}","codec_support":{{"h264":{},"h265":{},"av1":{}}}}})",
                        config.bitrate_bps, config.max_bitrate(),
-                       config.fec_percent, config.frame_margin_ms, config.retransmit, config.resolution_scale,
+                       config.fec_percent, config.frame_margin_ms, config.resolution_scale,
                        config.chosen_stream_scale(), 100, codec,
                        foveation_debug.load(), config.desktop_bitrate_kbps,
                        config.desktop_codec == wivrn::video_codec::h265 ? "h265" : "h264",
@@ -244,11 +244,6 @@ inline bool apply_setting(configuration & config, std::string_view command)
         auto [end, error] = std::from_chars(value.data(), value.data() + value.size(), number);
         return error == std::errc{} && end == value.data() + value.size();
     };
-    if (key == "retransmit") {
-        config.retransmit = value == "1";
-        config.save();
-        return true;
-    }
     if (key == "foveation_debug") {
         foveation_debug = value == "1";
         return true;

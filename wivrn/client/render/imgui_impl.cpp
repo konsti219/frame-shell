@@ -35,7 +35,6 @@
 #include <backends/imgui_impl_vulkan.h>
 #include <boost/locale.hpp>
 #include <cmath>
-#include <cstdlib>
 #include <cstddef>
 #include <glm/gtc/matrix_access.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -1052,23 +1051,12 @@ std::vector<std::pair<int, XrCompositionLayerQuad>> imgui_context::end_frame()
 		if (not visible)
 			continue;
 
-		// SF_GUI_HEADLOCK: test mode, world-space layers at a fixed, rotated pose in front of the head
-		xr::spaces quad_space = i.space;
-		glm::quat quad_orientation = i.orientation;
-		if (i.space == xr::spaces::world and std::getenv("SF_GUI_HEADLOCK"))
-		{
-			glm::quat fixed = glm::quat(glm::radians(glm::vec3(-8, 20, 6)));
-			new_position = glm::vec3(0.05, -0.05, -1.2) + fixed * (glm::inverse(i.orientation) * (new_position - i.position));
-			quad_orientation = fixed;
-			quad_space = xr::spaces::view;
-		}
-
 		quads.emplace_back(
 		        i.z_index,
 		        XrCompositionLayerQuad{
 		                .type = XR_TYPE_COMPOSITION_LAYER_QUAD,
 		                .layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT,
-		                .space = application::space(quad_space),
+		                .space = application::space(i.space),
 		                .eyeVisibility = XrEyeVisibility::XR_EYE_VISIBILITY_BOTH,
 		                .subImage = {
 		                        .swapchain = swapchain,
@@ -1084,10 +1072,10 @@ std::vector<std::pair<int, XrCompositionLayerQuad>> imgui_context::end_frame()
 		                },
 		                .pose = {
 		                        .orientation = {
-		                                .x = quad_orientation.x,
-		                                .y = quad_orientation.y,
-		                                .z = quad_orientation.z,
-		                                .w = quad_orientation.w,
+		                                .x = i.orientation.x,
+		                                .y = i.orientation.y,
+		                                .z = i.orientation.z,
+		                                .w = i.orientation.w,
 		                        },
 		                        .position = {
 		                                .x = new_position.x,

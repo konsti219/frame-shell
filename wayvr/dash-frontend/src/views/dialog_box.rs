@@ -32,21 +32,6 @@ enum Task {
 	ActionClicked(&'static str),
 }
 
-pub fn get_entries_yes_no() -> Vec<ButtonEntry> {
-	vec![
-		ButtonEntry {
-			content: Translation::from_translation_key("YES"),
-			icon: "@/dashboard/check.svg",
-			action: "yes",
-		},
-		ButtonEntry {
-			content: Translation::from_translation_key("NO"),
-			icon: "@/dashboard/cancel.svg",
-			action: "no",
-		},
-	]
-}
-
 pub struct View {
 	tasks: Tasks<Task>,
 
