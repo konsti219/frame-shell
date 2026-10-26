@@ -53,10 +53,6 @@ typedef struct frame_shell_pc {
     bool available, compatible, autoconnect, manual, background_pinned;
 } frame_shell_pc;
 
-typedef struct frame_pc_route {
-    const char * endpoint, * pc_id;
-} frame_pc_route;
-
 typedef struct frame_runtime_client {
     uint32_t id;
     bool overlay, visible, primary;
@@ -74,7 +70,6 @@ typedef struct frame_shell_host
 	void (*set_input_capture)(void * user, const char * const * paths, size_t count, uint32_t pose_mask);
     // Effective runtime clients; unknown state must not be interpreted as all applications exiting
     void (*runtime_clients)(void * user, uint32_t source, const frame_runtime_client * clients, size_t count, bool known, bool composition_supported);
-    void (*pc_routes)(void * user, const frame_pc_route * routes, size_t count);
 } frame_shell_host;
 
 // The shell's entry points, from frame_shell_api() in libwayvr.so

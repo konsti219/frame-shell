@@ -136,7 +136,6 @@ pub fn receive(source: u32, data: &[u8]) {
         }
         HostMessage::Identity(identity) => {
             crate::frame_hosts::identity(source, identity);
-            crate::frame_shell::publish_pc_routes();
             crate::frame_shell::bump_lobby_state();
         }
         HostMessage::CompositionSupported => {

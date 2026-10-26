@@ -1,5 +1,6 @@
-//! Persistent PC identities and their current connections; names are labels, source numbers are transient.
-use serde::{Deserialize, Serialize};
+//! The PCs the client knows, keyed by their WiVRn server cookie (shared by a PC's packaged and dev servers). A
+//! manual address connected to a PC shows as that PC; commands go out with the client's own key for it. Screens are
+//! keyed "<cookie> <connector>", and the known ones are kept in frame-shell-screens for their placeholders.
 use std::{
     collections::{BTreeMap, BTreeSet},
     ffi::CStr,
@@ -8,8 +9,7 @@ use std::{
 };
 use wayvr_ipc::frame::HostIdentity;
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Connection {
     #[default]
     Disconnected,
@@ -30,47 +30,23 @@ impl Connection {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Monitor {
-    pub connector: String,
-    pub layout_key: String,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default)]
 pub struct Pc {
+    /// The server cookie, or the client's key for a manual address that hasn't connected
     pub id: String,
-    pub name: String,
-    #[serde(default)]
-    pub aliases: BTreeSet<String>,
-    #[serde(default)]
-    pub endpoints: BTreeSet<String>,
-    #[serde(default)]
-    pub monitors: Vec<Monitor>,
-    #[serde(default)]
-    pub hostname: String,
-    #[serde(default)]
-    pub build: String,
-    #[serde(default)]
-    pub version: String,
-    #[serde(default)]
-    pub remembered: bool,
-    #[serde(skip)]
+    /// The client's key, which its commands take
     pub endpoint: String,
-    #[serde(skip)]
+    pub name: String,
+    pub hostname: String,
+    pub build: String,
+    pub version: String,
     pub source: Option<u32>,
-    #[serde(skip)]
     pub connection: Connection,
-    #[serde(skip)]
     pub available: bool,
-    #[serde(skip)]
     pub compatible: bool,
-    #[serde(skip)]
     pub autoconnect: bool,
-    #[serde(skip)]
     pub manual: bool,
-    #[serde(skip)]
     pub detail: String,
-    #[serde(skip)]
     pub background_pinned: bool,
 }
 impl Pc {
@@ -104,182 +80,107 @@ impl Pc {
     }
 }
 
-#[derive(Default)]
 struct Registry {
+    /// The client's servers as it last reported them, keyed by its own keys
+    views: Vec<Pc>,
     pcs: BTreeMap<String, Pc>,
     identities: BTreeMap<u32, HostIdentity>,
     selected_source: Option<u32>,
+    screens: BTreeSet<String>,
 }
-fn config_dir() -> PathBuf {
+fn screens_file() -> PathBuf {
     std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(std::env::var_os("HOME").unwrap()).join(".config"))
-        .join("wayvr")
+        .join("wayvr/frame-shell-screens")
 }
 static REGISTRY: LazyLock<Mutex<Registry>> = LazyLock::new(|| {
-    let pcs: BTreeMap<String, Pc> = match std::fs::read(config_dir().join("frame-shell-hosts.json"))
-    {
-        Ok(data) => serde_json::from_slice(&data).expect("Invalid frame-shell-hosts.json"),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => BTreeMap::new(),
-        Err(error) => panic!("Reading frame-shell-hosts.json: {error}"),
+    let screens = match std::fs::read_to_string(screens_file()) {
+        Ok(text) => text.lines().filter(|s| !s.is_empty()).map(String::from).collect(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => BTreeSet::new(),
+        Err(error) => panic!("Reading frame-shell-screens: {error}"),
     };
-    let mut registry = Registry {
-        pcs,
-        ..Default::default()
-    };
-    for name in std::fs::read_to_string(config_dir().join("frame-shell-screens"))
-        .unwrap_or_default()
-        .lines()
-        .filter(|s| !s.is_empty())
-    {
-        if registry
-            .pcs
-            .values()
-            .any(|pc| pc.monitors.iter().any(|m| m.layout_key == name))
-        {
-            continue;
-        }
-        let Some((prefix, connector)) = name.rsplit_once(' ') else {
-            continue;
-        };
-        let id = format!("legacy:{prefix}");
-        let pc = registry.pcs.entry(id.clone()).or_insert_with(|| Pc {
-            id,
-            name: prefix.into(),
-            aliases: BTreeSet::from([prefix.into()]),
-            remembered: true,
-            ..Default::default()
-        });
-        pc.monitors.push(Monitor {
-            connector: connector.into(),
-            layout_key: name.into(),
-        });
-    }
-    Mutex::new(registry)
+    Mutex::new(Registry {
+        views: Vec::new(),
+        pcs: BTreeMap::new(),
+        identities: BTreeMap::new(),
+        selected_source: None,
+        screens,
+    })
 });
 fn registry() -> std::sync::MutexGuard<'static, Registry> {
     REGISTRY.lock().unwrap()
 }
 impl Registry {
-    fn save(&self) {
-        let pcs: BTreeMap<_, _> = self.pcs.iter().filter(|(_, pc)| pc.remembered).collect();
-        let dir = config_dir();
-        let result = std::fs::create_dir_all(&dir).and_then(|()| {
-            let data = serde_json::to_vec_pretty(&pcs).unwrap();
-            let temp = dir.join("frame-shell-hosts.json.tmp");
-            std::fs::write(&temp, data)?;
-            std::fs::rename(temp, dir.join("frame-shell-hosts.json"))
-        });
-        if let Err(error) = result {
-            log::warn!("Saving PC identities: {error}");
-        }
-    }
-    fn merge_legacy(&mut self) {
-        let matches: Vec<_> = self
-            .pcs
-            .values()
-            .filter(|pc| pc.id.starts_with("legacy:"))
-            .filter_map(|old| {
-                let candidates: Vec<_> = self
-                    .pcs
-                    .values()
-                    .filter(|pc| {
-                        !pc.id.starts_with("legacy:") && !pc.aliases.is_disjoint(&old.aliases)
-                    })
-                    .collect();
-                (candidates.len() == 1).then(|| (old.id.clone(), candidates[0].id.clone()))
-            })
-            .collect();
-        for (old, id) in matches {
-            let old = self.pcs.remove(&old).unwrap();
-            let pc = self.pcs.get_mut(&id).unwrap();
-            for monitor in old.monitors {
-                if !pc.monitors.iter().any(|m| m.connector == monitor.connector) {
-                    pc.monitors.push(monitor);
-                }
+    /// One entry per PC: a connected route takes its server's identity and wins when a PC is reachable twice
+    fn rebuild(&mut self) {
+        let mut pcs = BTreeMap::<String, Pc>::new();
+        for view in &self.views {
+            let mut pc = view.clone();
+            if let Some(identity) = pc.source.and_then(|s| self.identities.get(&s)) {
+                pc.id = identity.id.clone();
+                pc.name = identity.name.clone();
+                pc.build = identity.build.clone();
+                pc.version = identity.version.clone();
             }
-            pc.aliases.extend(old.aliases);
-            pc.remembered = true;
+            if pcs
+                .get(&pc.id)
+                .is_some_and(|known| known.source.is_some() || (pc.source.is_none() && !pc.available))
+            {
+                continue;
+            }
+            pcs.insert(pc.id.clone(), pc);
         }
+        self.pcs = pcs;
     }
-    fn resolve(&self, key: &str) -> Option<&Pc> {
-        if let Some(pc) = self.pcs.get(key) {
-            return Some(pc);
+
+    fn save_screens(&self) {
+        let file = screens_file();
+        let text: String = self.screens.iter().map(|s| format!("{s}\n")).collect();
+        if let Err(error) = std::fs::create_dir_all(file.parent().unwrap())
+            .and_then(|()| std::fs::write(&file, text))
+        {
+            log::warn!("Saving frame-shell-screens: {error}");
         }
-        let mut candidates = self
-            .pcs
-            .values()
-            .filter(|pc| pc.endpoints.contains(key) || pc.name == key || pc.aliases.contains(key));
-        let pc = candidates.next()?;
-        candidates.next().is_none().then_some(pc)
-    }
-    fn for_source(&self, source: u32) -> Option<&Pc> {
-        self.pcs.values().find(|pc| pc.source == Some(source))
     }
 }
 
 pub fn pcs() -> Vec<Pc> {
     registry().pcs.values().cloned().collect()
 }
-pub fn resolve(key: &str) -> Option<Pc> {
-    registry().resolve(key).cloned()
+pub fn resolve(id: &str) -> Option<Pc> {
+    registry().pcs.get(id).cloned()
 }
 pub fn for_source(source: u32) -> Option<Pc> {
-    registry().for_source(source).cloned()
+    registry()
+        .pcs
+        .values()
+        .find(|pc| pc.source == Some(source))
+        .cloned()
 }
 pub fn background_source() -> Option<u32> {
     registry().selected_source
 }
-pub fn owner(layout_key: &str) -> Option<Pc> {
-    registry()
-        .pcs
-        .values()
-        .find(|pc| pc.monitors.iter().any(|m| m.layout_key == layout_key))
-        .cloned()
+/// The PC a screen belongs to, by its key
+pub fn owner(screen: &str) -> Option<Pc> {
+    resolve(screen.split_once(' ')?.0)
 }
 pub fn layouts() -> Vec<String> {
-    registry()
-        .pcs
-        .values()
-        .flat_map(|pc| pc.monitors.iter().map(|m| m.layout_key.clone()))
-        .collect()
+    registry().screens.iter().cloned().collect()
 }
-pub fn monitor_label(layout_key: &str) -> Option<String> {
-    registry()
-        .pcs
-        .values()
-        .flat_map(|pc| &pc.monitors)
-        .find(|m| m.layout_key == layout_key)
-        .map(|m| m.connector.clone())
+pub fn monitor_label(screen: &str) -> Option<String> {
+    screen.split_once(' ').map(|(_, connector)| connector.to_owned())
 }
-pub fn target(key: &str) -> Option<String> {
-    resolve(key).map(|pc| {
-        if pc.endpoint.is_empty() {
-            pc.endpoints.first().cloned().unwrap_or(pc.id)
-        } else {
-            pc.endpoint
-        }
-    })
+/// The client's key for a PC, for commands
+pub fn target(id: &str) -> Option<String> {
+    resolve(id).map(|pc| pc.endpoint)
 }
 
-pub fn forget(key: &str) {
+pub fn forget(id: &str) {
     let mut registry = registry();
-    let Some(pc) = registry.resolve(key).cloned() else {
-        return;
-    };
-    registry.pcs.remove(&pc.id);
-    let path = config_dir().join("frame-shell-screens");
-    if let Ok(legacy) = std::fs::read_to_string(&path) {
-        let keep = legacy
-            .lines()
-            .filter(|name| !pc.monitors.iter().any(|m| m.layout_key == *name))
-            .collect::<Vec<_>>()
-            .join("\n");
-        if let Err(error) = std::fs::write(path, keep) {
-            log::warn!("Forgetting legacy screen ownership: {error}");
-        }
-    }
-    registry.save();
+    let prefix = format!("{id} ");
+    registry.screens.retain(|s| !s.starts_with(&prefix));
+    registry.save_screens();
 }
 
 pub fn disconnected(source: u32) {
@@ -289,75 +190,40 @@ pub fn disconnected(source: u32) {
         registry.selected_source = None;
     }
     for pc in registry
-        .pcs
-        .values_mut()
+        .views
+        .iter_mut()
         .filter(|pc| pc.source == Some(source))
     {
         pc.source = None;
         pc.connection = Connection::Disconnected;
     }
+    registry.rebuild();
 }
 
+/// The connected server's own identity, which a manual address doesn't have until it connects
 pub fn identity(source: u32, identity: HostIdentity) {
     let mut registry = registry();
-    if let Some(old) = registry.for_source(source).cloned() {
-        let mut pc = registry.pcs.remove(&old.id).unwrap();
-        if let Some(known) = registry.pcs.remove(&identity.id) {
-            let provisional = std::mem::replace(&mut pc.monitors, known.monitors);
-            for monitor in provisional {
-                if !pc.monitors.iter().any(|m| m.connector == monitor.connector) {
-                    pc.monitors.push(monitor);
-                }
-            }
-            pc.aliases.extend(known.aliases);
-            pc.endpoints.extend(known.endpoints);
-        }
-        pc.aliases.insert(pc.name.clone());
-        pc.id = identity.id.clone();
-        pc.name = identity.name.clone();
-        pc.build = identity.build.clone();
-        pc.version = identity.version.clone();
-        pc.remembered = true;
-        registry.pcs.insert(pc.id.clone(), pc);
-        registry.merge_legacy();
-        registry.save();
-    }
     registry.identities.insert(source, identity);
+    registry.rebuild();
 }
 
-pub fn monitor(source: u32, connector: &str, legacy_name: &str) -> Option<String> {
+/// Registers a connected PC's monitor and gives its screen key
+pub fn monitor(source: u32, connector: &str) -> Option<String> {
     let mut registry = registry();
-    let id = registry.for_source(source)?.id.clone();
-    let hostname = legacy_name
-        .rsplit_once(' ')
-        .map(|(host, _)| host)
-        .unwrap_or_default();
-    if !hostname.is_empty() {
-        registry
-            .pcs
-            .get_mut(&id)
-            .unwrap()
-            .aliases
-            .insert(hostname.into());
+    let pc = registry.pcs.values().find(|pc| pc.source == Some(source))?;
+    // A manual address is keyed by its server's identity, which may arrive after the monitors
+    if pc.manual && !registry.identities.contains_key(&source) {
+        return None;
     }
-    registry.merge_legacy();
-    let pc = registry.pcs.get_mut(&id)?;
-    if let Some(monitor) = pc.monitors.iter().find(|m| m.connector == connector) {
-        let key = monitor.layout_key.clone();
-        registry.save();
-        return Some(key);
+    let key = format!("{} {connector}", pc.id);
+    if registry.screens.insert(key.clone()) {
+        registry.save_screens();
     }
-    let key = format!("pc:{} {}", pc.id, connector);
-    pc.monitors.push(Monitor {
-        connector: connector.into(),
-        layout_key: key.clone(),
-    });
-    pc.remembered = true;
-    registry.save();
     Some(key)
 }
 
-pub unsafe fn update(pcs: *const frame_abi::frame_shell_pc, count: usize, selected_source: u32) {
+/// The client's servers and the selected background
+pub unsafe fn update(views: *const frame_abi::frame_shell_pc, count: usize, selected_source: u32) {
     let text = |p: *const std::ffi::c_char| {
         if p.is_null() {
             String::new()
@@ -365,106 +231,39 @@ pub unsafe fn update(pcs: *const frame_abi::frame_shell_pc, count: usize, select
             unsafe { CStr::from_ptr(p) }.to_string_lossy().into_owned()
         }
     };
-    let mut registry = registry();
-    let before = serde_json::to_vec(&registry.pcs).unwrap();
-    registry.selected_source = (selected_source != 0).then_some(selected_source);
-    for pc in registry.pcs.values_mut() {
-        pc.available = false;
-        pc.source = None;
-        pc.connection = Connection::Disconnected;
-        pc.detail.clear();
-        pc.endpoint.clear();
-        pc.autoconnect = false;
-        pc.manual = false;
-        pc.background_pinned = false;
-    }
     let views = if count == 0 {
         &[]
     } else {
-        unsafe { std::slice::from_raw_parts(pcs, count) }
+        unsafe { std::slice::from_raw_parts(views, count) }
     };
-    for view in views {
-        let endpoint = text(view.id);
-        let identity = registry.identities.get(&view.source).cloned();
-        let id = identity
-            .as_ref()
-            .map(|i| i.id.clone())
-            .or_else(|| {
-                registry
-                    .pcs
-                    .values()
-                    .find(|pc| pc.endpoints.contains(&endpoint))
-                    .map(|pc| pc.id.clone())
-            })
-            .unwrap_or_else(|| endpoint.clone());
-        let pc = registry.pcs.entry(id.clone()).or_insert_with(|| Pc {
-            id,
-            ..Default::default()
-        });
-        let name = identity
-            .as_ref()
-            .map(|i| i.name.clone())
-            .unwrap_or_else(|| {
-                if view.manual && !pc.name.is_empty() {
-                    pc.name.clone()
-                } else {
-                    text(view.name)
-                }
-            });
-        if !pc.name.is_empty() {
-            pc.aliases.insert(pc.name.clone());
-        }
-        pc.aliases.insert(name.clone());
-        let choose = pc.endpoint.is_empty()
-            || view.source != 0
-            || (pc.source.is_none() && view.available && !pc.available);
-        pc.endpoints.insert(endpoint.clone());
-        pc.available |= view.available;
-        pc.manual |= view.manual;
-        pc.autoconnect |= view.autoconnect;
-        if choose {
-            pc.name = name;
-            pc.hostname = text(view.hostname);
-            let short = pc.hostname.split('.').next().unwrap_or_default();
-            if !short.is_empty() && !short.chars().all(|c| c.is_ascii_digit()) {
-                pc.aliases.insert(short.into());
-            }
-            pc.endpoint = endpoint;
-            pc.source = (view.source != 0).then_some(view.source);
-            pc.compatible = view.compatible;
-            pc.connection = match view.connection {
+    let mut registry = registry();
+    registry.selected_source = (selected_source != 0).then_some(selected_source);
+    registry.views = views
+        .iter()
+        .map(|view| Pc {
+            id: text(view.id),
+            endpoint: text(view.id),
+            name: text(view.name),
+            hostname: text(view.hostname),
+            build: text(view.build),
+            version: text(view.version),
+            source: (view.source != 0).then_some(view.source),
+            connection: match view.connection {
                 frame_abi::frame_pc_connection_FRAME_PC_CONNECTING => Connection::Connecting,
                 frame_abi::frame_pc_connection_FRAME_PC_PAIRING => Connection::Pairing,
                 frame_abi::frame_pc_connection_FRAME_PC_CONNECTED => Connection::Connected,
                 frame_abi::frame_pc_connection_FRAME_PC_ERROR => Connection::Error,
                 _ => Connection::Disconnected,
-            };
-            pc.detail = text(view.detail);
-            pc.background_pinned = view.background_pinned;
-            let build = identity
-                .as_ref()
-                .map(|i| i.build.clone())
-                .unwrap_or_else(|| text(view.build));
-            let version = identity
-                .as_ref()
-                .map(|i| i.version.clone())
-                .unwrap_or_else(|| text(view.version));
-            if view.source != 0 || !build.is_empty() {
-                pc.build = build;
-            }
-            if view.source != 0 || !version.is_empty() {
-                pc.version = version;
-            }
-        }
-        pc.remembered |= pc.source.is_some() || pc.manual || pc.autoconnect;
-    }
-    registry.merge_legacy();
-    registry
-        .pcs
-        .retain(|_, pc| pc.remembered || pc.available || pc.source.is_some());
-    if serde_json::to_vec(&registry.pcs).unwrap() != before {
-        registry.save();
-    }
+            },
+            available: view.available,
+            compatible: view.compatible,
+            autoconnect: view.autoconnect,
+            manual: view.manual,
+            detail: text(view.detail),
+            background_pinned: view.background_pinned,
+        })
+        .collect();
+    registry.rebuild();
 }
 
 pub fn json() -> serde_json::Value {

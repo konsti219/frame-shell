@@ -82,19 +82,6 @@ inline void hosts_state(const frame_shell_pc * pcs, size_t count, uint32_t selec
 
 inline std::atomic<bool> switch_wanted{false};
 
-inline std::mutex routes_mutex;
-inline std::map<std::string, std::string> routes;
-inline std::string pc_id(const std::string & endpoint)
-{
-	std::scoped_lock lock(routes_mutex);
-	auto it = routes.find(endpoint);
-	return it == routes.end() ? endpoint : it->second;
-}
-inline bool same_pc(const std::string & a, const std::string & b)
-{
-	return pc_id(a) == pc_id(b);
-}
-
 struct runtime_activity
 {
 	bool initialized = false, known = false, visible = true, overlay_visible = false, composition_supported = false;
@@ -379,10 +366,6 @@ class runtime
                     queue.emplace_back(data, data + size); },
 	    .set_input_capture = [](void *, const char * const * paths, size_t count, uint32_t pose_mask) { set_input_capture(paths, count, pose_mask); },
 	    .runtime_clients = [](void *, uint32_t source, const frame_runtime_client * clients, size_t count, bool known, bool composition_supported) { runtime_clients(source, clients, count, known, composition_supported); },
-	    .pc_routes = [](void *, const frame_pc_route * entries, size_t count) {
-                std::scoped_lock lock(routes_mutex);
-                routes.clear();
-                for (size_t i = 0; i < count; ++i) routes[entries[i].endpoint] = entries[i].pc_id; },
     };
 
     public:

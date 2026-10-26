@@ -128,10 +128,6 @@ private:
 	std::optional<to_headset::video_stream_description> standby_video;
 	bool microphone_requested = false;
 	std::chrono::steady_clock::time_point standby_keepalive{};
-	// A VR (non-overlay) application runs on this PC: since when
-	std::atomic<int64_t> vr_app_since = 0;
-	// The first application list: what runs already when connecting counts as started long ago
-	bool running_apps_seen = false;
 	void apply_video_active();
 	void teardown_video();
 	std::optional<to_headset::video_stream_description> video_stream_description;
@@ -280,18 +276,6 @@ public:
 	uint32_t shell_source_id() const
 	{
 		return shell_source;
-	}
-	// Steady clock nanoseconds since a VR application started on this PC, 0 without one
-	int64_t vr_app_started() const
-	{
-#ifndef __ANDROID__
-		if (frame_shell::enabled())
-		{
-			const auto activity = frame_shell::activity(shell_source);
-			return activity.known ? activity.since : 0;
-		}
-#endif
-		return vr_app_since;
 	}
 
 	void set_background_active(bool active)

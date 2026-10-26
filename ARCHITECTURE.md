@@ -7,12 +7,9 @@
   screen-sharing portal, report metrics, games, runtime clients and notifications, and tunnel WayVR IPC clients.
   Each session runs in a process `posix_spawn`ed by the listener (no forked GLib/GStreamer state).
 - **Headset:** Monado runs separately. `frame-shell-client` is the WiVRn client and loads `libwayvr.so` on its own
-  thread. It keeps one `stream` per connection, whose source number is transient. `frame_hosts.rs` maintains
-  persistent PC IDs and aliases/routes, independent of which connection supplies the remote background.
-  The newest effective ordinary VR client selects the background unless the user locks it to one PC.
-  Other PCs retain their selected background, which their runtime suppresses while enabled overlays continue
-  streaming with alpha. WiVRn submits all active streams in one OpenXR frame, background first. Each PC still
-  sends one combined VR stream. WiVRn decodes the VR and desktop streams; WayVR lays out
+  thread. It keeps one `stream` per connected PC (a transient source number) and composes their VR streams into
+  one OpenXR frame: the background PC first, then other PCs' overlays (their runtime hides their background app).
+  WiVRn decodes the VR and desktop streams; WayVR lays out
   desktops, dashboard, keyboard and watch. Each has its own OpenXR session and Vulkan device; Monado composes
   their layers with passthrough. Opaque apps select the default background; apps that submit alpha-blended
   frames become independently toggleable overlays for the session. Both runtimes expose the same presentation
@@ -24,8 +21,7 @@
 `wayvr/frame-abi/include/frame_abi.h` defines both ABIs; the `frame-abi` crate generates the Rust side.
 
 - Headset: `libwayvr.so` exports `frame_shell_api()`. The client passes `frame_shell_host` callbacks: releasing
-  desktop frames, sending messages to a PC, resolved input capture, canonical runtime activity and resolved PC
-  routes. Connection/discovery snapshots use `frame_shell_pc`, generated for Rust from this header. Settings
+  desktop frames, sending messages to a PC, resolved input capture and runtime activity. Connection/discovery snapshots use `frame_shell_pc`, generated for Rust from this header. Settings
   and each connection's installed-app/debug state remain JSON; control commands use `command_poll`.
 - PC: `frame_host_start`/`frame_host_stop` run the host services for one connection (callbacks for surfaces,
   video and messages); stop joins every thread.
@@ -84,19 +80,14 @@ Host workers poll on their own threads; nothing on the headset's render thread w
 
 Stream settings are the headset's WiVRn configuration and apply to every PC (bitrate in `settings_changed`;
 sizes and codecs in `stream_settings`, which rebuild the server's images, foveation and encoders). Pairing and
-auto-connect are per PC. The packaged and dev servers share identity/pairing files via `FRAME_SHELL_IDENTITY_DIR`;
-server build/version are metadata. Window placement uses immutable monitor layout keys owned by persistent
-PC ID and connector; old keys are retained during migration. Pins use persistent PC IDs. Source numbers and
-runtime client IDs are connection-scoped, never persisted as PC identity. The client
-locates poses in the calibrated space (floor and recenter) and sends the shell's temporary space drag as the
+auto-connect are per PC, identified by its server cookie (shared by the packaged and dev servers through
+`FRAME_SHELL_IDENTITY_DIR`); pins and screen windows are keyed by it, source numbers and runtime client IDs only
+live as long as a connection. The client locates poses in the calibrated space (floor and recenter) and sends the shell's temporary space drag as the
 tracking origin offset, so PC games and trackers move together.
 
 Stream replacement waits for submitted frames before freeing images; invalid stream setup is fatal, no rollback.
 
-Remote background selection is separate from per-app overlay enablement and headset-local background
-selection. A PC is not exclusively an "overlay PC" or "game PC". `BackgroundVisible` requests whether its runtime
-includes the selected background; it never changes the app's presentation mode or user visibility. The host
-announces `CompositionSupported` after successfully applying this setting. Secondary VR transport is enabled
-only for hosts with that capability and visible overlays; tracking follows every active stream, while the
-microphone follows only the background PC. The lobby owns the combined frame lifecycle; each stream prepares
-its projection layer and sends frame feedback after the combined submission. An empty source contributes no layer.
+`BackgroundVisible` tells a PC's runtime whether to show its selected background app, without changing the app's
+presentation mode; the host answers `CompositionSupported` once it applied it. Only such hosts stream overlays
+while not the background PC. Tracking goes to every streaming PC, the microphone only to the background PC. The
+lobby owns the combined frame: each stream adds its projection layer and sends its frame feedback after submission.

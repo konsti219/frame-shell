@@ -385,26 +385,6 @@ void scenes::stream::operator()(to_headset::application_icon && icon)
 
 void scenes::stream::operator()(to_headset::running_applications && apps)
 {
-#ifndef __ANDROID__
-	if (!frame_shell::enabled())
-#endif
-	{
-		bool vr = std::ranges::any_of(apps.applications, [](const auto & app) { return not app.overlay; });
-		bool first = not std::exchange(running_apps_seen, true);
-		if (not vr)
-			vr_app_since = 0;
-		else if (first)
-			vr_app_since = 1;
-		else if (vr_app_since == 0)
-		{
-			vr_app_since = std::chrono::steady_clock::now().time_since_epoch().count();
-#ifndef __ANDROID__
-		if (not video_active)
-			frame_shell::switch_wanted = true;
-#endif
-	}
-	}
-
 	*running_applications.lock() = std::move(apps);
 }
 

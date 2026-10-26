@@ -68,37 +68,17 @@ Wayland display Lepton expects.
 
 ## Several PCs
 
-Each PC has a persistent ID, shared by its packaged server and `just run`. Its advertised name, addresses,
-server build and current connection are separate metadata. The server reports its ID in the connection too,
-so a manual address can become another route to the same PC. Development uses the installed cookie and
-pairing files directly; encoder settings and build outputs remain separate.
+A PC is identified by its WiVRn server cookie, which its packaged server and `just run` share
+(`FRAME_SHELL_IDENTITY_DIR`). A manual address takes its PC's cookie once connected. Pins store the cookie; screen
+windows are keyed `<cookie> <connector>` (known ones in `~/.config/wayvr/frame-shell-screens` on the headset).
+PCs that connected once stay listed while offline.
 
-WayVR's `frame_hosts.rs` owns the host registry. The keyboard and dashboard use it for available, connected,
-pairing, failed and not-found PCs. Known PCs remain in place while offline. Pins store the PC ID; monitors
-store the PC ID and connector, with an immutable layout key. Existing name-based pins and screen layouts are
-migrated on connection without moving windows. The registry is `~/.config/wayvr/frame-shell-hosts.json` on the
-headset; the old `frame-shell-screens` file is imported for migration.
-
-Each connection retains its monitors, speaker audio, installed games and effective runtime clients. The chosen
-remote background and secondary PCs with enabled overlays receive tracking and transmit VR video.
-The background follows newly started ordinary VR apps by default. A PC button's context menu can keep the
-background on that PC, or resume automatic selection. Overlay toggles and blending overrides do not select a
-background. Speaker audio is mixed from connected PCs; microphone audio goes to the remote background PC.
-
-XR client buttons are highlighted exactly when their content is shown in the headset. A PC's remembered
-background selection remains internal while another PC supplies the background.
-The same controls address native apps and remote apps. Clicking the active VR app hides it without selecting a
-replacement; clicking it again selects it. An overlay badge distinguishes overlays from VR apps, and the context
-menu marks automatic detection or the selected override. Runtime-query failure is shown as unavailable state,
-without treating it as every app exiting. App handles and commands are scoped to the current connection.
-
-A background app from one PC can be combined with overlays from other PCs. Each PC produces one combined VR
-stream: the selected PC includes its background and overlays; secondary PCs suppress their background while
-retaining its selection, and transmit only their enabled overlays with alpha. The headset submits those streams
-as separate projection layers in one OpenXR frame. PCs with no visible content contribute no layer, leaving
-passthrough visible. Selecting another PC restores that PC's selected background. This requires the host runtime's
-background-visibility API (libmonado 1.12); older hosts remain usable as the background but cannot supply secondary
-overlay streams. Speaker audio remains mixed; microphone routing follows the background PC.
+The background PC (the newest started VR app, or one locked from its context menu) presents VR and gets the
+microphone. Other connected PCs keep their desktops and speaker audio; while one of their overlays is visible, their
+runtime hides their background app and they stream just the overlays with alpha. The headset composes all of them
+in one OpenXR frame, background first, so a game from one PC can show with overlays from others. Secondary overlay
+streams need the host runtime's background-visibility API (libmonado 1.12). Clicking the active VR app hides it,
+clicking it again shows it; an overlay badge marks overlays.
 
 ## Source map
 
@@ -106,7 +86,7 @@ overlay streams. Speaker audio remains mixed; microphone routing follows the bac
 | --- | --- |
 | WiVRn client, server and shared wire protocol | `wivrn/` |
 | Embedded shell, watch, windows, audio, floor UI | `wayvr/wayvr/src/` |
-| Persistent PC identity, routes and monitor ownership | `wayvr/wayvr/src/frame_hosts.rs` |
+| PCs and their screens | `wayvr/wayvr/src/frame_hosts.rs` |
 | Dashboard UI and layouts | `wayvr/dash-frontend/src/`, `wayvr/dash-frontend/assets/gui/` |
 | PC host services: monitor capture, WayVR IPC, notifications, metrics, games | `desktop/src/` |
 | Shell ↔ host messages | `wayvr/wayvr-ipc/src/frame.rs` |

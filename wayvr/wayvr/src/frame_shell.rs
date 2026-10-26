@@ -52,32 +52,6 @@ pub fn set_input_capture(paths: &[std::ffi::CString], pose_mask: u32) {
     }
 }
 
-pub fn publish_pc_routes() {
-    let entries: Vec<_> = crate::frame_hosts::pcs()
-        .into_iter()
-        .flat_map(|pc| {
-            pc.endpoints.into_iter().map(move |endpoint| {
-                (
-                    std::ffi::CString::new(endpoint).unwrap(),
-                    std::ffi::CString::new(pc.id.as_str()).unwrap(),
-                )
-            })
-        })
-        .collect();
-    let routes: Vec<_> = entries
-        .iter()
-        .map(|(endpoint, id)| frame_abi::frame_pc_route {
-            endpoint: endpoint.as_ptr(),
-            pc_id: id.as_ptr(),
-        })
-        .collect();
-    if let Some(Host(host)) = host().as_ref()
-        && let Some(send) = host.pc_routes
-    {
-        unsafe { send(host.user, routes.as_ptr(), routes.len()) };
-    }
-}
-
 pub fn runtime_clients(
     source: u32,
     clients: &[wayvr_ipc::frame::RuntimeClient],
@@ -518,28 +492,6 @@ pub fn connect_host(app: &mut AppState, key: &str, connect: bool) {
     }
 }
 
-fn migrate_pin_hosts(app: &mut AppState) {
-    let mut migrated = false;
-    for pin in &mut app.session.config.pinned_games {
-        let Some(key) = pin.host.as_deref() else {
-            continue;
-        };
-        if let Some(pc) = crate::frame_hosts::resolve(key)
-            && pc.id != key
-            && !pc.id.starts_with("legacy:")
-        {
-            pin.host = Some(pc.id);
-            app.session.config_dirty = true;
-            migrated = true;
-        }
-    }
-    if migrated {
-        if let Err(error) = crate::config::save_settings(&app.session.config) {
-            log::warn!("Saving migrated PC pins: {error}");
-        }
-    }
-}
-
 /// The shell is stopped without a chance to save on exit, so the layout is saved after every move
 pub fn layout_changed() {
     LAYOUT_CHANGED_MS.store(START.elapsed().as_millis().max(1) as u64, Ordering::Relaxed);
@@ -787,24 +739,16 @@ pub fn send_command(command: &str) {
             "connect" | "disconnect" | "present" | "pin_vr" | "autoconnect" | "forget"
         ) {
             let (key, tail) = rest.split_once(' ').unwrap_or((rest, ""));
-            if crate::frame_hosts::resolve(key).is_some_and(|pc| pc.id.starts_with("legacy:")) {
-                crate::frame_host::error(
-                    "That PC has not been discovered yet; its saved monitor positions are retained"
-                        .into(),
-                );
-                return;
-            }
             if matches!(verb, "disconnect" | "forget") {
-                let id = crate::frame_hosts::resolve(key).map(|pc| pc.id);
                 PENDING_LAUNCH
                     .lock()
                     .unwrap()
-                    .retain(|(host, _, _)| crate::frame_hosts::resolve(host).map(|pc| pc.id) != id);
+                    .retain(|(host, _, _)| host != key);
+            }
+            if verb == "forget" {
+                crate::frame_hosts::forget(key);
             }
             if let Some(target) = crate::frame_hosts::target(key) {
-                if verb == "forget" {
-                    crate::frame_hosts::forget(key);
-                }
                 translated = format!(
                     "{verb} {target}{}{}",
                     if tail.is_empty() { "" } else { " " },
@@ -1061,13 +1005,12 @@ pub fn poll_surfaces(app: &mut AppState) {
         .filter(|(_, surface)| !surface.registered)
     {
         if let Some(name) =
-            crate::frame_hosts::monitor((key >> 32) as u32, &surface.connector, &surface.name)
+            crate::frame_hosts::monitor((key >> 32) as u32, &surface.connector)
         {
             surface.name = name.into();
             surface.registered = true;
         }
     }
-    migrate_pin_hosts(app);
     let run = RUN.load(Ordering::Relaxed);
     // Screens of earlier sessions come back as placeholders until their PC streams them again
     if SCREENS_SPAWNED_RUN.swap(run, Ordering::Relaxed) != run {
@@ -1159,7 +1102,6 @@ extern "C" fn hosts_state(pcs: *const frame_abi::frame_shell_pc, count: usize, s
         .any(|pc| pc.connection == crate::frame_hosts::Connection::Pairing);
     let old = crate::frame_hosts::background_source();
     unsafe { crate::frame_hosts::update(pcs, count, selected) };
-    publish_pc_routes();
     crate::frame_host::sync_presentation();
     if old != crate::frame_hosts::background_source() {
         crate::frame_host::background_changed();
@@ -1613,7 +1555,7 @@ pub fn remote_game_running(host: &str, app_id: &str) -> bool {
         .is_some_and(|games| games.iter().any(|game| game == app_id))
 }
 
-/// Resolve a persistent PC ID or an unambiguous legacy label to its current connection.
+/// A PC's current connection, by its ID
 fn source_for_host(host: &str) -> Option<u32> {
     crate::frame_hosts::resolve(host)?.source
 }

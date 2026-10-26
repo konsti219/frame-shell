@@ -769,31 +769,14 @@ void scenes::stream::render_into(const XrFrameState & frame_state, scene * compo
 		return;
 	if (!composition && state_ == state::shutdown)
 		application::pop_scene();
-#ifndef __ANDROID__
-	// Back to the lobby when on standby, or for it to present the PC that started a VR application
-	else if (!composition && (not video_active or frame_shell::switch_wanted))
-	{
-		application::pop_scene();
-		session.begin_frame();
-		session.end_frame(frame_state.predictedDisplayTime, {});
-		return;
-	}
-#endif
 
 #ifndef __ANDROID__
-	if (frame_shell::enabled())
+	// The frame shell composes every PC's stream into the lobby's frame; a PC whose apps are all hidden adds nothing
+	if (composition && frame_shell::enabled())
 	{
 		const auto activity = frame_shell::activity(shell_source);
 		if (activity.known && !activity.visible)
-		{
-			if (composition)
-				return;
-			session.begin_frame();
-			session.enable_passthrough(system);
-			render_start(true, frame_state.predictedDisplayTime);
-			render_end();
 			return;
-		}
 	}
 #endif
 
