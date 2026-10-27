@@ -63,16 +63,8 @@ void shard_accumulator::push_shard(to_headset::video_shard && shard)
 		next_frame = index + 1;
 	}
 	else
-	{
-		// At the start or after a jump, frames never seen are given up rather than asked for whole
-		if (next_frame == 0 or index > next_frame + 1)
-			next_frame = recovery.frames.contains(index - 1) ? index - 1 : index;
-		else if (index > next_frame and not recovery.frames.contains(next_frame))
-		{
-			recovery.frames[next_frame] = {};
-			feedbacks[next_frame] = {.generation = generation, .frame_index = next_frame, .stream_index = stream_index};
-		}
-	}
+		// Frames never seen were skipped by the server (a slow PC skips frame numbers): not losses
+		next_frame = recovery.frames.begin()->first;
 
 	for (auto old = recovery.frames.begin(); old != recovery.frames.end() and old->first < next_frame;)
 	{
@@ -95,16 +87,9 @@ void shard_accumulator::request_missing(uint64_t number, shards::receiver::frame
 	if (frame.last_request != shards::receiver::clock::time_point{} and
 	    now - frame.last_request < std::chrono::milliseconds(8))
 		return;
-	if (frame.data.empty() and frame.whole_requests >= 2)
-		return;
 	auto missing = recovery.missing(frame, 2);
 	if (missing.empty())
-	{
-		if (not frame.data.empty())
-			return;
-		++frame.whole_requests;
-		frame.last_request = now;
-	}
+		return;
 	if (auto scene = weak_scene.lock())
 		scene->send_nack({.stream = stream_index, .generation = feedbacks.at(number).generation,
 		                  .frame = number, .shards = std::move(missing)});

@@ -763,8 +763,7 @@ struct frame_eyes
 	std::array<float, 2> dilation;
 };
 
-// Data shards of a video frame (to_headset::video_shard) that didn't arrive, for the server to send again; all of
-// the frame's shards if none are named
+// Data shards of a video frame (to_headset::video_shard) that didn't arrive, for the server to send again
 struct video_nack
 {
 	uint32_t stream;

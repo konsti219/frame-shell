@@ -25,7 +25,7 @@ class sender
 public:
 	// A frame's shards to send, data then parity (fec_percent of the data shards, 0: none); kept to send again
 	std::vector<to_headset::video_shard> frame(uint32_t stream, uint32_t generation, uint64_t frame, std::span<const uint8_t> data, uint8_t fec_percent);
-	// What a resend request asks for (all of the frame's shards if it names none), while the frame is kept
+	// What a resend request asks for, while the frame is kept
 	std::vector<to_headset::video_shard> resend(const from_headset::video_nack &) const;
 };
 
@@ -46,7 +46,6 @@ public:
 		// How often each data shard was asked for again, and when last
 		std::vector<uint8_t> requested;
 		clock::time_point last_shard, last_request;
-		uint8_t whole_requests = 0;
 
 		// Data shard i's part of the frame (without the padding parity needs)
 		std::span<const uint8_t> payload(size_t i) const;
@@ -57,7 +56,7 @@ public:
 
 	// Adds a shard to its frame; that frame, or nullptr for a shard that doesn't fit what its frame announced
 	frame * add(to_headset::video_shard &&);
-	// Missing data shards, counted as requested; an empty frame needs a whole-frame request.
+	// Missing data shards, counted as requested
 	std::vector<uint16_t> missing(frame &, uint8_t max_requests);
 };
 } // namespace wivrn::shards

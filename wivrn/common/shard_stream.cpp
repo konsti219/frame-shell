@@ -63,8 +63,6 @@ std::vector<to_headset::video_shard> sender::resend(const from_headset::video_na
 	if (kept.frame != nack.frame or kept.shards.empty() or
 	    kept.shards.front().stream != nack.stream or kept.shards.front().generation != nack.generation)
 		return {};
-	if (nack.shards.empty())
-		return kept.shards;
 	std::vector<to_headset::video_shard> shards;
 	for (auto index: nack.shards)
 		if (index < kept.shards.size())
@@ -80,7 +78,7 @@ std::span<const uint8_t> receiver::frame::payload(size_t i) const
 
 bool receiver::frame::resent() const
 {
-	return whole_requests > 0 or std::ranges::any_of(requested, [](uint8_t count) { return count > 0; });
+	return std::ranges::any_of(requested, [](uint8_t count) { return count > 0; });
 }
 
 receiver::frame * receiver::add(to_headset::video_shard && shard)
