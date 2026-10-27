@@ -269,7 +269,8 @@ pub fn openxr_run(args: &Args, params: RunParams) -> Result<(), BackendError> {
             if changed {
                 overlays.devices_changed(&mut app)?;
             }
-            next_device_update = Instant::now() + Duration::from_secs(30);
+            // Often enough that the watch's headset battery matches the battery menu
+            next_device_update = Instant::now() + Duration::from_secs(2);
         }
 
         // Drain metrics even when not rendering, or Monado drops the stream once its buffer fills.

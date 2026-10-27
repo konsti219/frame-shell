@@ -221,8 +221,7 @@ fn battery_on_tick(
     if let Some(device) = device
         && let Some(soc) = device.soc
     {
-        // Rounded: truncating shows 0.29 as 28
-        let soc = (soc * 100.).round().min(99.) as u32;
+        let soc = wlx_common::frame_power::shown_percent(soc);
         let num_devices = app.input_state.devices.len();
         let suffix = if num_devices > 3 { "" } else { "%" };
         let text = format!("{soc}{suffix}");

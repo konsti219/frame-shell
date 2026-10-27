@@ -774,7 +774,7 @@ impl<T: 'static> Frontend<T> {
 		self.update_battery_menu()
 	}
 
-	/// Battery state and the performance mode, once a second while the menu is open
+	/// Battery state, power draw and the performance mode, once a second while the menu is open
 	fn update_battery_menu(&mut self) -> anyhow::Result<()> {
 		let Some(state) = &mut self.menu_battery else {
 			return Ok(());
@@ -786,34 +786,60 @@ impl<T: 'static> Frontend<T> {
 			return Ok(());
 		}
 		self.battery_updated = Some(std::time::Instant::now());
-		let Ok(label) = state.fetch_widget(&self.layout.state, "battery") else {
-			return Ok(());
-		};
-		let text = match frame_power::battery() {
+		let battery = frame_power::battery();
+		let battery_text = match &battery {
 			None => "Battery state unavailable".to_owned(),
 			Some(battery) => {
-				let status = if battery.full {
-					"full"
-				} else if battery.external_power {
-					"charging"
+				let status = if battery.external_power { "charging" } else { "on battery" };
+				let mut text = if battery.full {
+					"Full".to_owned()
 				} else {
-					"on battery"
+					format!("{} %, {status}", frame_power::shown_percent(battery.percent / 100.))
 				};
-				let mut text = format!("{:.0} %, {status}", battery.percent);
-				if let Some(watts) = battery.watts.filter(|_| !battery.full) {
-					text += &format!(", {watts:.1} W");
-				}
 				if let Some(seconds) = battery.seconds_left {
 					let until = if battery.external_power { "until full" } else { "left" };
-					text += &format!("\n{}:{:02} h {until}", seconds / 3600, seconds / 60 % 60);
+					text += &format!(", {}:{:02} h {until}", seconds / 3600, seconds / 60 % 60);
 				}
 				text
 			}
 		};
-		label
-			.widget
-			.cast::<WidgetLabel>()?
-			.set_text(&mut self.layout.common(), Translation::from_raw_text(&text));
+
+		// The same rows every time, with what's unknown marked
+		let watts = |watts: Option<f32>| watts.map_or_else(|| "–".to_owned(), |watts| format!("{watts:.1} W"));
+		let power = frame_power::power();
+		let charge = battery.as_ref().and_then(|battery| battery.charge_watts);
+		let battery_row = match charge {
+			Some(charge) if charge < -0.05 => format!("{:.1} W draining", -charge),
+			Some(charge) if charge > 0.05 => format!("{charge:.1} W charging"),
+			Some(_) => "idle".to_owned(),
+			None => "–".to_owned(),
+		};
+		// The charger feeds the system and charges the battery
+		let charger_row = match &battery {
+			Some(battery) if !battery.external_power => "not connected".to_owned(),
+			_ => watts(power.as_ref().zip(charge).map(|(power, charge)| power.system + charge)),
+		};
+		let values = [
+			watts(power.as_ref().map(|power| power.system)),
+			watts(power.as_ref().map(|power| power.cpu)),
+			watts(power.as_ref().map(|power| power.gpu)),
+			battery_row,
+			charger_row,
+		]
+		.join("\n");
+
+		for (id, text) in [
+			("battery", battery_text.as_str()),
+			("power_names", "System\nCPU\nGPU\nBattery\nCharger"),
+			("power_values", values.as_str()),
+		] {
+			if let Ok(label) = state.fetch_widget(&self.layout.state, id) {
+				label
+					.widget
+					.cast::<WidgetLabel>()?
+					.set_text(&mut self.layout.common(), Translation::from_raw_text(text));
+			}
+		}
 		let mode = frame_power::performance_mode();
 		for (id, button_mode) in [
 			("mode_streaming", frame_power::PerformanceMode::StreamingOptimized),

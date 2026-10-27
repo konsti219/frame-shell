@@ -1,5 +1,5 @@
-//! The Steam Frame's battery, as SteamVR reads it (Valve's charger service in /run/deckardcharger), and the frame
-//! shell's performance modes: Monado's GPU clock cap (`frame.gpu_max_mhz` in its config), which its session-power
+//! The Steam Frame's battery, as SteamVR reads it (Valve's charger service in /run/deckardcharger), its power draw
+//! from the board's power monitors, and the frame shell's performance modes: Monado's GPU clock cap (`frame.gpu_max_mhz` in its config), which its session-power
 //! script applies.
 
 use std::path::PathBuf;
@@ -11,8 +11,8 @@ pub struct Battery {
 	/// On the charger (not necessarily charging, it may be full)
 	pub external_power: bool,
 	pub full: bool,
-	/// Battery power in watts: what the headset draws, or what charges it
-	pub watts: Option<f32>,
+	/// Into the battery in watts, negative while it drains
+	pub charge_watts: Option<f32>,
 	/// Until empty (on battery) or full (charging), from the charger service
 	pub seconds_left: Option<u32>,
 }
@@ -29,12 +29,13 @@ fn read_number(name: &str) -> Option<f64> {
 
 pub fn battery() -> Option<Battery> {
 	let percent = read_number("battery_percent")? as f32;
-	let external_power = read("ac_status").is_some_and(|status| status == "Connected");
+	// "Connected" or "Connected slow", as Monado reads it for the watch
+	let external_power = read("ac_status").is_some_and(|status| status.starts_with("Connected"));
 	let full = read("battery_status").is_some_and(|status| status == "Full");
-	// The fuel gauge (BAT0 links to it): microvolts times microamperes
-	let watts = read_number("BAT0/voltage_now")
+	// The fuel gauge (BAT0 links to it): microvolts times microamperes, negative discharging
+	let charge_watts = read_number("BAT0/voltage_now")
 		.zip(read_number("BAT0/current_avg"))
-		.map(|(volts, amps)| (volts * amps).abs() as f32 * 1e-12);
+		.map(|(volts, amps)| (volts * amps) as f32 * 1e-12);
 	let seconds_left = if full {
 		None
 	} else if external_power {
@@ -48,8 +49,44 @@ pub fn battery() -> Option<Battery> {
 		percent,
 		external_power,
 		full,
-		watts,
+		charge_watts,
 		seconds_left,
+	})
+}
+
+/// The percentage as the watch and the battery menu show it: rounded, as truncating shows 0.29 as 28
+pub fn shown_percent(fraction: f32) -> u32 {
+	(fraction * 100.).round().min(99.) as u32
+}
+
+/// Power draw in watts, from the MAX34417 power monitors (refreshed about every 2 s)
+pub struct Power {
+	/// The system rail (VPH), everything the battery or charger feeds
+	pub system: f32,
+	pub cpu: f32,
+	pub gpu: f32,
+}
+
+pub fn power() -> Option<Power> {
+	let mut rails = std::collections::HashMap::<String, f32>::new();
+	for entry in std::fs::read_dir("/sys/class/hwmon").ok()?.flatten() {
+		let dir = entry.path();
+		if !std::fs::read_to_string(dir.join("name")).is_ok_and(|name| name.starts_with("max34417")) {
+			continue;
+		}
+		for channel in 1..=4 {
+			let label = std::fs::read_to_string(dir.join(format!("power{channel}_label")));
+			let microwatts = std::fs::read_to_string(dir.join(format!("power{channel}_input")));
+			if let (Ok(label), Some(microwatts)) = (label, microwatts.ok().and_then(|text| text.trim().parse::<f32>().ok())) {
+				rails.insert(label.trim().to_owned(), microwatts * 1e-6);
+			}
+		}
+	}
+	let rail = |name: &str| rails.get(name).copied().unwrap_or_default();
+	Some(Power {
+		system: *rails.get("vph")?,
+		cpu: rail("apc0") + rail("apc1") + rail("apc2"),
+		gpu: rail("gfx"),
 	})
 }
 
