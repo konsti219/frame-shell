@@ -75,9 +75,9 @@ correction read_correction()
 	const char * config = getenv("XDG_CONFIG_HOME");
 	const char * home = getenv("HOME");
 	if (config and *config)
-		snprintf(file_path, sizeof(file_path), "%s/frame-shell/eye-calibration", config);
+		snprintf(file_path, sizeof(file_path), "%s/monado/eye-calibration", config);
 	else if (home)
-		snprintf(file_path, sizeof(file_path), "%s/.config/frame-shell/eye-calibration", home);
+		snprintf(file_path, sizeof(file_path), "%s/.config/monado/eye-calibration", home);
 	else
 		return cached;
 	FILE * file = fopen(file_path, "r");

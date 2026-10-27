@@ -1,6 +1,6 @@
 //! The Steam Frame's battery, as SteamVR reads it (Valve's charger service in /run/deckardcharger), its power draw
 //! from the board's power monitors, and the frame shell's performance modes: a GPU clock cap the shell keeps applied
-//! (frame-monado's monado.service lifts it when the session ends).
+//! (frame-shell.service lifts it when the shell stops).
 
 use std::path::PathBuf;
 

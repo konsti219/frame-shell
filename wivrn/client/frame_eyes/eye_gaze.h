@@ -12,7 +12,7 @@
 namespace frame_eyes
 {
 // Per-eye gaze from Valve's eye tracker (/dev/shm/eye-server.mmap, layout versions 4 and 5), with the frame shell's
-// click calibration (~/.config/frame-shell/eye-calibration) applied as in frame-monado's reader
+// click calibration (~/.config/monado/eye-calibration) applied as in frame-monado's reader
 class eye_gaze
 {
 	uint8_t * base = nullptr;

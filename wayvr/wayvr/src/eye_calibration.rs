@@ -1,6 +1,6 @@
 //! Calibrates the eye tracking from pointer clicks: the user looks at what they click. Each click pairs its target
 //! with the Steam Frame's (uncalibrated) gaze at that moment; a gain and offset per axis fitted over recent clicks is
-//! written to ~/.config/frame-shell/eye-calibration, which Monado's gaze reader applies.
+//! written to ~/.config/monado/eye-calibration, which Monado's gaze reader applies.
 
 use glam::Vec3A;
 use std::{collections::VecDeque, path::PathBuf, sync::Mutex};
@@ -54,7 +54,7 @@ fn path() -> Option<PathBuf> {
         .filter(|v| !v.is_empty())
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))?;
-    Some(config.join("frame-shell").join("eye-calibration"))
+    Some(config.join("monado").join("eye-calibration"))
 }
 
 fn angles(v: Vec3A) -> [f32; 2] {

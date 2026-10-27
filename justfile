@@ -174,7 +174,7 @@ deploy:
     headset="{{headset}}"
     ssh "$headset" 'mkdir -p ~/.local/state/frame-shell/deploy ~/.config/systemd/user'
     tar -C "$stage" -cf - . | ssh "$headset" 'tar -C ~/.local/state/frame-shell/deploy -xf -'
-    scp "{{root}}/headset/not-with-shell.conf" "{{root}}/headset/launcher" "{{root}}/headset/frame-shell.desktop" \
+    scp "{{root}}/headset/frame-sleep" "{{root}}/headset/launcher" "{{root}}/headset/frame-shell.desktop" \
         "{{root}}/headset/steamvr" "{{root}}/headset/podman" "$headset":.local/state/frame-shell/deploy/
     scp "{{root}}/wayvr/dash-frontend/assets/dashboard/frame_shell_logo.png" "$headset":.local/state/frame-shell/deploy/frame-shell.png
     scp "{{root}}/headset/frame-shell.service" "$headset":.config/systemd/user/frame-shell.service
@@ -188,9 +188,10 @@ deploy:
         fi
     done
     systemctl --user stop frame-shell-dev.service 2>/dev/null || true
-    systemctl --user stop frame-shell.service monado-wivrn.service monado-wayvr.service
-    mkdir -p "$HOME/.local/bin" "$HOME/.local/lib/frame-shell" "$HOME/.local/share/applications" "$HOME/.config/systemd/user/monado-wivrn.service.d" "$HOME/.config/systemd/user/monado-wayvr.service.d"
+    systemctl --user stop frame-shell.service
+    mkdir -p "$HOME/.local/bin" "$HOME/.local/lib/frame-shell" "$HOME/.local/share/applications"
     install -m755 "$stage/launcher" "$HOME/.local/bin/frame-shell"
+    install -m755 "$stage/frame-sleep" "$HOME/.local/bin/frame-sleep"
     # Listed in SteamVR's non-Steam apps: switches to the desktop session, which is the frame shell
     install -m644 "$stage/frame-shell.desktop" "$HOME/.local/share/applications/frame-shell.desktop"
     install -Dm644 "$stage/frame-shell.png" "$HOME/.local/share/icons/hicolor/256x256/apps/frame-shell.png"
@@ -206,10 +207,8 @@ deploy:
     cp -a "$stage/xrizer" "$HOME/.local/lib/frame-shell/"
     install -Dm644 -t "$HOME/.local/share/frame-shell" "$stage/eye_kit_stage1_fp16.pte" "$stage/eye_kit_stage2_fp16.pte"
     rm -f "$HOME/.local/share/frame-shell/eye_split96_uncapped_fp16.pte" "$stage/eye_split96_uncapped_fp16.pte"
-    install -m644 "$stage/not-with-shell.conf" "$HOME/.config/systemd/user/monado-wivrn.service.d/not-with-shell.conf"
-    install -m644 "$stage/not-with-shell.conf" "$HOME/.config/systemd/user/monado-wayvr.service.d/not-with-shell.conf"
-    touch "$HOME/.config/steamframe-enable-shell"
     systemctl --user daemon-reload
+    systemctl --user enable frame-shell.service
     if systemctl --user is-active --quiet monado.service; then
         systemctl --user start frame-shell.service
     else

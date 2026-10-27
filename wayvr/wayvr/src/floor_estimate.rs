@@ -42,7 +42,7 @@ fn monotonic_ns() -> Option<u64> {
 static LAST_REQUEST: Mutex<Option<Instant>> = Mutex::new(None);
 
 /// Keeps Monado's cameras (and so the room mesh) running while estimates are needed, even without passthrough:
-/// a CLOCK_MONOTONIC deadline in $XDG_RUNTIME_DIR/frame-shell-floor-wanted, refreshed while `wanted`
+/// a CLOCK_MONOTONIC deadline in $XDG_RUNTIME_DIR/monado-floor-wanted, refreshed while `wanted`
 pub fn request(wanted: bool) {
     if !wanted {
         return;
@@ -55,7 +55,7 @@ pub fn request(wanted: bool) {
     let (Some(dir), Some(now)) = (std::env::var_os("XDG_RUNTIME_DIR"), monotonic_ns()) else {
         return;
     };
-    let path = std::path::PathBuf::from(dir).join("frame-shell-floor-wanted");
+    let path = std::path::PathBuf::from(dir).join("monado-floor-wanted");
     let tmp = path.with_extension("tmp");
     if std::fs::write(&tmp, format!("{}\n", now + 2_000_000_000)).is_ok() {
         let _ = std::fs::rename(&tmp, &path);
@@ -64,7 +64,7 @@ pub fn request(wanted: bool) {
 
 fn read() -> Option<FloorEstimate> {
     let path =
-        std::path::PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR")?).join("frame-shell-floor");
+        std::path::PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR")?).join("monado-floor");
     let text = std::fs::read_to_string(path).ok()?;
     let mut lines = text.lines();
     let mut header = lines.next()?.split_whitespace();

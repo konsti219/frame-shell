@@ -1,10 +1,9 @@
 [Unit]
 Description=Frame shell (WiVRn client with WayVR) on Monado
 PartOf=monado-session.target
+# Stops and restarts with Monado, and starts with it (WantedBy below)
 Requires=monado.service
 After=monado.service
-# Chosen over monado-wivrn and monado-wayvr by this flag (frame-shell/headset enable|disable)
-ConditionPathExists=%h/.config/steamframe-enable-shell
 # A shell that keeps crashing leaves no UI to leave the session from: go back to SteamVR
 StartLimitIntervalSec=60
 StartLimitBurst=5
@@ -17,3 +16,8 @@ Restart=always
 RestartSec=2
 # Restart without passing through "failed", so OnFailure= (back to SteamVR) only follows the start limit
 RestartMode=direct
+# Lifts the GPU cap of the performance mode
+ExecStopPost=-/bin/sh -c 'g=/sys/class/devfreq/3d00000.gpu; tr " " "\\n" < $$g/available_frequencies | sort -n | tail -1 | sudo -n tee $$g/max_freq > /dev/null'
+
+[Install]
+WantedBy=monado.service

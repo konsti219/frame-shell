@@ -56,8 +56,8 @@ The dashboard's "Battery / performance" menu shows the battery as SteamVR reads 
 `/run/deckardcharger`), the power draw from the board's power monitors, and switches between two performance modes:
 "Streaming optimized" (GPU capped at 578 MHz) and "Standard" (uncapped, for native games). The mode is
 `~/.config/frame-shell/performance-mode` (`streaming` or `standard`); the shell applies it at start and whenever
-something lifts it (Steam sets the GPU level to auto when it starts), and frame-monado's `monado.service` lifts the
-cap when the session ends. On battery the shell warns at 10, 5 and 1 %.
+something lifts it (Steam sets the GPU level to auto when it starts), and `frame-shell.service` lifts the cap when the
+shell stops. On battery the shell warns at 10, 5 and 1 %.
 
 Steam's client runs as a WayVR app (X11 through a bundled `xwayland-satellite`, which SteamOS lacks); the launcher
 clears the SteamOS session's Gamescope variables so it starts as the desktop client. Starting a game from the
