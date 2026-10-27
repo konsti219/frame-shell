@@ -959,6 +959,8 @@ struct video_shard
 	// VR: the video_stream_description it was encoded for; 0 for monitors
 	uint32_t generation = 0;
 	uint64_t frame;
+	// The frame sent before it on this stream (-1: none), so a frame lost whole is told from one never sent
+	uint64_t previous;
 	uint16_t index;
 	uint16_t data_count;
 	uint16_t parity_count;

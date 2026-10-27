@@ -48,6 +48,8 @@ pub struct Pc {
     pub manual: bool,
     pub detail: String,
     pub background_pinned: bool,
+    /// Its stream settings, as the client reports them
+    pub settings: serde_json::Value,
 }
 impl Pc {
     pub fn status(&self, background: bool) -> String {
@@ -266,6 +268,7 @@ pub unsafe fn update(views: *const frame_abi::frame_shell_pc, count: usize, sele
             manual: view.manual,
             detail: text(view.detail),
             background_pinned: view.background_pinned,
+            settings: serde_json::from_str(&text(view.settings)).unwrap(),
         })
         .collect();
     registry.rebuild();
@@ -278,7 +281,7 @@ pub fn json() -> serde_json::Value {
         "visible": pc.available, "compatible": pc.compatible, "autoconnect": pc.autoconnect, "manual": pc.manual,
         "source": pc.source, "state": pc.connection.as_str(), "detail": pc.detail,
         "presenting": pc.source.is_some() && pc.source == registry.selected_source,
-        "background_pinned": pc.background_pinned,
+        "background_pinned": pc.background_pinned, "settings": pc.settings,
         "status": pc.status(pc.source.is_some() && pc.source == registry.selected_source)
     })).collect()
 }

@@ -261,8 +261,22 @@ public:
 	        std::unique_ptr<wivrn_session> session,
 	        float guessed_fps,
 	        std::string server_name,
+	        std::string cookie,
 	        scene & parent_scene,
 	        bool video_active = true);
+
+	// The PC's key in the configuration's servers
+	std::string cookie;
+	configuration::stream_config & pc_settings() const
+	{
+		return application::get_config().stream(cookie);
+	}
+#ifndef __ANDROID__
+	// Frame shell: refuses a render size change while the PC's app can't take one
+	bool resolution_locked();
+	// Sends a changed stream setting ("setting" command key) to the PC
+	void setting_changed(std::string_view key);
+#endif
 
 	// Frame shell: present this PC's VR or put it on standby (other PCs connected)
 	void set_video_active(bool active)

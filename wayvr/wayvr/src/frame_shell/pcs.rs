@@ -141,7 +141,7 @@ pub fn send_command(command: &str) {
     let command = if let Some((verb, rest)) = command.split_once(' ') {
         if matches!(
             verb,
-            "connect" | "disconnect" | "present" | "pin_vr" | "autoconnect" | "forget"
+            "connect" | "disconnect" | "present" | "pin_vr" | "autoconnect" | "forget" | "setting"
         ) {
             let (key, tail) = rest.split_once(' ').unwrap_or((rest, ""));
             if matches!(verb, "disconnect" | "forget") {

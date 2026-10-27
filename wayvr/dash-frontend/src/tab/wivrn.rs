@@ -29,7 +29,7 @@ enum Task {
 	Select(Rc<str>),
 	Command(String),
 	Forget(Rc<str>),
-	Setting(&'static str, f32),
+	Setting(Rc<str>, &'static str, f32),
 	// Clicking the selected choice toggled its look off: draw the page again
 	Redraw,
 }
@@ -53,6 +53,8 @@ pub struct Host {
 	pub build: String,
 	pub version: String,
 	pub stream: Value,
+	/// Its stream settings
+	pub settings: Value,
 }
 
 /// The WiVRn client's lobby and stream state, parsed
@@ -66,8 +68,6 @@ pub struct WivrnState {
 	/// Digits typed on the PIN pad so far
 	pub pin_typed: usize,
 	pub stream: Value,
-	pub settings: Value,
-	pub game_running: bool,
 }
 
 fn text(value: &Value, key: &str) -> String {
@@ -103,22 +103,10 @@ impl WivrnState {
 				build: text(server, "build"),
 				version: text(server, "version"),
 				stream: server.get("stream").cloned().unwrap_or(Value::Null),
+				settings: server.get("settings").cloned().unwrap_or(Value::Null),
 			})
 			.collect();
 		Self {
-			game_running: text(&lobby, "state") == "connected"
-				&& (!flag(&stream, "runtime_known")
-					|| stream
-						.get("running")
-						.and_then(Value::as_array)
-						.is_some_and(|apps| apps.iter().any(|app| !flag(app, "overlay")))),
-			settings: if text(&lobby, "state") == "connected" {
-				stream.get("settings").or_else(|| lobby.get("settings"))
-			} else {
-				lobby.get("settings")
-			}
-			.cloned()
-			.unwrap_or(Value::Null),
 			state: text(&lobby, "state"),
 			server: text(&lobby, "server"),
 			detail: text(&lobby, "detail"),
@@ -126,6 +114,17 @@ impl WivrnState {
 			pin_typed: lobby.get("pin_typed").and_then(Value::as_u64).unwrap_or(0) as usize,
 			stream,
 		}
+	}
+
+	/// A PC whose VR app runs can't change its render size
+	pub fn game_running(&self, host: &Host) -> bool {
+		self.connected_to(host)
+			&& (!flag(&host.stream, "runtime_known")
+				|| host
+					.stream
+					.get("running")
+					.and_then(Value::as_array)
+					.is_some_and(|apps| apps.iter().any(|app| !flag(app, "overlay"))))
 	}
 
 	pub fn is_active(&self, host: &Host) -> bool {
@@ -154,7 +153,7 @@ pub struct TabWivrn<T> {
 	selected: Option<Rc<str>>,
 	confirm_forget: Option<Rc<str>>,
 	/// Slider changes wait until the drag rests before rebuilding the page
-	pending_setting: Option<(&'static str, f32, Instant)>,
+	pending_setting: Option<(Rc<str>, &'static str, f32, Instant)>,
 }
 
 fn doc_params(globals: &WguiGlobals) -> ParseDocumentParams<'_> {
@@ -180,7 +179,7 @@ impl<T> Tab<T> for TabWivrn<T> {
 					dirty = true;
 				}
 				Task::Command(command) => frontend.tasks.push(FrontendTask::WivrnCommand(command.into())),
-				Task::Setting(key, value) => self.pending_setting = Some((key, value, Instant::now())),
+				Task::Setting(cookie, key, value) => self.pending_setting = Some((cookie, key, value, Instant::now())),
 				Task::Redraw => dirty = true,
 				Task::Forget(cookie) => {
 					if self.confirm_forget.as_ref() == Some(&cookie) {
@@ -214,7 +213,7 @@ impl<T> Tab<T> for TabWivrn<T> {
 			})
 		});
 		// Apply after release so a state update cannot interrupt the drag
-		if let Some((key, value, changed)) = self.pending_setting
+		if let Some((cookie, key, value, changed)) = self.pending_setting.clone()
 			&& !dragging
 			&& changed.elapsed() > Duration::from_millis(500)
 		{
@@ -227,7 +226,7 @@ impl<T> Tab<T> for TabWivrn<T> {
 			};
 			frontend
 				.tasks
-				.push(FrontendTask::WivrnCommand(format!("setting {key} {value}").into()));
+				.push(FrontendTask::WivrnCommand(format!("setting {cookie} {key} {value}").into()));
 		}
 
 		let Some((version, lobby, stream)) = frontend.interface.wivrn_state(data) else {
@@ -250,7 +249,14 @@ impl<T> Tab<T> for TabWivrn<T> {
 				self.rebuild(&mut frontend.layout, &frontend.globals, &state)?;
 				self.page_state = Some(state);
 			}
-			self.update_stream_debug(&mut frontend.layout, &stream)?;
+			// The live state is the presenting PC's; other PCs show theirs as of the page
+			let selected = self
+				.page_state
+				.as_ref()
+				.and_then(|state| state.hosts.iter().find(|host| self.selected.as_ref() == Some(&host.cookie)))
+				.filter(|host| !host.presenting)
+				.map(|host| host.stream.clone());
+			self.update_stream_debug(&mut frontend.layout, selected.as_ref().unwrap_or(&stream))?;
 			if can_refresh {
 				self.version = Some(version);
 			}
@@ -310,7 +316,6 @@ impl<T> TabWivrn<T> {
 				self.id_content,
 				Translation::from_raw_text("No PCs found yet. Start WiVRn on a PC on this network."),
 			)?;
-			self.stream_settings(layout, globals, &wivrn.settings, wivrn.game_running)?;
 			return Ok(());
 		}
 
@@ -437,7 +442,7 @@ impl<T> TabWivrn<T> {
 			}
 		}
 
-		self.stream_settings(layout, globals, &wivrn.settings, wivrn.game_running)?;
+		self.stream_settings(layout, globals, &host.cookie, &host.settings, wivrn.game_running(host))?;
 		Ok(())
 	}
 
@@ -445,6 +450,7 @@ impl<T> TabWivrn<T> {
 		&mut self,
 		layout: &mut Layout,
 		globals: &WguiGlobals,
+		cookie: &Rc<str>,
 		settings: &Value,
 		game_running: bool,
 	) -> anyhow::Result<()> {
@@ -482,7 +488,7 @@ impl<T> TabWivrn<T> {
 				button.on_click(self.tasks.get_button_click_callback(if *choice == selected {
 					Task::Redraw
 				} else {
-					Task::Command(format!("setting {key} {choice}"))
+					Task::Command(format!("setting {cookie} {key} {choice}"))
 				}));
 			}
 		}
@@ -494,8 +500,9 @@ impl<T> TabWivrn<T> {
 				settings.get(key).and_then(Value::as_bool).unwrap_or(default),
 			);
 			let tasks = self.tasks.clone();
+			let cookie = cookie.clone();
 			checkbox.on_toggle(Box::new(move |_, event| {
-				tasks.push(Task::Command(format!("setting {key} {}", u8::from(event.checked))));
+				tasks.push(Task::Command(format!("setting {cookie} {key} {}", u8::from(event.checked))));
 				Ok(())
 			}));
 		}
@@ -529,7 +536,8 @@ impl<T> TabWivrn<T> {
 				slider.set_enabled(&mut layout.common(), !game_running);
 			}
 			let tasks = self.tasks.clone();
-			slider.on_value_changed(Box::new(move |_common, e| tasks.push(Task::Setting(key, e.value))));
+			let cookie = cookie.clone();
+			slider.on_value_changed(Box::new(move |_common, e| tasks.push(Task::Setting(cookie.clone(), key, e.value))));
 		}
 		Ok(())
 	}

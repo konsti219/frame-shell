@@ -36,8 +36,8 @@ struct Pc {
 
 struct State {
     pcs: BTreeMap<u32, Pc>,
-    /// What the PCs should encode their monitors with, from the headset's settings
-    desktop_settings: Option<DesktopSettings>,
+    /// What each PC should encode its monitors with, from its settings on the headset
+    desktop_settings: BTreeMap<u32, DesktopSettings>,
     /// The VR PC's stats and runtime frame timings, for the watch
     frames: VecDeque<SessionFrame>,
     errors: VecDeque<String>,
@@ -47,7 +47,7 @@ struct State {
 
 static STATE: Mutex<State> = Mutex::new(State {
     pcs: BTreeMap::new(),
-    desktop_settings: None,
+    desktop_settings: BTreeMap::new(),
     frames: VecDeque::new(),
     errors: VecDeque::new(),
     notifications: VecDeque::new(),
@@ -222,6 +222,7 @@ pub fn disconnected(source: u32) {
     let was_background = crate::frame_hosts::background_source() == Some(source);
     crate::frame_hosts::disconnected(source);
     let mut state = state();
+    state.desktop_settings.remove(&source);
     let Some(_pc) = state.pcs.remove(&source) else {
         return;
     };
@@ -237,27 +238,26 @@ pub fn disconnected(source: u32) {
     state.ipc.push_back(IpcEvent::Disconnected(source));
 }
 
-/// Sends the desktop stream settings to each PC whose differ
-pub fn sync_desktop_settings(settings: DesktopSettings) {
-    state().desktop_settings = Some(settings);
+/// Sends a PC its desktop stream settings when they changed
+pub fn sync_desktop_settings(source: u32, settings: DesktopSettings) {
+    state().desktop_settings.insert(source, settings);
     resync_desktop_settings();
 }
 
-/// Sends the last desktop stream settings to PCs that don't have them, e.g. a newly connected one
+/// Sends PCs their desktop stream settings if they don't have them, e.g. a newly connected one
 pub fn resync_desktop_settings() {
-    let Some(settings) = state().desktop_settings else {
-        return;
-    };
-    let sources: Vec<u32> = {
+    let sources: Vec<(u32, DesktopSettings)> = {
         let state = state();
         state
             .pcs
             .iter()
-            .filter(|(_, pc)| pc.sent_settings != Some(settings))
-            .map(|(&source, _)| source)
+            .filter_map(|(&source, pc)| {
+                let settings = *state.desktop_settings.get(&source)?;
+                (pc.sent_settings != Some(settings)).then_some((source, settings))
+            })
             .collect()
     };
-    for source in sources {
+    for (source, settings) in sources {
         if send(source, &ShellMessage::DesktopSettings(settings))
             && let Some(pc) = state().pcs.get_mut(&source)
         {

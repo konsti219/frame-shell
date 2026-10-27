@@ -21,6 +21,7 @@ class sender
 		std::vector<to_headset::video_shard> shards;
 	};
 	std::array<sent_frame, 8> sent;
+	uint64_t last = -1;
 
 public:
 	// A frame's shards to send, data then parity (fec_percent of the data shards, 0: none); kept to send again

@@ -387,14 +387,14 @@ void scenes::stream::gui_compact_view()
 	}
 }
 
-static void send_settings_changed_packet(xr::session & session, wivrn_session * network, const configuration & config)
+static void send_settings_changed_packet(xr::session & session, wivrn_session * network, const configuration & config, const configuration::stream_config & pc)
 {
 	network->send_control(
 	        from_headset::settings_changed{
 	                .preferred_refresh_rate = config.preferred_refresh_rate,
 	                .minimum_refresh_rate = config.minimum_refresh_rate.value_or(0),
 	                .fps_divider = config.fps_divider,
-	                .bitrate_bps = config.bitrate_bps,
+	                .bitrate_bps = pc.bitrate_bps,
 	                .mirror_gamepad = config.forward_gamepad,
 	                .enabled_body_parts = config.body_part_mask,
 	        });
@@ -414,7 +414,8 @@ void scenes::stream::gui_settings(float)
 	        .recommended_height = height,
 	        .in_game = true,
 	        .server_hid_forwarding = hid_forwarding_enabled(),
-	        .on_streaming_changed = [this] { send_settings_changed_packet(session, network_session.get(), application::get_config()); },
+	        .stream = &pc_settings(),
+	        .on_streaming_changed = [this] { send_settings_changed_packet(session, network_session.get(), application::get_config(), pc_settings()); },
 	        .enter_foveation_adjust = [this] { next_gui_status = stream_tab::foveation_settings; },
 	        .on_foveation_override_changed = [this] {
 		        const auto & config = application::get_config();
@@ -447,7 +448,7 @@ void scenes::stream::gui_settings(float)
 			break;
 		case settings_page::tracking:
 			if (wivrn::gui::settings_tracking(ctx))
-				send_settings_changed_packet(session, network_session.get(), ctx.config);
+				send_settings_changed_packet(session, network_session.get(), ctx.config, pc_settings());
 			break;
 		case settings_page::system:
 			wivrn::gui::settings_system(ctx);
@@ -461,16 +462,17 @@ void scenes::stream::gui_settings(float)
 void scenes::stream::gui_bitrate_settings(float predicted_display_period)
 {
 	auto & config = application::get_config();
+	auto & pc = pc_settings();
 	ImGui::PushFont(nullptr, constants::gui::font_size_large);
 	ImGui::Text("%s", _S("Use the right thumbstick to adjust the bitrate"));
 	ImGui::Text("%s", _S("Press A to go back"));
-	ImGui::Text("%s", fmt::format(_F("Bitrate: {}Mbit/s"), config.bitrate_bps / 1'000'000).c_str());
+	ImGui::Text("%s", fmt::format(_F("Bitrate: {}Mbit/s"), pc.bitrate_bps / 1'000'000).c_str());
 	ImGui::PopFont();
 
 	// Maximum speed of 20Mbit/s
 	float delta = application::read_action_float(settings_adjust).value_or(std::pair{0, 0}).second * 20'000'000.f * predicted_display_period;
 
-	config.bitrate_bps = std::clamp(config.bitrate_bps + static_cast<int32_t>(delta), 1'000'000u, config.max_bitrate());
+	pc.bitrate_bps = std::clamp(pc.bitrate_bps + static_cast<int32_t>(delta), 1'000'000u, config.max_bitrate());
 
 	bool ok = application::read_action_bool(foveation_ok).value_or(std::pair{0, false}).second;
 
@@ -480,7 +482,7 @@ void scenes::stream::gui_bitrate_settings(float predicted_display_period)
 		next_gui_status = stream_tab::settings;
 	}
 
-	send_settings_changed_packet(session, network_session.get(), application::get_config());
+	send_settings_changed_packet(session, network_session.get(), application::get_config(), pc_settings());
 }
 
 void scenes::stream::gui_foveation_settings(float predicted_display_period)

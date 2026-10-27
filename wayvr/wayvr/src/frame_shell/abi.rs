@@ -47,14 +47,14 @@ pub(crate) extern "C" fn lobby_state(json: *const std::ffi::c_char) {
 
 pub(crate) extern "C" fn stream_state(source: u32, json: *const std::ffi::c_char) {
     let json = c_str(json);
-    // The PC encodes its desktops with the headset's settings
+    // The PC encodes its desktops with its settings on the headset
     if let Ok(value) = serde_json::from_str::<serde_json::Value>(&json)
         && let Some(settings) = value.get("settings")
         && let Some(bitrate) = settings
             .get("desktop_bitrate")
             .and_then(serde_json::Value::as_u64)
     {
-        crate::frame_host::sync_desktop_settings(wayvr_ipc::frame::DesktopSettings {
+        crate::frame_host::sync_desktop_settings(source, wayvr_ipc::frame::DesktopSettings {
             bitrate_per_1080p: bitrate as u32,
             hevc: settings
                 .get("desktop_codec")

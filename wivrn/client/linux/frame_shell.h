@@ -211,11 +211,11 @@ inline void present_desktop(std::shared_ptr<void> handle, const desktop_frame_in
 // Tints the defoveated PC stream by its resolution (dashboard debug view, not saved)
 inline std::atomic<bool> foveation_debug{false};
 
-inline std::string settings_json(const configuration & config)
+inline std::string settings_json(const configuration & config, const configuration::stream_config & stream)
 {
     const char * codec = "auto";
-    if (config.codec) {
-        switch (*config.codec) {
+    if (stream.codec) {
+        switch (*stream.codec) {
         case wivrn::video_codec::h264: codec = "h264"; break;
         case wivrn::video_codec::h265: codec = "h265"; break;
         case wivrn::video_codec::av1: codec = "av1"; break;
@@ -223,23 +223,23 @@ inline std::string settings_json(const configuration & config)
         }
     }
     return fmt::format(R"({{"bitrate":{},"max_bitrate":{},"fec":{},"frame_margin":{},"resolution":{},"foveation":{},"max_foveation":{},"codec":"{}","foveation_debug":{},"desktop_bitrate":{},"desktop_codec":"{}","codec_support":{{"h264":{},"h265":{},"av1":{}}}}})",
-                       config.bitrate_bps, config.max_bitrate(),
-                       config.fec_percent, config.frame_margin_ms, config.resolution_scale,
-                       config.chosen_stream_scale(), 100, codec,
-                       foveation_debug.load(), config.desktop_bitrate_kbps,
-                       config.desktop_codec == wivrn::video_codec::h265 ? "h265" : "h264",
+                       stream.bitrate_bps, config.max_bitrate(),
+                       stream.fec_percent, stream.frame_margin_ms, stream.resolution_scale,
+                       config.chosen_stream_scale(stream), 100, codec,
+                       foveation_debug.load(), stream.desktop_bitrate_kbps,
+                       stream.desktop_codec == wivrn::video_codec::h265 ? "h265" : "h264",
                        wivrn::decoder::supports_codec(wivrn::video_codec::h264),
                        wivrn::decoder::supports_codec(wivrn::video_codec::h265),
                        wivrn::decoder::supports_codec(wivrn::video_codec::av1));
 }
 
-inline bool apply_setting(configuration & config, std::string_view command)
+// "<key> <value>" for a PC's stream settings
+inline bool apply_setting(configuration & config, configuration::stream_config & stream, std::string_view setting)
 {
-    if (!command.starts_with("setting ")) return false;
-    auto separator = command.find(' ', 8);
+    auto separator = setting.find(' ');
     if (separator == std::string_view::npos) return false;
-    auto key = command.substr(8, separator - 8);
-    auto value = command.substr(separator + 1);
+    auto key = setting.substr(0, separator);
+    auto value = setting.substr(separator + 1);
     auto parse = [value](auto & number) {
         auto [end, error] = std::from_chars(value.data(), value.data() + value.size(), number);
         return error == std::errc{} && end == value.data() + value.size();
@@ -251,37 +251,37 @@ inline bool apply_setting(configuration & config, std::string_view command)
     if (key == "bitrate") {
         uint32_t bitrate;
         if (!parse(bitrate) || bitrate < 1'000'000 || bitrate > config.max_bitrate()) return false;
-        config.bitrate_bps = bitrate;
+        stream.bitrate_bps = bitrate;
     } else if (key == "frame_margin") {
         uint32_t ms;
         if (!parse(ms) || ms > 20) return false;
-        config.frame_margin_ms = ms;
+        stream.frame_margin_ms = ms;
     } else if (key == "fec") {
         // Percent parity
         uint32_t percent;
         if (!parse(percent) || percent > 50) return false;
-        config.fec_percent = percent;
+        stream.fec_percent = percent;
     } else if (key == "resolution") {
         float scale;
         if (!parse(scale) || !std::isfinite(scale) || scale < 0.5f || scale > 2.f) return false;
-        config.resolution_scale = scale;
+        stream.resolution_scale = scale;
     } else if (key == "foveation") {
         // Streamed size as a fraction of the render size; 1 streams it whole (the decoder's size limit applies when used)
         float scale;
         if (!parse(scale) || !std::isfinite(scale) || scale < 0.2f || scale > 1.f) return false;
-        config.set_stream_scale(scale);
+        configuration::set_stream_scale(stream, scale);
     } else if (key == "desktop_bitrate") {
         // kbit/s per 1080p
         uint32_t bitrate;
         if (!parse(bitrate) || bitrate < 1'000 || bitrate > 150'000) return false;
-        config.desktop_bitrate_kbps = bitrate;
+        stream.desktop_bitrate_kbps = bitrate;
     } else if (key == "desktop_codec") {
         wivrn::video_codec requested;
         if (value == "h264") requested = wivrn::video_codec::h264;
         else if (value == "h265") requested = wivrn::video_codec::h265;
         else return false;
         if (!wivrn::decoder::supports_codec(requested)) return false;
-        config.desktop_codec = requested;
+        stream.desktop_codec = requested;
     } else if (key == "codec") {
         std::optional<wivrn::video_codec> requested;
         if (value == "auto") requested.reset();
@@ -290,7 +290,7 @@ inline bool apply_setting(configuration & config, std::string_view command)
         else if (value == "av1") requested = wivrn::video_codec::av1;
         else return false;
         if (requested && !wivrn::decoder::supports_codec(*requested)) return false;
-        config.codec = requested;
+        stream.codec = requested;
     } else return false;
     config.save();
     return true;

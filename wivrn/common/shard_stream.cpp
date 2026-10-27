@@ -25,6 +25,7 @@ std::vector<to_headset::video_shard> sender::frame(uint32_t stream, uint32_t gen
 		        .stream = stream,
 		        .generation = generation,
 		        .frame = frame,
+		        .previous = last,
 		        .index = index,
 		        .data_count = uint16_t(count),
 		        .parity_count = parity_count,
@@ -50,6 +51,7 @@ std::vector<to_headset::video_shard> sender::frame(uint32_t stream, uint32_t gen
 	for (size_t i = 0; i < parity.size(); ++i)
 		shard(count + i, std::move(parity[i]));
 
+	last = frame;
 	auto & kept = sent[frame % sent.size()];
 	kept.frame = frame;
 	// Sending encrypts payloads in place: what's sent is a copy

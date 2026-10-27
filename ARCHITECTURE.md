@@ -59,8 +59,9 @@ service. The cast hands DMA-bufs to VA-API, and the encoder is always told its s
 frames back. `desktop_surface` announces a
 monitor (codec, size, region in the desktop for pointer input) before its first frame. Access units travel as
 `video_shard` packets on the stream socket, using the same per-stream sharding, FEC and retransmission
-implementation as VR video (`wivrn/common/shard_stream.*`). Every shard carries its frame size and shard counts;
-`video_nack` requests missing shards. VR metadata is serialized before the encoded bytes. Each VR encoder and
+implementation as VR video (`wivrn/common/shard_stream.*`). Every shard carries its frame size, shard counts and the
+stream's previous frame, so a frame lost whole is told from a frame number the PC skipped; `video_nack` requests
+missing shards. VR metadata is serialized before the encoded bytes. Each VR encoder and
 monitor owns separate recovery state. VR decodes complete frames immediately; desktops decode in order, waiting
 up to 40 ms for recovery. A desktop frame
 that can't be completed drops frames until the next keyframe (`desktop_keyframe`). Hidden monitors aren't encoded.
@@ -82,8 +83,9 @@ Host workers poll on their own threads; nothing on the headset's render thread w
 
 ## State
 
-Stream settings are the headset's WiVRn configuration and apply to every PC (bitrate in `settings_changed`;
-sizes and codecs in `stream_settings`, which rebuild the server's images, foveation and encoders). Pairing and
+Stream settings (render size, foveation, bitrate, codecs, FEC, frame margin, desktop encoding) are per PC in the
+headset's WiVRn configuration; a newly found PC starts with the presenting PC's. Bitrate goes in `settings_changed`;
+sizes and codecs in `stream_settings`, which rebuild the server's images, foveation and encoders. Pairing and
 auto-connect are per PC, identified by its server cookie (shared by the packaged and dev servers through
 `FRAME_SHELL_IDENTITY_DIR`); pins and screen windows are keyed by it, source numbers and runtime client IDs only
 live as long as a connection. The client locates poses in the calibrated space (floor and recenter) and sends the shell's temporary space drag as the

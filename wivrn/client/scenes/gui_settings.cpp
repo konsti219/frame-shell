@@ -266,20 +266,23 @@ void settings_video(const settings_context & ctx)
 		});
 	}
 
+	// A connected PC's own setting
+	if (ctx.stream)
 	{
+		auto & pc = *ctx.stream;
 		const auto width = ctx.recommended_width;
 		const auto height = ctx.recommended_height;
 		list.push_back({
 		        .id = "##resolution",
 		        .label = _("Render resolution"),
-		        .description = fmt::format(_cF("render resolution", "Pixels rendered per eye ({}x{}). Lower to gain performance."), int(width * config.resolution_scale), int(height * config.resolution_scale)),
+		        .description = fmt::format(_cF("render resolution", "Pixels rendered per eye ({}x{}). Lower to gain performance."), int(width * pc.resolution_scale), int(height * pc.resolution_scale)),
 		        .ui = ui_kind::slider,
-		        .get_int = [&config] { return int(std::lround(config.resolution_scale * 100)); },
-		        .set_int = [&config](int v) { config.resolution_scale = v / 100.0; config.save(); },
+		        .get_int = [&config, &pc] { return int(std::lround(pc.resolution_scale * 100)); },
+		        .set_int = [&config, &pc](int v) { pc.resolution_scale = v / 100.0; config.save(); },
 		        .v_min = 50,
 		        .v_max = config.extended_config ? 350 : 150,
 		        .fmt = "%d%%",
-		        .default_int = int(std::lround(default_config.resolution_scale * 100)),
+		        .default_int = int(std::lround(configuration::stream_config{}.resolution_scale * 100)),
 		        .enabled = [&ctx] { return not ctx.in_game; },
 		        .disabled_tooltip = disconnect_tip,
 		});
@@ -311,98 +314,105 @@ void settings_streaming(const settings_context & ctx)
 	const std::string disconnect_tip = ctx.in_game ? _C("tooltip for disabled settings", "Disconnect to change this setting.") : std::string{};
 	std::vector<setting> list;
 
-	list.push_back({
-	        .id = "##foveation",
-	        .label = _("Foveated encoding"),
-	        .description = config.check_feature(feature::eye_gaze)
-	                               ? _("Higher values focus image quality where you look at, improving latency, power efficiency and quality.")
-	                               : _("Higher values focus image quality at the center, improving latency, power efficiency and quality."),
-	        .ui = ui_kind::slider,
-	        .get_int = [&config] { return int(std::lround((1 - config.get_stream_scale()) * 100)); },
-	        .set_int = [&config](int v) {
-		        if (not config.extended_config)
-			        v = std::clamp(v, 30, 80);
-		        config.set_stream_scale(1 - v * 0.01);
-		        config.save(); },
-	        .v_min = 0,
-	        .v_max = 80,
-	        .fmt = "%d%%",
-	        .default_int = int(std::lround((1 - default_config.get_stream_scale()) * 100)),
-	        .enabled = [&ctx] { return not ctx.in_game; },
-	        .disabled_tooltip = disconnect_tip,
-	});
-
-	auto codec_name = [](std::optional<wivrn::video_codec> codec) -> std::string {
-		if (not codec)
-			return _C("Codec", "Automatic");
-		switch (*codec)
-		{
-			case wivrn::h264:
-				return _C("Codec", "H.264");
-			case wivrn::h265:
-				return _C("Codec", "HEVC (H.265)");
-			case wivrn::av1:
-				return _C("Codec", "AV1");
-			case wivrn::raw:
-				break;
-		}
-		return _C("Codec", "Automatic");
-	};
-
-	std::vector<wivrn::video_codec> codecs;
-	for (auto capability: wivrn::decoder::supported_codecs())
-		if (capability.codec != wivrn::raw)
-			codecs.push_back(capability.codec);
-
-	list.push_back({
-	        .id = "##codec",
-	        .label = _C("setting name", "Video codec"),
-	        .description = _("How video is compressed before it is sent to the headset."),
-	        .ui = ui_kind::combo,
-	        .get_int = [&config, codecs] { return config.codec ? index(codecs, *config.codec).value_or(-1) + 1 : 0; },
-	        .set_int = [&config, codecs](int v) {
-		        config.codec = v == 0 ? std::nullopt : std::optional(codecs[v - 1]);
-		        config.save(); },
-	        .options = [codecs, codec_name] {
-		        std::vector<std::string> opts;
-		        opts.push_back(codec_name(std::nullopt));
-		        for (auto c: codecs)
-			        opts.push_back(codec_name(c));
-		        return opts; },
-	        .title = _C("setting name", "Video codec"),
-	        .default_int = default_config.codec ? index(codecs, *default_config.codec).value_or(-1) + 1 : 0,
-	        .enabled = [&ctx] { return not ctx.in_game; },
-	        .disabled_tooltip = disconnect_tip,
-	});
-
-	if (config.codec && wivrn::decoder::supports_10bit(*config.codec))
+	// A connected PC's own settings
+	if (ctx.stream)
 	{
+		auto & pc = *ctx.stream;
+		const configuration::stream_config default_pc;
 		list.push_back({
-		        .id = "##ten_bit",
-		        .label = _C("setting name", "10-bit color"),
-		        .description = _("Higher color precision, supported by HEVC and AV1."),
-		        .ui = ui_kind::toggle,
-		        .get_bool = [&config] { return config.bit_depth == 10; },
-		        .set_bool = [&config](bool v) { config.bit_depth = v ? 10 : 8; config.save(); },
-		        .default_bool = default_config.bit_depth == 10,
+		        .id = "##foveation",
+		        .label = _("Foveated encoding"),
+		        .description = config.check_feature(feature::eye_gaze)
+		                               ? _("Higher values focus image quality where you look at, improving latency, power efficiency and quality.")
+		                               : _("Higher values focus image quality at the center, improving latency, power efficiency and quality."),
+		        .ui = ui_kind::slider,
+		        .get_int = [&config, &pc] { return int(std::lround((1 - config.get_stream_scale(pc)) * 100)); },
+		        .set_int = [&config, &pc](int v) {
+			        if (not config.extended_config)
+				        v = std::clamp(v, 30, 80);
+			        configuration::set_stream_scale(pc, 1 - v * 0.01);
+			        config.save(); },
+		        .v_min = 0,
+		        .v_max = 80,
+		        .fmt = "%d%%",
+		        .default_int = int(std::lround((1 - config.get_stream_scale(default_pc)) * 100)),
 		        .enabled = [&ctx] { return not ctx.in_game; },
 		        .disabled_tooltip = disconnect_tip,
 		});
-	}
 
-	const int mb = 1'000'000;
-	list.push_back({
-	        .id = "##bitrate",
-	        .label = _("Bitrate"),
-	        .description = _("Video data rate sent to the headset."),
-	        .ui = ui_kind::slider,
-	        .get_int = [&config] { return int(config.bitrate_bps / mb); },
-	        .set_int = [&ctx, &config](int v) { config.bitrate_bps = uint32_t(v) * mb; config.save(); if (ctx.on_streaming_changed) ctx.on_streaming_changed(); },
-	        .v_min = 5,
-	        .v_max = int(config.max_bitrate() / mb),
-	        .fmt = "%d Mbit/s",
-	        .default_int = int(default_config.bitrate_bps / mb),
-	});
+		auto codec_name = [](std::optional<wivrn::video_codec> codec) -> std::string {
+			if (not codec)
+				return _C("Codec", "Automatic");
+			switch (*codec)
+			{
+				case wivrn::h264:
+					return _C("Codec", "H.264");
+				case wivrn::h265:
+					return _C("Codec", "HEVC (H.265)");
+				case wivrn::av1:
+					return _C("Codec", "AV1");
+				case wivrn::raw:
+					break;
+			}
+			return _C("Codec", "Automatic");
+		};
+
+		std::vector<wivrn::video_codec> codecs;
+		for (auto capability: wivrn::decoder::supported_codecs())
+			if (capability.codec != wivrn::raw)
+				codecs.push_back(capability.codec);
+
+		list.push_back({
+		        .id = "##codec",
+		        .label = _C("setting name", "Video codec"),
+		        .description = _("How video is compressed before it is sent to the headset."),
+		        .ui = ui_kind::combo,
+		        .get_int = [&config, &pc, codecs] { return pc.codec ? index(codecs, *pc.codec).value_or(-1) + 1 : 0; },
+		        .set_int = [&config, &pc, codecs](int v) {
+			        pc.codec = v == 0 ? std::nullopt : std::optional(codecs[v - 1]);
+			        config.save(); },
+		        .options = [codecs, codec_name] {
+			        std::vector<std::string> opts;
+			        opts.push_back(codec_name(std::nullopt));
+			        for (auto c: codecs)
+				        opts.push_back(codec_name(c));
+			        return opts; },
+		        .title = _C("setting name", "Video codec"),
+		        .default_int = default_pc.codec ? index(codecs, *default_pc.codec).value_or(-1) + 1 : 0,
+		        .enabled = [&ctx] { return not ctx.in_game; },
+		        .disabled_tooltip = disconnect_tip,
+		});
+
+		if (pc.codec && wivrn::decoder::supports_10bit(*pc.codec))
+		{
+			list.push_back({
+			        .id = "##ten_bit",
+			        .label = _C("setting name", "10-bit color"),
+			        .description = _("Higher color precision, supported by HEVC and AV1."),
+			        .ui = ui_kind::toggle,
+			        .get_bool = [&config, &pc] { return config.bit_depth == 10; },
+			        .set_bool = [&config, &pc](bool v) { config.bit_depth = v ? 10 : 8; config.save(); },
+			        .default_bool = default_config.bit_depth == 10,
+			        .enabled = [&ctx] { return not ctx.in_game; },
+			        .disabled_tooltip = disconnect_tip,
+			});
+		}
+
+		const int mb = 1'000'000;
+		list.push_back({
+		        .id = "##bitrate",
+		        .label = _("Bitrate"),
+		        .description = _("Video data rate sent to the headset."),
+		        .ui = ui_kind::slider,
+		        .get_int = [&config, &pc] { return int(pc.bitrate_bps / mb); },
+		        .set_int = [&ctx, &config, &pc](int v) { pc.bitrate_bps = uint32_t(v) * mb; config.save(); if (ctx.on_streaming_changed) ctx.on_streaming_changed(); },
+		        .v_min = 5,
+		        .v_max = int(config.max_bitrate() / mb),
+		        .fmt = "%d Mbit/s",
+		        .default_int = int(default_pc.bitrate_bps / mb),
+		});
+
+	}
 
 	// in-stream: steer where foveation focuses quality
 	if (ctx.in_game)

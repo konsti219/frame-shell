@@ -28,6 +28,7 @@ void shard_accumulator::push_shard(to_headset::video_shard && shard)
 {
 	const auto index = shard.frame;
 	const auto generation = shard.generation;
+	const auto previous = shard.previous;
 	if (index < next_frame)
 		return;
 	auto * frame = recovery.add(std::move(shard));
@@ -36,8 +37,16 @@ void shard_accumulator::push_shard(to_headset::video_shard && shard)
 	auto [it, inserted] = feedbacks.try_emplace(index);
 	auto & feedback = it->second;
 	if (inserted)
+	{
 		feedback = {.frame_index = index, .stream_index = stream_index,
 		            .received_first_packet = instance.now()};
+		// A frame sent before this one never arrived: the decoder lacks its references until a keyframe
+		if (next_frame != 0 and previous >= next_frame and previous < index and not recovery.frames.contains(previous))
+		{
+			from_headset::feedback lost{.generation = generation, .frame_index = previous, .stream_index = stream_index};
+			send_feedback(lost);
+		}
+	}
 	feedback.generation = generation;
 	if (not feedback.received_first_packet)
 		feedback.received_first_packet = instance.now();
@@ -63,7 +72,7 @@ void shard_accumulator::push_shard(to_headset::video_shard && shard)
 		next_frame = index + 1;
 	}
 	else
-		// Frames never seen were skipped by the server (a slow PC skips frame numbers): not losses
+		// Frames never seen were skipped by the server or reported lost above
 		next_frame = recovery.frames.begin()->first;
 
 	for (auto old = recovery.frames.begin(); old != recovery.frames.end() and old->first < next_frame;)

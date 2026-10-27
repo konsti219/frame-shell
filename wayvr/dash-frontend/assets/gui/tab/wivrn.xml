@@ -43,8 +43,7 @@
 
   <template name="StreamSettings">
     <GroupBox>
-      <label text="Headset stream settings · all PCs" weight="bold" size="20" />
-      <label text="These settings belong to the headset and apply to every PC." size="14" wrap="1" width="100%" />
+      <label text="Stream settings for this PC" weight="bold" size="20" />
       <label text="Bitrate (Mbit/s)" size="16" />
       <Slider id="bitrate" min_value="5" max_value="${max_bitrate}" step="5" show_value="1" width="100%" height="24" />
       <label id="network_status" text="" size="14" wrap="1" width="100%" />

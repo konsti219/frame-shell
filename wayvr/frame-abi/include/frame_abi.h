@@ -48,6 +48,8 @@ typedef enum frame_pc_connection {
 
 typedef struct frame_shell_pc {
     const char * id, * name, * hostname, * build, * version, * detail;
+    // Its stream settings, JSON
+    const char * settings;
     uint32_t source;
     frame_pc_connection connection;
     bool available, compatible, autoconnect, manual, background_pinned;

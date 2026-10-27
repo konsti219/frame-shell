@@ -113,22 +113,23 @@ static from_headset::visibility_mask_changed::masks get_visibility_mask(xr::inst
 from_headset::stream_settings scenes::stream::stream_settings()
 {
 	const auto & config = application::get_config();
+	const auto & pc = pc_settings();
 	from_headset::stream_settings res{};
 
 	auto view = system.view_configuration_views(viewconfig)[0];
 	view = application::get_hmd_traits().override_view(view);
-	res.render_eye_width = view.recommendedImageRectWidth * config.resolution_scale;
-	res.render_eye_height = view.recommendedImageRectHeight * config.resolution_scale;
+	res.render_eye_width = view.recommendedImageRectWidth * pc.resolution_scale;
+	res.render_eye_height = view.recommendedImageRectHeight * pc.resolution_scale;
 
-	auto scale = config.get_stream_scale();
+	auto scale = config.get_stream_scale(pc);
 	res.stream_eye_width = res.render_eye_width * scale;
 	res.stream_eye_height = res.render_eye_height * scale;
 
-	if (config.codec and decoder::supports_codec(*config.codec))
+	if (pc.codec and decoder::supports_codec(*pc.codec))
 	{
-		const bool supports_10bit = decoder::supports_10bit(*config.codec);
-		res.supported_codecs = {{.codec = *config.codec, .supports_10bit = supports_10bit}};
-		switch (*config.codec)
+		const bool supports_10bit = decoder::supports_10bit(*pc.codec);
+		res.supported_codecs = {{.codec = *pc.codec, .supports_10bit = supports_10bit}};
+		switch (*pc.codec)
 		{
 			case h264:
 			case raw:
@@ -145,9 +146,10 @@ from_headset::stream_settings scenes::stream::stream_settings()
 	return res;
 }
 
-std::shared_ptr<scenes::stream> scenes::stream::create(std::unique_ptr<wivrn_session> network_session, float guessed_fps, std::string server_name, scene & parent_scene, bool video_active)
+std::shared_ptr<scenes::stream> scenes::stream::create(std::unique_ptr<wivrn_session> network_session, float guessed_fps, std::string server_name, std::string cookie, scene & parent_scene, bool video_active)
 {
 	std::shared_ptr<stream> self{new stream{std::move(server_name), parent_scene}};
+	self->cookie = std::move(cookie);
 	self->video_active = video_active;
 	self->wanted_active = video_active;
 	self->network_session = std::move(network_session);
@@ -193,7 +195,7 @@ std::shared_ptr<scenes::stream> scenes::stream::create(std::unique_ptr<wivrn_ses
 			info.settings.preferred_refresh_rate = guessed_fps;
 		}
 
-		info.settings.bitrate_bps = config.bitrate_bps;
+		info.settings.bitrate_bps = self->pc_settings().bitrate_bps;
 		info.settings.mirror_gamepad = config.forward_gamepad;
 		info.settings.enabled_body_parts = config.body_part_mask;
 

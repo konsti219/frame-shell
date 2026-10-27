@@ -39,6 +39,7 @@ class system;
 } // namespace xr
 
 // key <-> member serialization descriptor, defined in configuration.cpp
+template <typename>
 struct config_field;
 
 enum class feature
@@ -59,6 +60,23 @@ enum class posture
 class configuration
 {
 public:
+	// How a PC streams to the headset; each PC has its own
+	struct stream_config
+	{
+		float resolution_scale = 1.2;
+		std::optional<wivrn::video_codec> codec;
+		uint32_t bitrate_bps = 50'000'000;
+		// Frame shell PC desktop streams: kbit/s per 1920×1080 of pixels (scaled per monitor), H.264 or HEVC
+		uint32_t desktop_bitrate_kbps = 16'000;
+		wivrn::video_codec desktop_codec = wivrn::video_codec::h264;
+		// Parity the PC adds to each video frame, in percent of its shards (from_headset::link_settings)
+		uint32_t fec_percent = 10;
+		// How much earlier than the slowest 0.5% of frames need the PC aims to have frames decoded (from_headset::link_settings)
+		uint32_t frame_margin_ms = 1;
+		// Streamed size as a fraction of the render size; unset: the default for the headset's features
+		std::optional<float> stream_scale;
+	};
+
 	struct server_data
 	{
 		bool autoconnect;
@@ -68,21 +86,12 @@ public:
 
 		wivrn_discover::service service;
 		bool remembered = false;
+		stream_config stream;
 	};
 
 	std::map<std::string, server_data> servers;
 	float preferred_refresh_rate = 0;
 	std::optional<float> minimum_refresh_rate;
-	float resolution_scale = 1.2;
-	std::optional<wivrn::video_codec> codec;
-	uint32_t bitrate_bps = 50'000'000;
-	// Frame shell PC desktop streams: kbit/s per 1920×1080 of pixels (scaled per monitor), H.264 or HEVC
-	uint32_t desktop_bitrate_kbps = 16'000;
-	wivrn::video_codec desktop_codec = wivrn::video_codec::h264;
-	// Parity the PC adds to each video frame, in percent of its shards (from_headset::link_settings)
-	uint32_t fec_percent = 10;
-	// How much earlier than the slowest 0.5% of frames need the PC aims to have frames decoded (from_headset::link_settings)
-	uint32_t frame_margin_ms = 1;
 	// Steam Frame lids and pupils from Babble's eye model plus per-eye gaze, sent for VRChat's native eye and face tracking on the PC
 	bool eye_expressions = true;
 	// One eye model update per this many camera frames
@@ -154,13 +163,13 @@ public:
 private:
 	mutable std::mutex mutex;
 	std::map<feature, bool> features;
-	std::optional<float> stream_scale;
 	float height_offset_standing = default_height_offset_standing;
 	float height_offset_seated = default_height_offset_seated;
 	posture default_posture = posture::standing;
 
 	// table of scalar settings shared by save()/load(); non-scalar settings are explicit
-	static const std::vector<config_field> & config_fields();
+	static const std::vector<config_field<configuration>> & config_fields();
+	static const std::vector<config_field<stream_config>> & stream_fields();
 
 public:
 	configuration(xr::system &, xr::session &);
@@ -168,13 +177,19 @@ public:
 
 	void save();
 
-	void set_stream_scale(float);
-	float get_stream_scale() const;
-	float chosen_stream_scale() const
+	// A PC's stream settings, by its key in servers
+	stream_config & stream(const std::string & cookie)
 	{
-		return stream_scale.value_or(get_default_stream_scale());
+		return servers[cookie].stream;
 	}
-	float max_stream_scale() const;
+
+	static void set_stream_scale(stream_config &, float);
+	float get_stream_scale(const stream_config &) const;
+	float chosen_stream_scale(const stream_config & stream) const
+	{
+		return stream.stream_scale.value_or(get_default_stream_scale());
+	}
+	float max_stream_scale(const stream_config &) const;
 	float get_default_stream_scale() const;
 
 	float get_height_offset() const;

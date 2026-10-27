@@ -19,11 +19,12 @@
 
 #pragma once
 
+#include "configuration.h"
+
 #include <cstdint>
 #include <functional>
 #include <optional>
 
-class configuration;
 class imgui_context;
 
 namespace xr
@@ -54,6 +55,9 @@ struct settings_context
 	bool in_game = false;
 
 	std::optional<bool> server_hid_forwarding;
+
+	// The connected PC's stream settings; none in the lobby
+	configuration::stream_config * stream = nullptr;
 
 	// in-stream hooks, empty in the lobby
 	std::function<void()> on_streaming_changed;          // refresh rate / spacewarp / bitrate

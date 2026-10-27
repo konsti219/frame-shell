@@ -407,15 +407,19 @@ void scenes::lobby::update_server_list()
 		if (server == servers.end())
 		{
 			// Newly discovered server: add it to the list
-			servers.emplace(
-			        cookie,
-			        configuration::server_data{
-			                .autoconnect = false,
-			                .manual = false,
-			                .visible = true,
-			                .compatible = compatible,
-			                .service = service,
-			        });
+			configuration::server_data data{
+			        .autoconnect = false,
+			        .manual = false,
+			        .visible = true,
+			        .compatible = compatible,
+			        .service = service,
+			};
+#ifndef __ANDROID__
+			// It streams like the PC presenting VR until set up otherwise
+			if (auto active = servers.find(active_cookie); active != servers.end())
+				data.stream = active->second.stream;
+#endif
+			servers.emplace(cookie, std::move(data));
 		}
 		else
 		{
@@ -893,7 +897,7 @@ void scenes::lobby::render(const XrFrameState & frame_state)
 		{
 			auto session = async_session.get();
 			if (session)
-				next_scene = stream::create(std::move(session), 1'000'000'000.f / frame_state.predictedDisplayPeriod, server_name, *this);
+				next_scene = stream::create(std::move(session), 1'000'000'000.f / frame_state.predictedDisplayPeriod, server_name, connecting_cookie, *this);
 
 			async_session.reset();
 		}
@@ -1555,10 +1559,10 @@ void scenes::lobby::render_shell(const XrFrameState & frame_state)
 			}
 			const float fps = 1'000'000'000.f / frame_state.predictedDisplayPeriod;
 			if (session and next_scene)
-				standby.push_back({connecting_cookie, stream::create(std::move(session), fps, connecting_name, *this, false)});
+				standby.push_back({connecting_cookie, stream::create(std::move(session), fps, connecting_name, connecting_cookie, *this, false)});
 			else if (session)
 			{
-				next_scene = stream::create(std::move(session), fps, server_name, *this);
+				next_scene = stream::create(std::move(session), fps, server_name, connecting_cookie, *this);
 				active_cookie = connecting_cookie;
 			}
 
@@ -1698,9 +1702,23 @@ void scenes::lobby::handle_shell_command(const std::string & command)
 {
 	spdlog::info("Shell command: {}", command);
 	auto & config = application::get_config();
+	// "setting <PC> <key> <value>": the PC's own stream settings, sent to it while connected
 	if (command.starts_with("setting "))
 	{
-		frame_shell::apply_setting(config, command);
+		std::string_view rest = std::string_view(command).substr(8);
+		auto separator = rest.find(' ');
+		if (separator == std::string_view::npos)
+			return;
+		std::string cookie(rest.substr(0, separator));
+		std::string_view setting = rest.substr(separator + 1);
+		std::shared_ptr<stream> scene = cookie == active_cookie ? next_scene : nullptr;
+		for (auto & pc: standby)
+			if (pc.cookie == cookie)
+				scene = pc.scene;
+		if (setting.starts_with("resolution ") and scene and scene->resolution_locked())
+			return;
+		if (frame_shell::apply_setting(config, config.stream(cookie), setting) and scene)
+			scene->setting_changed(setting.substr(0, setting.find(' ')));
 		return;
 	}
 	auto argument = [&](size_t index) -> std::string {
@@ -1896,7 +1914,10 @@ void scenes::lobby::publish_hosts_state()
 		return it == service.txt.end() ? "" : it->second.c_str();
 	};
 	const uint32_t selected = next_scene ? next_scene->shell_source_id() : 0;
-	for (const auto & [id, data]: application::get_config().servers)
+	auto & config = application::get_config();
+	std::vector<std::string> settings;
+	settings.reserve(config.servers.size());
+	for (const auto & [id, data]: config.servers)
 	{
 		const auto other = std::ranges::find_if(standby, [&](const auto & pc) { return pc.cookie == id; });
 		const auto scene = id == active_cookie ? next_scene : other != standby.end() ? other->scene
@@ -1912,8 +1933,9 @@ void scenes::lobby::publish_hosts_state()
 		const char * name = text(data.service, "pc_name");
 		if (!*name)
 			name = data.service.name.c_str();
-		pcs.push_back({.id = id.c_str(), .name = name, .hostname = data.service.hostname.c_str(), .build = text(data.service, "build"), .version = text(data.service, "version"), .detail = detail, .source = scene ? scene->shell_source_id() : 0, .connection = stage, .available = data.visible, .compatible = data.compatible, .autoconnect = data.autoconnect, .manual = data.manual, .background_pinned = id == pinned_cookie});
-		signature += fmt::format("{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{};", id, name, data.service.hostname, text(data.service, "build"), text(data.service, "version"), detail, pcs.back().source, int(stage), data.visible, data.compatible, data.autoconnect, data.manual);
+		settings.push_back(frame_shell::settings_json(config, data.stream));
+		pcs.push_back({.id = id.c_str(), .name = name, .hostname = data.service.hostname.c_str(), .build = text(data.service, "build"), .version = text(data.service, "version"), .detail = detail, .settings = settings.back().c_str(), .source = scene ? scene->shell_source_id() : 0, .connection = stage, .available = data.visible, .compatible = data.compatible, .autoconnect = data.autoconnect, .manual = data.manual, .background_pinned = id == pinned_cookie});
+		signature += fmt::format("{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{};", id, name, data.service.hostname, text(data.service, "build"), text(data.service, "version"), detail, pcs.back().source, int(stage), data.visible, data.compatible, data.autoconnect, data.manual, settings.back());
 	}
 	signature += std::to_string(selected) + pinned_cookie;
 	if (signature != hosts_signature)
@@ -1943,11 +1965,10 @@ void scenes::lobby::publish_shell_state()
 		detail = *async_error;
 	}
 
-	std::string json = fmt::format(R"({{"state":{},"server":{},"detail":{},"settings":{}}})",
+	std::string json = fmt::format(R"({{"state":{},"server":{},"detail":{}}})",
 	                               json_string(state),
 	                               json_string(server_name),
-	                               json_string(detail),
-	                               frame_shell::settings_json(application::get_config()));
+	                               json_string(detail));
 
 	if (json != shell_state)
 	{

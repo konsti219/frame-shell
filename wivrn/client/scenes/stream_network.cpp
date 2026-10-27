@@ -115,8 +115,8 @@ void scenes::stream::send_link_settings()
 {
 #ifndef __ANDROID__
 	network_session->send_control(from_headset::link_settings{
-	        .fec_percent = uint8_t(std::min<uint32_t>(application::get_config().fec_percent, 50)),
-	        .frame_margin_ms = uint8_t(std::min<uint32_t>(application::get_config().frame_margin_ms, 20)),
+	        .fec_percent = uint8_t(std::min<uint32_t>(pc_settings().fec_percent, 50)),
+	        .frame_margin_ms = uint8_t(std::min<uint32_t>(pc_settings().frame_margin_ms, 20)),
 	});
 #endif
 }
@@ -155,8 +155,8 @@ void scenes::stream::process_packets()
                 if (auto now = std::chrono::steady_clock::now(); not video_active and now - standby_keepalive > std::chrono::milliseconds(250)) {
                     standby_keepalive = now;
                     network_session->send_stream(from_headset::link_settings{
-                            .fec_percent = uint8_t(std::min<uint32_t>(application::get_config().fec_percent, 50)),
-                            .frame_margin_ms = uint8_t(std::min<uint32_t>(application::get_config().frame_margin_ms, 20)),
+                            .fec_percent = uint8_t(std::min<uint32_t>(pc_settings().fec_percent, 50)),
+                            .frame_margin_ms = uint8_t(std::min<uint32_t>(pc_settings().frame_margin_ms, 20)),
                     });
                 }
                 // Here rather than in render: while no PC app runs the stream scene is stalled behind the lobby and
@@ -432,7 +432,31 @@ void scenes::stream::operator()(to_headset::desktop_surface && surface)
 #ifndef __ANDROID__
 static bool is_stream_command(std::string_view command)
 {
-	return command == "disconnect" or command.starts_with("present ") or command.starts_with("start_app ") or command.starts_with("set_active_app ") or command.starts_with("setting ") or command.starts_with("stop_app ");
+	return command == "disconnect" or command.starts_with("present ") or command.starts_with("start_app ") or command.starts_with("set_active_app ") or command.starts_with("stop_app ");
+}
+
+bool scenes::stream::resolution_locked()
+{
+	return not frame_shell::activity(shell_source).known or not frame_shell::activity(shell_source).defaults.empty();
+}
+
+void scenes::stream::setting_changed(std::string_view key)
+{
+	const auto & config = application::get_config();
+	if (key == "fec" or key == "frame_margin")
+		send_link_settings();
+	// Size and codec changes rebuild the server's encoders
+	else if (key == "resolution" or key == "foveation" or key == "codec")
+		network_session->send_control(stream_settings());
+	else if (key == "bitrate")
+		network_session->send_control(from_headset::settings_changed{
+		        .preferred_refresh_rate = config.preferred_refresh_rate,
+		        .minimum_refresh_rate = config.minimum_refresh_rate.value_or(0),
+		        .fps_divider = config.fps_divider,
+		        .bitrate_bps = pc_settings().bitrate_bps,
+		        .mirror_gamepad = config.forward_gamepad,
+		        .enabled_body_parts = config.body_part_mask,
+		});
 }
 
 void scenes::stream::poll_shell()
@@ -447,33 +471,7 @@ void scenes::stream::poll_shell()
 		if (command->starts_with(prefix))
 			command->erase(0, prefix.size());
 		spdlog::info("Shell command: {}", *command);
-		if (command->starts_with("setting "))
-		{
-			if (command->starts_with("setting resolution ") &&
-			    (!frame_shell::activity(shell_source).known || !frame_shell::activity(shell_source).defaults.empty()))
-				continue;
-			auto & config = application::get_config();
-			if (not frame_shell::apply_setting(config, *command))
-				continue;
-			if (command->starts_with("setting fec ") or command->starts_with("setting frame_margin "))
-			{
-				send_link_settings();
-				continue;
-			}
-			// Size and codec changes rebuild the server's encoders
-			if (command->starts_with("setting resolution ") or command->starts_with("setting foveation ") or command->starts_with("setting codec "))
-				network_session->send_control(stream_settings());
-			else
-				network_session->send_control(from_headset::settings_changed{
-				    .preferred_refresh_rate = config.preferred_refresh_rate,
-				    .minimum_refresh_rate = config.minimum_refresh_rate.value_or(0),
-				    .fps_divider = config.fps_divider,
-				    .bitrate_bps = config.bitrate_bps,
-				    .mirror_gamepad = config.forward_gamepad,
-				    .enabled_body_parts = config.body_part_mask,
-				});
-		}
-		else if (*command == "disconnect")
+		if (*command == "disconnect")
 		{
 			frame_shell::user_disconnected = true;
 			exit();
@@ -543,7 +541,7 @@ void scenes::stream::poll_shell()
 		json += fmt::format(R"({}{{"id":{},"name":{},"active":{},"overlay":{}}})", first ? "" : ",", app.id, json_string(app.name), app.active, app.overlay);
 		first = false;
 	}
-	json += R"(],"settings":)" + frame_shell::settings_json(application::get_config()) + R"(,"video_debug":)" + shell_video_debug + R"(,"eyes_debug":)" + shell_eyes_debug;
+	json += R"(],"settings":)" + frame_shell::settings_json(application::get_config(), pc_settings()) + R"(,"video_debug":)" + shell_video_debug + R"(,"eyes_debug":)" + shell_eyes_debug;
 	{
 		std::scoped_lock lock(shell_vr_debug_mutex);
 		json += R"(,"vr_debug":)" + shell_vr_debug;
