@@ -1263,7 +1263,6 @@ impl<T> OverlayWindowManager<T> {
             }
             self.passive_overlays.clear();
 
-            let mut num_overlays = 0;
             let ws = &mut self.sets[new_set];
             for (id, data) in self.overlays.iter_mut().filter(|(_, d)| !d.config.global) {
                 if let Some(state) = ws.overlays.remove(id) {
@@ -1272,30 +1271,10 @@ impl<T> OverlayWindowManager<T> {
                     if !keep_transforms {
                         data.config.reset(app, false);
                     }
-                    if !matches!(
-                        data.config.category,
-                        OverlayCategory::Internal
-                            | OverlayCategory::Keyboard
-                            | OverlayCategory::Dashboard
-                    ) {
-                        num_overlays += 1;
-                    }
                 }
             }
             ws.overlays.clear();
-            // Saved overlays that don't exist yet (screens still connecting) will fill the set
-            let awaiting_overlays = !ws.inactive_overlays.is_empty();
             self.restore_set = new_set;
-
-            if !self.edit_mode && self.initialized && num_overlays < 1 && !awaiting_overlays {
-                Toast::new(
-                    ToastTopic::System,
-                    Some(Translation::from_translation_key("TOAST.EMPTY_SET")),
-                    Translation::from_translation_key("TOAST.LETS_ADD_OVERLAYS"),
-                )
-                .with_timeout(3.)
-                .submit(app);
-            }
         }
         self.current_set = new_set;
 
