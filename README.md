@@ -54,7 +54,7 @@ revision and Frame controller patches as the PC package (`nix/xrizer.json`). Bot
 clients are built by `just build-headset` and installed by `just deploy`; SteamVR's global runtime remains unchanged.
 The dashboard's "Battery / performance" menu shows the battery as SteamVR reads it (Valve's charger service in
 `/run/deckardcharger`) and switches between two performance modes: "Streaming optimized" (frame-monado's GPU cap,
-578 MHz) and "Performance" (uncapped, for native games). The mode is `frame.gpu_max_mhz` in Monado's config, applied
+578 MHz) and "Standard" (uncapped, for native games). The mode is `frame.gpu_max_mhz` in Monado's config, applied
 by its `session-power`; the shell applies it again when something lifts it (Steam sets the GPU level to auto when it
 starts). On battery the shell warns at 10, 5 and 1 %.
 

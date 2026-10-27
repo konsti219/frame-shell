@@ -762,7 +762,7 @@ impl<T: 'static> Frontend<T> {
 		)?;
 		for (id, mode) in [
 			("mode_streaming", frame_power::PerformanceMode::StreamingOptimized),
-			("mode_performance", frame_power::PerformanceMode::Performance),
+			("mode_standard", frame_power::PerformanceMode::Standard),
 		] {
 			self.tasks.handle_button(
 				&state.fetch_component_as::<ComponentButton>(id)?,
@@ -843,7 +843,7 @@ impl<T: 'static> Frontend<T> {
 		let mode = frame_power::performance_mode();
 		for (id, button_mode) in [
 			("mode_streaming", frame_power::PerformanceMode::StreamingOptimized),
-			("mode_performance", frame_power::PerformanceMode::Performance),
+			("mode_standard", frame_power::PerformanceMode::Standard),
 		] {
 			state
 				.fetch_component_as::<ComponentButton>(id)?

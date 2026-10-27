@@ -9,7 +9,7 @@
       </div>
       <label text="Performance" weight="bold" size="14" />
       <Button id="mode_streaming" text="Streaming optimized" width="100%" />
-      <Button id="mode_performance" text="Performance" width="100%" />
+      <Button id="mode_standard" text="Standard" width="100%" />
     </div>
   </elements>
 </layout>

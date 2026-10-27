@@ -95,14 +95,14 @@ pub enum PerformanceMode {
 	/// The frame shell's tuning for PC streaming: GPU capped at 578 MHz
 	StreamingOptimized,
 	/// Native games: GPU uncapped
-	Performance,
+	Standard,
 }
 
 impl PerformanceMode {
 	const fn gpu_max_mhz(self) -> u32 {
 		match self {
 			Self::StreamingOptimized => 578,
-			Self::Performance => 903,
+			Self::Standard => 903,
 		}
 	}
 }
@@ -129,7 +129,7 @@ fn configured_gpu_mhz() -> u64 {
 
 pub fn performance_mode() -> PerformanceMode {
 	if configured_gpu_mhz() > u64::from(PerformanceMode::StreamingOptimized.gpu_max_mhz()) {
-		PerformanceMode::Performance
+		PerformanceMode::Standard
 	} else {
 		PerformanceMode::StreamingOptimized
 	}
