@@ -1,6 +1,6 @@
 //! The Steam Frame's battery, as SteamVR reads it (Valve's charger service in /run/deckardcharger), its power draw
-//! from the board's power monitors, and the frame shell's performance modes: Monado's GPU clock cap (`frame.gpu_max_mhz` in its config), which its session-power
-//! script applies.
+//! from the board's power monitors, and the frame shell's performance modes: a GPU clock cap the shell keeps applied
+//! (frame-monado's monado.service lifts it when the session ends).
 
 use std::path::PathBuf;
 
@@ -111,35 +111,23 @@ fn home() -> PathBuf {
 	PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
 }
 
-fn monado_config_path() -> PathBuf {
-	home().join(".config/monado/config_v0.json")
+fn mode_path() -> PathBuf {
+	home().join(".config/frame-shell/performance-mode")
 }
 
-fn read_monado_config() -> serde_json::Value {
-	std::fs::read(monado_config_path())
-		.ok()
-		.and_then(|bytes| serde_json::from_slice(&bytes).ok())
-		.unwrap_or_else(|| serde_json::json!({}))
-}
-
-/// The GPU cap in Monado's config, as session-power reads it
-fn configured_gpu_mhz() -> u64 {
-	read_monado_config()["frame"]["gpu_max_mhz"].as_u64().unwrap_or(578)
-}
-
+/// "streaming" or "standard" in the mode file, streaming without one
 pub fn performance_mode() -> PerformanceMode {
-	if configured_gpu_mhz() > u64::from(PerformanceMode::StreamingOptimized.gpu_max_mhz()) {
-		PerformanceMode::Standard
-	} else {
-		PerformanceMode::StreamingOptimized
+	match std::fs::read_to_string(mode_path()).as_deref().map(str::trim) {
+		Ok("standard") => PerformanceMode::Standard,
+		_ => PerformanceMode::StreamingOptimized,
 	}
 }
 
 const GPU: &str = "/sys/class/devfreq/3d00000.gpu";
 
 /// The GPU's clock limit (Hz) for a cap: the highest available one within it
-fn gpu_limit(mhz: u64) -> Option<u64> {
-	let cap = mhz * 1_000_000;
+fn gpu_limit(mhz: u32) -> Option<u64> {
+	let cap = u64::from(mhz) * 1_000_000;
 	std::fs::read_to_string(format!("{GPU}/available_frequencies"))
 		.ok()?
 		.split_whitespace()
@@ -148,38 +136,41 @@ fn gpu_limit(mhz: u64) -> Option<u64> {
 		.max()
 }
 
-fn apply_performance_mode() -> anyhow::Result<()> {
-	let status = std::process::Command::new(home().join("sf/frame-monado/session-power"))
-		.arg("start")
-		.status()?;
-	anyhow::ensure!(status.success(), "session-power failed: {status}");
+fn write_gpu_limit(hz: u64) -> anyhow::Result<()> {
+	use std::io::Write;
+	let mut tee = std::process::Command::new("sudo")
+		.args(["-n", "tee", &format!("{GPU}/max_freq")])
+		.stdin(std::process::Stdio::piped())
+		.stdout(std::process::Stdio::null())
+		.spawn()?;
+	tee.stdin.take().unwrap().write_all(hz.to_string().as_bytes())?;
+	let status = tee.wait()?;
+	anyhow::ensure!(status.success(), "sudo tee max_freq failed: {status}");
 	Ok(())
 }
 
-/// Applies the mode again when something else changed the GPU's limit (Steam sets its performance level to auto,
-/// which lifts the cap)
+/// Applies the mode when the GPU's limit differs: at the shell's start, and when something else changed it (Steam
+/// sets its performance level to auto, which lifts the cap)
 pub fn enforce_performance_mode() -> anyhow::Result<()> {
-	let Some(limit) = gpu_limit(configured_gpu_mhz()) else {
+	let Some(limit) = gpu_limit(performance_mode().gpu_max_mhz()) else {
 		return Ok(());
 	};
 	let current = std::fs::read_to_string(format!("{GPU}/max_freq"))?.trim().parse::<u64>()?;
 	if current != limit {
-		log::info!("GPU limit {current} Hz instead of {limit} Hz: applying the performance mode again");
-		apply_performance_mode()?;
+		log::info!("GPU limit {current} Hz instead of {limit} Hz: applying the performance mode");
+		write_gpu_limit(limit)?;
 	}
 	Ok(())
 }
 
-/// Stores the mode in Monado's config (so the next session starts with it) and applies it now
+/// Stores the mode (so the next session starts with it) and applies it now
 pub fn set_performance_mode(mode: PerformanceMode) -> anyhow::Result<()> {
-	let mut config = read_monado_config();
-	if !config.is_object() {
-		config = serde_json::json!({});
-	}
-	if !config["frame"].is_object() {
-		config["frame"] = serde_json::json!({});
-	}
-	config["frame"]["gpu_max_mhz"] = mode.gpu_max_mhz().into();
-	std::fs::write(monado_config_path(), serde_json::to_vec_pretty(&config)?)?;
-	apply_performance_mode()
+	let path = mode_path();
+	std::fs::create_dir_all(path.parent().unwrap())?;
+	let name = match mode {
+		PerformanceMode::StreamingOptimized => "streaming",
+		PerformanceMode::Standard => "standard",
+	};
+	std::fs::write(path, name)?;
+	enforce_performance_mode()
 }
