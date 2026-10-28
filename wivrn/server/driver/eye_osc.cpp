@@ -148,7 +148,8 @@ void wivrn::eye_osc::send(const from_headset::frame_eyes & eyes)
 		std::array gaze{lp, ly, rp, ry};
 
 		float dt = (eyes.timestamp - last_gaze) * 1e-9f;
-		bool restart = last_gaze == 0 or dt > gaze_reset_s;
+		// Also when time went back: the headset's XrTime restarts with its runtime
+		bool restart = last_gaze == 0 or dt < 0 or dt > gaze_reset_s;
 		for (size_t i = 0; i < gaze.size(); i++)
 		{
 			float v = gaze[i] / max_gaze_deg;
