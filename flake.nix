@@ -11,19 +11,24 @@
       flake = false;
     };
   };
-  outputs = { self, nixpkgs, flake-utils, crane, rust-overlay, host-monado }: let
+  outputs = {
+    self,
+    nixpkgs,
+    flake-utils,
+    crane,
+    rust-overlay,
+    host-monado,
+  }: let
     system = "x86_64-linux";
-    pkgs = import nixpkgs { inherit system; overlays = [ (import rust-overlay) ]; };
+    pkgs = nixpkgs.legacyPackages.${system};
     wayvr = (import ./wayvr/flake.nix).outputs {
       inherit nixpkgs flake-utils crane rust-overlay;
-      self = { outPath = ./wayvr; };
+      self = {outPath = ./wayvr;};
     };
-    rustToolchain = pkgs.rust-bin.stable.latest.default;
-    rustPlatform = pkgs.makeRustPlatform { cargo = rustToolchain; rustc = rustToolchain; };
-    gstPlugins = with pkgs.gst_all_1; [ gstreamer.out gst-plugins-base gst-plugins-good gst-plugins-bad gst-plugins-ugly pkgs.pipewire ];
-    hostLibs = with pkgs; [ dbus pipewire wayland libxkbcommon gst_all_1.gstreamer gst_all_1.gst-plugins-base ];
+    gstPlugins = with pkgs.gst_all_1; [gstreamer.out gst-plugins-base gst-plugins-good gst-plugins-bad gst-plugins-ugly pkgs.pipewire];
+    hostLibs = with pkgs; [dbus pipewire wayland libxkbcommon gst_all_1.gstreamer gst_all_1.gst-plugins-base];
     # The PC host services, a static library linked into the server
-    frame-host = rustPlatform.buildRustPackage {
+    frame-host = pkgs.rustPlatform.buildRustPackage {
       pname = "frame-host";
       version = "0.1.0";
       src = ./desktop;
@@ -31,7 +36,7 @@
       postPatch = ''
         substituteInPlace Cargo.toml --replace-fail '../wayvr/' '${./wayvr}/'
       '';
-      nativeBuildInputs = [ pkgs.pkg-config pkgs.rustPlatform.bindgenHook ];
+      nativeBuildInputs = [pkgs.pkg-config pkgs.rustPlatform.bindgenHook];
       buildInputs = hostLibs;
       doCheck = false;
       installPhase = ''
@@ -40,17 +45,15 @@
         runHook postInstall
       '';
     };
-    craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
     # PC-side WayVR IPC client, built from our tree so it speaks the headset's protocol
-    ipcClient = pname: craneLib.buildPackage {
-      inherit pname;
+    wayvrctl = pkgs.rustPlatform.buildRustPackage {
+      pname = "wayvrctl";
       version = "0.1.0";
       src = ./wayvr;
-      strictDeps = true;
-      cargoExtraArgs = "--package ${pname}";
+      cargoHash = "sha256-z2NfEYrpzXP5IA0lQ4vFBEbi0dBH/pmxiP/1lWvuo5A=";
+      cargoBuildFlags = ["--package" "wayvrctl"];
       doCheck = false;
     };
-    wayvrctl = ipcClient "wayvrctl";
     xrizerSource = builtins.fromJSON (builtins.readFile ./nix/xrizer.json);
     # OpenVR games on WiVRn, with the Frame's controllers
     xrizer = pkgs.xrizer.overrideAttrs (finalAttrs: old: {
@@ -62,13 +65,13 @@
         inherit (finalAttrs) src patches;
         hash = xrizerSource.cargoHash;
       };
-      patches = (old.patches or [ ]) ++ map (name: ./nix + "/${name}") xrizerSource.patches;
+      patches = (old.patches or []) ++ map (name: ./nix + "/${name}") xrizerSource.patches;
       postPatch = ''
         substituteInPlace src/graphics_backends/gl.rs \
           --replace-fail 'libGLX.so.0' '${pkgs.lib.getLib pkgs.libglvnd}/lib/libGLX.so.0'
       '';
       # main derives its version from git, which the source tarball lacks
-      env = (old.env or { }) // { XRIZER_VERSION = "${finalAttrs.version}-frame-shell"; };
+      env = (old.env or {}) // {XRIZER_VERSION = "${finalAttrs.version}-frame-shell";};
     });
     server = pkgs.wivrn.overrideAttrs (old: {
       pname = "wivrn-frame-shell";
@@ -78,8 +81,11 @@
       postPatch = "";
       postUnpack = "";
       monado = host-monado;
-      cmakeFlags = builtins.filter (flag: !(builtins.any (prefix: pkgs.lib.hasPrefix prefix flag)
-          [ "-DFETCHCONTENT_SOURCE_DIR_MONADO" "-DGIT_TAG:" "-DGIT_DESC:" "-DGIT_COMMIT:" ])) old.cmakeFlags
+      cmakeFlags =
+        builtins.filter (flag:
+          !(builtins.any (prefix: pkgs.lib.hasPrefix prefix flag)
+            ["-DFETCHCONTENT_SOURCE_DIR_MONADO" "-DGIT_TAG:" "-DGIT_DESC:" "-DGIT_COMMIT:"]))
+        old.cmakeFlags
         ++ [
           (pkgs.lib.cmakeFeature "GIT_DESC" "7e0bf5e")
           (pkgs.lib.cmakeFeature "GIT_COMMIT" "7e0bf5efc1f4298b433eff1c6f3d81a1bc401b44")
@@ -88,11 +94,13 @@
           (pkgs.lib.cmakeFeature "FRAME_ABI_INCLUDE_DIR" "${./wayvr/frame-abi/include}")
         ];
       # CompileGLSL.cmake embeds shaders via hexdump; the dashboard needs kirigami-addons' formcard
-      nativeBuildInputs = old.nativeBuildInputs ++ [ pkgs.makeWrapper pkgs.unixtools.hexdump ];
-      buildInputs = old.buildInputs ++ [ pkgs.kdePackages.kirigami-addons ] ++ hostLibs;
-      postFixup = (old.postFixup or "") + ''
-        wrapProgram $out/bin/wivrn-server --prefix GST_PLUGIN_SYSTEM_PATH_1_0 : ${pkgs.lib.makeSearchPath "lib/gstreamer-1.0" gstPlugins}
-      '';
+      nativeBuildInputs = old.nativeBuildInputs ++ [pkgs.makeWrapper pkgs.unixtools.hexdump];
+      buildInputs = old.buildInputs ++ [pkgs.kdePackages.kirigami-addons] ++ hostLibs;
+      postFixup =
+        (old.postFixup or "")
+        + ''
+          wrapProgram $out/bin/wivrn-server --prefix GST_PLUGIN_SYSTEM_PATH_1_0 : ${pkgs.lib.makeSearchPath "lib/gstreamer-1.0" gstPlugins}
+        '';
     });
   in {
     nixosModules.host = import ./nix/host-module.nix self;
@@ -101,10 +109,10 @@
       inherit server frame-host xrizer wayvrctl;
     };
     devShells.${system}.default = pkgs.mkShell {
-      inputsFrom = [ server wayvr.devShells.${system}.default ];
+      inputsFrom = [server wayvr.devShells.${system}.default];
       GST_PLUGIN_SYSTEM_PATH_1_0 = pkgs.lib.makeSearchPath "lib/gstreamer-1.0" gstPlugins;
       LIBVA_DRIVERS_PATH = "${pkgs.mesa}/lib/dri";
-      packages = with pkgs; [ cmake ninja gdb pkg-config python3 shellcheck gst_all_1.gstreamer gst_all_1.gst-plugins-base ];
+      packages = with pkgs; [cmake ninja gdb pkg-config python3 shellcheck gst_all_1.gstreamer gst_all_1.gst-plugins-base];
     };
   };
 }
