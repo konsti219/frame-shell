@@ -1629,6 +1629,19 @@ void scenes::lobby::render_shell(const XrFrameState & frame_state)
 		autoconnect_enabled = true;
 	}
 
+	for (auto it = awaiting_discovery.begin(); it != awaiting_discovery.end();)
+	{
+		auto server = application::get_config().servers.find(it->first);
+		if (server == application::get_config().servers.end() or server->second.visible or now >= it->second)
+		{
+			if (server != application::get_config().servers.end())
+				requested_connections.insert(it->first);
+			it = awaiting_discovery.erase(it);
+		}
+		else
+			++it;
+	}
+
 	if (!async_session.valid() && !requested_connections.empty())
 	{
 		auto cookie = *requested_connections.begin();
@@ -1738,13 +1751,23 @@ void scenes::lobby::handle_shell_command(const std::string & command)
 		auto cookie = argument(0);
 		auto server = config.servers.find(cookie);
 		bool connected = cookie == active_cookie or std::ranges::any_of(standby, [&](auto & pc) { return pc.cookie == cookie; });
-		if (server != config.servers.end() && !connected && async_session.valid() && cookie != connecting_cookie)
+		// Not found yet: its saved hostname may resolve to a slower route (Tailscale) than discovery would give
+		if (server != config.servers.end() and not connected and not server->second.visible and not server->second.manual and
+		    cookie != connecting_cookie)
+		{
+			awaiting_discovery.try_emplace(cookie, std::chrono::steady_clock::now() + std::chrono::seconds(5));
+			autoconnect_enabled = false;
+			shell_autoconnect_retry = {};
+			standby_retry.erase(cookie);
+			connection_errors.erase(cookie);
+		}
+		else if (server != config.servers.end() && !connected && async_session.valid() && cookie != connecting_cookie)
 		{
 			requested_connections.insert(cookie);
 			standby_retry.erase(cookie);
 			connection_errors.erase(cookie);
 		}
-		if (server != config.servers.end() and not async_session.valid() and not connected)
+		else if (server != config.servers.end() and not async_session.valid() and not connected)
 		{
 			autoconnect_enabled = false;
 			shell_autoconnect_retry = {};
@@ -1771,6 +1794,7 @@ void scenes::lobby::handle_shell_command(const std::string & command)
 		// A PC on standby, or one being connected; auto-connect leaves it alone until connected again
 		auto cookie = argument(0);
 		requested_connections.erase(cookie);
+		awaiting_discovery.erase(cookie);
 		if (pinned_cookie == cookie)
 			pinned_cookie.clear();
 		standby_retry[cookie] = std::chrono::steady_clock::time_point::max();
@@ -1794,6 +1818,7 @@ void scenes::lobby::handle_shell_command(const std::string & command)
 	else if (command == "disconnect")
 	{
 		requested_connections.clear();
+		awaiting_discovery.clear();
 		pinned_cookie.clear();
 		autoconnect_enabled = false;
 		shell_autoconnect_retry = {};
@@ -1838,6 +1863,7 @@ void scenes::lobby::handle_shell_command(const std::string & command)
 	{
 		auto cookie = argument(0);
 		requested_connections.erase(cookie);
+		awaiting_discovery.erase(cookie);
 		if (pinned_cookie == cookie)
 			pinned_cookie.clear();
 		if (cookie == active_cookie && next_scene)
@@ -1922,7 +1948,7 @@ void scenes::lobby::publish_hosts_state()
 		const auto other = std::ranges::find_if(standby, [&](const auto & pc) { return pc.cookie == id; });
 		const auto scene = id == active_cookie ? next_scene : other != standby.end() ? other->scene
 		                                                                                                 : nullptr;
-		const bool connecting = (async_session.valid() && id == connecting_cookie) || requested_connections.contains(id);
+		const bool connecting = (async_session.valid() && id == connecting_cookie) || requested_connections.contains(id) || awaiting_discovery.contains(id);
 		const auto error = connection_errors.find(id);
 		const bool failed = error != connection_errors.end();
 		const char * detail = failed ? error->second.c_str() : requested_connections.contains(id) ? "Waiting for another connection"

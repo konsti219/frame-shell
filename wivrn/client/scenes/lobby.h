@@ -290,6 +290,8 @@ class lobby : public scene_impl<lobby>
 	// A failed connection to a PC that would have stood by: cookie, message
 	std::map<std::string, std::string> connection_errors;
 	std::set<std::string> requested_connections;
+	// Remembered PCs to connect once discovery finds them, and when to fall back to their saved hostname
+	std::map<std::string, std::chrono::steady_clock::time_point> awaiting_discovery;
 	std::string pinned_cookie;
 	// When a PC was last picked to present in the shell (steady clock ns): only later VR applications switch away
 	int64_t present_override = 0;

@@ -537,7 +537,8 @@ public:
 void wivrn_discover::discover(std::string service_name)
 {
 	cache->send_query(MDNS_RECORDTYPE_PTR, service_name);
-	auto next_query = steady_clock::now() + discover_period;
+	// Query right away: the first PC is otherwise found a period late
+	auto next_query = steady_clock::now();
 
 	milliseconds poll_timeout = poll_max_time;
 	std::vector<service> services_staging;
