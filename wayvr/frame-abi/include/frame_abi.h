@@ -41,13 +41,13 @@ typedef struct frame_shell_desktop_frame
 	uint64_t chroma_offset, id;
 } frame_shell_desktop_frame;
 
-// Connection stage is independent of discovery, build and XR presentation.
+// Connection stage is independent of discovery and XR presentation.
 typedef enum frame_pc_connection {
     FRAME_PC_DISCONNECTED, FRAME_PC_CONNECTING, FRAME_PC_PAIRING, FRAME_PC_CONNECTED, FRAME_PC_ERROR
 } frame_pc_connection;
 
 typedef struct frame_shell_pc {
-    const char * id, * name, * hostname, * build, * version, * detail;
+    const char * id, * name, * hostname, * version, * detail;
     // Its stream settings, JSON
     const char * settings;
     uint32_t source;
@@ -127,7 +127,7 @@ typedef struct frame_host_callbacks
 } frame_host_callbacks;
 
 typedef struct frame_host_identity {
-    const char * id, * name, * build, * version;
+    const char * id, * name, * version;
 } frame_host_identity;
 
 typedef struct frame_host frame_host;

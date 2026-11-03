@@ -387,7 +387,6 @@ void start_publishing()
 			        {"version", wivrn::display_version()},
 			        {"cookie", server_cookie()},
 			        {"pc_name", wivrn::hostname()},
-			        {"build", std::getenv("FRAME_SHELL_BUILD_KIND") ? std::getenv("FRAME_SHELL_BUILD_KIND") : "packaged"},
 			};
 			auto configuration = wivrn::configuration();
 			publisher.emplace(poll_api, configuration.hostname, "_wivrn._tcp", configuration.port, TXT);

@@ -86,7 +86,6 @@ public:
 		const frame_host_identity identity{
 		        .id = pc_id.c_str(),
 		        .name = hostname,
-		        .build = std::getenv("FRAME_SHELL_BUILD_KIND") ? std::getenv("FRAME_SHELL_BUILD_KIND") : "packaged",
 		        .version = version.c_str(),
 		};
 		host = std::make_unique<frame_host_session>(frame_host_session::callbacks{

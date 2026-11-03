@@ -38,7 +38,6 @@ pub struct Pc {
     pub endpoint: String,
     pub name: String,
     pub hostname: String,
-    pub build: String,
     pub version: String,
     pub source: Option<u32>,
     pub connection: Connection,
@@ -52,10 +51,18 @@ pub struct Pc {
     pub settings: serde_json::Value,
 }
 impl Pc {
+    /// Takes frame_host's lock: call without the registry's
     pub fn status(&self, background: bool) -> String {
+        // The background PC shows nothing in VR until it runs an application
+        let vr = background
+            && self.source.is_some_and(|source| {
+                crate::frame_host::clients(source)
+                    .iter()
+                    .any(|client| !client.overlay)
+            });
         let status = match self.connection {
-            Connection::Connected if background => "Connected · VR background",
-            Connection::Connected => "Connected · Desktop + audio",
+            Connection::Connected if vr => "Connected · VR background",
+            Connection::Connected => "Connected",
             Connection::Connecting => "Connecting",
             Connection::Pairing => "Waiting for PIN",
             Connection::Error => "Connection failed",
@@ -67,7 +74,6 @@ impl Pc {
         };
         [
             status,
-            self.build.as_str(),
             self.detail.as_str(),
             if self.background_pinned {
                 "Background locked"
@@ -122,7 +128,6 @@ impl Registry {
             if let Some(identity) = pc.source.and_then(|s| self.identities.get(&s)) {
                 pc.id = identity.id.clone();
                 pc.name = identity.name.clone();
-                pc.build = identity.build.clone();
                 pc.version = identity.version.clone();
             }
             if pcs
@@ -252,7 +257,6 @@ pub unsafe fn update(views: *const frame_abi::frame_shell_pc, count: usize, sele
             endpoint: text(view.id),
             name: text(view.name),
             hostname: text(view.hostname),
-            build: text(view.build),
             version: text(view.version),
             source: (view.source != 0).then_some(view.source),
             connection: match view.connection {
@@ -275,13 +279,13 @@ pub unsafe fn update(views: *const frame_abi::frame_shell_pc, count: usize, sele
 }
 
 pub fn json() -> serde_json::Value {
-    let registry = registry();
-    registry.pcs.values().map(|pc| serde_json::json!({
-        "cookie": pc.id, "name": pc.name, "hostname": pc.hostname, "build": pc.build, "version": pc.version,
+    let selected = background_source();
+    pcs().iter().map(|pc| serde_json::json!({
+        "cookie": pc.id, "name": pc.name, "hostname": pc.hostname, "version": pc.version,
         "visible": pc.available, "compatible": pc.compatible, "autoconnect": pc.autoconnect, "manual": pc.manual,
         "source": pc.source, "state": pc.connection.as_str(), "detail": pc.detail,
-        "presenting": pc.source.is_some() && pc.source == registry.selected_source,
+        "presenting": pc.source.is_some() && pc.source == selected,
         "background_pinned": pc.background_pinned, "settings": pc.settings,
-        "status": pc.status(pc.source.is_some() && pc.source == registry.selected_source)
+        "status": pc.status(pc.source.is_some() && pc.source == selected)
     })).collect()
 }

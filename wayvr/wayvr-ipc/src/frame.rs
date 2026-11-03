@@ -32,7 +32,6 @@ pub enum HostMessage {
 pub struct HostIdentity {
 	pub id: String,
 	pub name: String,
-	pub build: String,
 	pub version: String,
 }
 

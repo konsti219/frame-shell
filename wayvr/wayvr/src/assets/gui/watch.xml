@@ -34,7 +34,7 @@
   </template>
 
   <template name="Screen">
-    <Button macro="button_style" id="overlay_${idx}" tooltip_str="${name}" _press="::OverlayToggle ${name}">
+    <Button macro="button_style" id="overlay_${idx}" tooltip_str="${title}" _press="::OverlayToggle ${name}">
       <sprite width="38" height="38" src_builtin="@/edit/screen.svg" />
       <div position="absolute" margin_top="-7" margin_left="-1">
         <label text="${display}" size="18" weight="bold" parent_color="background" />

@@ -166,6 +166,7 @@ impl OverlayList {
 
                 params.insert_rc("idx", i.to_string().into());
                 params.insert("name", meta.name.as_ref());
+                params.insert("title", meta.name.as_ref());
                 parser_state.instantiate_template(doc_params, template, layout, root, params)?;
                 let overlay_button =
                     parser_state.fetch_component_as::<ComponentButton>(&format!("overlay_{i}"))?;
@@ -487,6 +488,10 @@ fn rebuild_groups(
             );
             params.insert_rc("idx", i.to_string().into());
             params.insert("name", meta.name.as_ref());
+            params.insert_rc(
+                "title",
+                crate::frame_hosts::screen_title(&meta.name).into(),
+            );
             parser_state.instantiate_template(doc_params, "Screen", layout, group, params)?;
             let button =
                 parser_state.fetch_component_as::<ComponentButton>(&format!("overlay_{i}"))?;

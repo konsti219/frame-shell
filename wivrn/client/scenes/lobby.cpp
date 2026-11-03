@@ -1960,8 +1960,8 @@ void scenes::lobby::publish_hosts_state()
 		if (!*name)
 			name = data.service.name.c_str();
 		settings.push_back(frame_shell::settings_json(config, data.stream));
-		pcs.push_back({.id = id.c_str(), .name = name, .hostname = data.service.hostname.c_str(), .build = text(data.service, "build"), .version = text(data.service, "version"), .detail = detail, .settings = settings.back().c_str(), .source = scene ? scene->shell_source_id() : 0, .connection = stage, .available = data.visible, .compatible = data.compatible, .autoconnect = data.autoconnect, .manual = data.manual, .background_pinned = id == pinned_cookie});
-		signature += fmt::format("{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{};", id, name, data.service.hostname, text(data.service, "build"), text(data.service, "version"), detail, pcs.back().source, int(stage), data.visible, data.compatible, data.autoconnect, data.manual, settings.back());
+		pcs.push_back({.id = id.c_str(), .name = name, .hostname = data.service.hostname.c_str(), .version = text(data.service, "version"), .detail = detail, .settings = settings.back().c_str(), .source = scene ? scene->shell_source_id() : 0, .connection = stage, .available = data.visible, .compatible = data.compatible, .autoconnect = data.autoconnect, .manual = data.manual, .background_pinned = id == pinned_cookie});
+		signature += fmt::format("{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{};", id, name, data.service.hostname, text(data.service, "version"), detail, pcs.back().source, int(stage), data.visible, data.compatible, data.autoconnect, data.manual, settings.back());
 	}
 	signature += std::to_string(selected) + pinned_cookie;
 	if (signature != hosts_signature)

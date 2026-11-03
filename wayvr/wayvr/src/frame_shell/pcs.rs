@@ -37,7 +37,7 @@ pub(crate) fn pc_stream(source: u32) -> serde_json::Value {
     stream
 }
 
-/// The WiVRn state for the dashboard, with the PIN pad's progress added
+/// The WiVRn state for the dashboard, with the digits typed on the PIN pad added
 pub fn dashboard_state() -> Option<(u64, String, String)> {
     if !EMBEDDED.load(Ordering::Relaxed) {
         return None;
@@ -45,7 +45,7 @@ pub fn dashboard_state() -> Option<(u64, String, String)> {
     let typed = PIN
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .len();
+        .clone();
     let (version, lobby) = LOBBY_STATE
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)

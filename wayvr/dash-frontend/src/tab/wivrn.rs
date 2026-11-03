@@ -50,7 +50,6 @@ pub struct Host {
 	pub detail: String,
 	pub status: String,
 	pub presenting: bool,
-	pub build: String,
 	pub version: String,
 	pub stream: Value,
 	/// Its stream settings
@@ -66,7 +65,7 @@ pub struct WivrnState {
 	pub detail: String,
 	pub hosts: Vec<Host>,
 	/// Digits typed on the PIN pad so far
-	pub pin_typed: usize,
+	pub pin_typed: String,
 	pub stream: Value,
 }
 
@@ -100,7 +99,6 @@ impl WivrnState {
 				detail: text(server, "detail"),
 				status: text(server, "status"),
 				presenting: flag(server, "presenting"),
-				build: text(server, "build"),
 				version: text(server, "version"),
 				stream: server.get("stream").cloned().unwrap_or(Value::Null),
 				settings: server.get("settings").cloned().unwrap_or(Value::Null),
@@ -111,7 +109,7 @@ impl WivrnState {
 			server: text(&lobby, "server"),
 			detail: text(&lobby, "detail"),
 			hosts,
-			pin_typed: lobby.get("pin_typed").and_then(Value::as_u64).unwrap_or(0) as usize,
+			pin_typed: text(&lobby, "pin_typed"),
 			stream,
 		}
 	}
@@ -413,7 +411,7 @@ impl<T> TabWivrn<T> {
 		forget.on_click(self.tasks.get_button_click_callback(Task::Forget(host.cookie.clone())));
 
 		if host.connection == "pin" {
-			let shown: String = (0..6).map(|i| if i < wivrn.pin_typed { '•' } else { '-' }).collect();
+			let shown: String = wivrn.pin_typed.chars().chain(std::iter::repeat('-')).take(6).collect();
 			let mut params = TemplateParams::new();
 			params.insert("pin", &shown);
 			let pad = self.template(layout, globals, "PinPad", self.id_content, params)?;

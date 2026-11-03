@@ -288,7 +288,6 @@ pub unsafe extern "C" fn frame_host_start(
     let identity = wayvr_ipc::frame::HostIdentity {
         id: text(identity.id),
         name: text(identity.name),
-        build: text(identity.build),
         version: text(identity.version),
     };
     match std::panic::catch_unwind(|| Host::start(callbacks, identity)) {

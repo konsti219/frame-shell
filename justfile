@@ -226,7 +226,6 @@ run:
     config="${XDG_CONFIG_HOME:-$HOME/.config}"
     mkdir -p "$build/config/wivrn"
     export FRAME_SHELL_IDENTITY_DIR="$config/wivrn"
-    export FRAME_SHELL_BUILD_KIND=development
     was_active=false
     if systemctl --user is-active --quiet frame-shell.service; then
         was_active=true
