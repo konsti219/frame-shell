@@ -74,8 +74,9 @@
       env = (old.env or {}) // {XRIZER_VERSION = "${finalAttrs.version}-frame-shell";};
     });
     server = pkgs.wivrn.overrideAttrs (old: {
-      pname = "wivrn-frame-shell";
-      version = "unstable-2026-10-02";
+      pname = "frame-shell-server";
+      # Our own revision: the version shown in the headset's dashboard is the installed frame-shell commit
+      version = "unstable-${builtins.substring 0 8 self.lastModifiedDate}";
       src = ./wivrn;
       patches = [];
       postPatch = "";
@@ -87,8 +88,8 @@
             ["-DFETCHCONTENT_SOURCE_DIR_MONADO" "-DGIT_TAG:" "-DGIT_DESC:" "-DGIT_COMMIT:"]))
         old.cmakeFlags
         ++ [
-          (pkgs.lib.cmakeFeature "GIT_DESC" "7e0bf5e")
-          (pkgs.lib.cmakeFeature "GIT_COMMIT" "7e0bf5efc1f4298b433eff1c6f3d81a1bc401b44")
+          (pkgs.lib.cmakeFeature "GIT_DESC" (self.shortRev or self.dirtyShortRev))
+          (pkgs.lib.cmakeFeature "GIT_COMMIT" (self.rev or self.dirtyRev))
           (pkgs.lib.cmakeFeature "FETCHCONTENT_SOURCE_DIR_MONADO" "${host-monado}")
           (pkgs.lib.cmakeFeature "FRAME_HOST_LIBRARY" "${frame-host}/lib/libframe_host.a")
           (pkgs.lib.cmakeFeature "FRAME_ABI_INCLUDE_DIR" "${./wayvr/frame-abi/include}")
