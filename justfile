@@ -116,7 +116,6 @@ build-headset: _fetch-eye-model
     install -Dm755 "$loader" "$stage/libopenxr-shell.so"
     install -Dm755 "$loader" "$stage/libopenxr_loader.so.1"
     install -Dm755 /opt/ktx-arm64/usr/lib/libktx.so.4 "$stage/libktx.so.4"
-    install -Dm755 /usr/lib/aarch64-linux-gnu/libcrypto.so.3 "$stage/libcrypto.so.3"
     find "$stage" -type f \( -name '*.so' -o -name '*.so.*' \) ! -path '*/xrizer/bin/linux64/*' \
         -exec aarch64-linux-gnu-strip --strip-debug {} +
 
