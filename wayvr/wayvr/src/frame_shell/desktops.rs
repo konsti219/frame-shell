@@ -328,8 +328,9 @@ pub(crate) fn desktop_overlay(name: Arc<str>, key: u64, app: &AppState) -> Overl
 pub(crate) struct DesktopOverlay {
     name: Arc<str>,
     key: u64,
-    /// Shown while the PC isn't streaming this screen, in the monitor's aspect; a click connects
-    offline: Option<GuiPanel<()>>,
+    /// Shown while the PC isn't streaming this screen, in the monitor's aspect, with the state it shows; a click
+    /// connects
+    offline: Option<(GuiPanel<()>, [String; 3])>,
     meta: Option<FrameMeta>,
     /// Luma and chroma views of the frame being shown
     planes: Option<(Arc<ImageView>, Arc<ImageView>)>,
@@ -343,8 +344,55 @@ pub(crate) struct DesktopOverlay {
     last_hover: Option<(usize, [i32; 2])>,
 }
 
+/// What a screen without a picture says: its state, why, and what a click does
+fn screen_state(name: &str) -> [String; 3] {
+    use crate::frame_hosts::Connection;
+    use wayvr_ipc::frame::MonitorStatus;
+    let Some(pc) = crate::frame_hosts::owner(name) else {
+        return ["Unknown PC".into(), String::new(), String::new()];
+    };
+    let connect = || "Click to connect".to_owned();
+    let line = |status: &str, detail: String| [status.to_owned(), detail, String::new()];
+    let Some(source) = pc.source else {
+        return match pc.connection {
+            Connection::Connecting | Connection::Connected => line("Connecting…", String::new()),
+            Connection::Pairing => line("Waiting for PIN", String::new()),
+            Connection::Error => ["Connection failed".into(), pc.detail, connect()],
+            _ if pc.available && !pc.compatible => line("Incompatible version", String::new()),
+            _ if pc.available => ["Disconnected".into(), String::new(), connect()],
+            _ => ["PC not found".into(), String::new(), connect()],
+        };
+    };
+    let Some(capture) = crate::frame_host::capture(source) else {
+        return line("Waiting for picture…", String::new());
+    };
+    if let Some(error) = capture.failed {
+        return line("Capture failed", error);
+    }
+    let connector = crate::frame_hosts::monitor_label(name).unwrap_or_default();
+    match capture.monitors.into_iter().find(|(known, _)| *known == connector) {
+        None => line("Monitor not found", format!("{} has no {connector}", pc.name)),
+        Some((_, MonitorStatus::Queued)) => line("Waiting for screen sharing", String::new()),
+        Some((_, MonitorStatus::Dialog)) => line(
+            &format!("Accept screen sharing on {}", pc.name),
+            format!("Pick {connector} in the dialog"),
+        ),
+        Some((_, MonitorStatus::Streaming)) => line("Waiting for picture…", String::new()),
+        Some((_, MonitorStatus::Failed(error))) => line("Capture failed", error),
+    }
+}
+
 impl DesktopOverlay {
-    fn offline_panel(&self, app: &mut AppState) -> anyhow::Result<GuiPanel<()>> {
+    /// The placeholder, rebuilt when what it says changes
+    fn placeholder(&mut self, app: &mut AppState) -> anyhow::Result<ShouldRender> {
+        let state = screen_state(&self.name);
+        if self.offline.as_ref().is_none_or(|(_, shown)| *shown != state) {
+            self.offline = Some((self.offline_panel(app, &state)?, state));
+        }
+        self.offline.as_mut().unwrap().0.should_render(app)
+    }
+
+    fn offline_panel(&self, app: &mut AppState, state: &[String; 3]) -> anyhow::Result<GuiPanel<()>> {
         // Keep the overlay's shape: the monitor's last aspect, 16:9 before any frame
         let [width, height] = self.meta.map_or([1920, 1080], |meta| meta.extent);
         let panel_w = 1280u32;
@@ -356,6 +404,9 @@ impl DesktopOverlay {
             NewGuiPanelParams {
                 extra_vars: [
                     ("name".into(), crate::frame_hosts::screen_title(&self.name).into()),
+                    ("status".into(), state[0].clone().into()),
+                    ("detail".into(), state[1].clone().into()),
+                    ("hint".into(), state[2].clone().into()),
                     ("panel_w".into(), panel_w.to_string().into()),
                     ("panel_h".into(), panel_h.to_string().into()),
                 ]
@@ -404,20 +455,14 @@ impl OverlayBackend for DesktopOverlay {
                 }
                 self.imports.clear();
                 self.renderer = None;
-                if self.offline.is_none() {
-                    self.offline = Some(self.offline_panel(app)?);
-                }
-                return self.offline.as_mut().unwrap().should_render(app);
+                return self.placeholder(app);
             }
         };
         if latest.is_some() {
             self.offline = None;
         } else if self.offline.is_some() || self.planes.is_none() {
             // Connected, first frame still on its way: keep the placeholder (a fresh screen has nothing else)
-            if self.offline.is_none() {
-                self.offline = Some(self.offline_panel(app)?);
-            }
-            return self.offline.as_mut().unwrap().should_render(app);
+            return self.placeholder(app);
         }
         if let Some((frame, fd)) = latest {
             let extent = [frame.width, frame.height];
@@ -480,7 +525,7 @@ impl OverlayBackend for DesktopOverlay {
         app: &mut AppState,
         resources: &mut RenderResources,
     ) -> anyhow::Result<()> {
-        if let Some(offline) = &mut self.offline {
+        if let Some((offline, _)) = &mut self.offline {
             return offline.render(app, resources);
         }
         let (luma, chroma) = self.planes.clone().unwrap();
@@ -491,7 +536,7 @@ impl OverlayBackend for DesktopOverlay {
     }
     fn frame_meta(&mut self) -> Option<FrameMeta> {
         match &mut self.offline {
-            Some(offline) => offline.frame_meta(),
+            Some((offline, _)) => offline.frame_meta(),
             None => self.meta,
         }
     }
@@ -501,7 +546,7 @@ impl OverlayBackend for DesktopOverlay {
     // WayVR's own screen input (hand priority, move throttle, click freeze, left-handed mode, scrolling) on
     // this surface's normalized coordinates
     fn on_hover(&mut self, app: &mut AppState, hit: &PointerHit) -> HoverResult {
-        if let Some(offline) = &mut self.offline {
+        if let Some((offline, _)) = &mut self.offline {
             return offline.on_hover(app, hit);
         }
         POINTER_SURFACE.store(self.key, Ordering::Relaxed);
@@ -518,7 +563,7 @@ impl OverlayBackend for DesktopOverlay {
         screen_hover(app, hit, hit.uv)
     }
     fn on_left(&mut self, app: &mut AppState, pointer: usize) {
-        if let Some(offline) = &mut self.offline {
+        if let Some((offline, _)) = &mut self.offline {
             offline.on_left(app, pointer);
         }
     }
@@ -540,7 +585,7 @@ impl OverlayBackend for DesktopOverlay {
     }
     fn get_interaction_transform(&mut self) -> Option<Affine2> {
         match &mut self.offline {
-            Some(offline) => offline.get_interaction_transform(),
+            Some((offline, _)) => offline.get_interaction_transform(),
             None => self.meta.map(|meta| ui_transform(meta.extent)),
         }
     }

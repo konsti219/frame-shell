@@ -93,14 +93,13 @@ pub fn connect_screen_host(app: &mut AppState, screen: &str) {
         );
         return;
     };
-    if pc.source.is_some()
-        || matches!(
+    // The placeholder already says what a connected or connecting PC is waiting for
+    if pc.source.is_none()
+        && !matches!(
             pc.connection,
             crate::frame_hosts::Connection::Connecting | crate::frame_hosts::Connection::Pairing
         )
     {
-        toast(app, format!("{}: waiting for its picture", pc.name));
-    } else {
         connect_host(app, &pc.id, true);
     }
 }

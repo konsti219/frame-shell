@@ -1,11 +1,12 @@
 <layout version="2">
-  <!-- A PC screen whose PC is not streaming (frame_shell.rs): same aspect as the monitor, a click connects -->
+  <!-- A PC screen without a picture (frame_shell.rs): same aspect as the monitor, says why; a click connects -->
   <elements>
     <rectangle width="~panel_w" height="~panel_h" color="background" border="4" border_color="outline" round="16"
       flex_direction="column" align_items="center" justify_content="center" gap="16">
       <label text="~name" size="56" weight="bold" color="on_background" />
-      <label text="Disconnected" size="44" color="on_background_variant" />
-      <label text="Click to connect" size="36" color="primary" />
+      <label text="~status" size="44" color="on_background_variant" />
+      <label text="~detail" size="32" color="on_background_variant" width="1120" wrap="1" align="center" />
+      <label text="~hint" size="36" color="primary" />
     </rectangle>
   </elements>
 </layout>

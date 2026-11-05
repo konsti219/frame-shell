@@ -9,7 +9,8 @@ use std::{
 };
 use wayvr_ipc::{
     frame::{
-        DesktopSettings, HostMessage, Notification, RuntimeClient, SessionFrame, ShellMessage,
+        CaptureStatus, DesktopSettings, HostMessage, Notification, RuntimeClient, SessionFrame,
+        ShellMessage,
     },
     packet_client::PacketClient,
 };
@@ -32,6 +33,7 @@ struct Pc {
     composition_supported: bool,
     sent_background: Option<bool>,
     sent_settings: Option<DesktopSettings>,
+    capture: Option<CaptureStatus>,
 }
 
 struct State {
@@ -105,6 +107,7 @@ pub fn connected(source: u32, _background: bool) {
             composition_supported: false,
             sent_background: None,
             sent_settings: None,
+            capture: None,
         },
     );
     drop(state);
@@ -188,6 +191,7 @@ pub fn receive(source: u32, data: &[u8]) {
             }
         }
         HostMessage::IpcClose(id) => state.ipc.push_back(IpcEvent::Close(source, id)),
+        HostMessage::Capture(capture) => pc.capture = Some(capture),
     }
     drop(guard);
     sync_presentation();
@@ -264,6 +268,11 @@ pub fn resync_desktop_settings() {
             pc.sent_settings = Some(settings);
         }
     }
+}
+
+/// Where a connected PC's monitor capture stands, unknown until it says
+pub fn capture(source: u32) -> Option<CaptureStatus> {
+    state().pcs.get(&source).and_then(|pc| pc.capture.clone())
 }
 
 /// Steam app ids of a PC's running games

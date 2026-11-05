@@ -63,7 +63,10 @@ in
         ExecStart = "${lib.getExe' cfg.package "wivrn-server"} -f ${configFile}";
         Restart = "on-failure";
       };
-      wantedBy = lib.mkIf cfg.autoStart [ "default.target" ];
+      # Monitor capture needs the session's WAYLAND_DISPLAY, imported when the graphical session starts
+      after = [ "graphical-session.target" ];
+      partOf = [ "graphical-session.target" ];
+      wantedBy = lib.mkIf cfg.autoStart [ "graphical-session.target" ];
       restartTriggers = [ cfg.package configFile ];
     };
 

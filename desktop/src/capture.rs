@@ -13,8 +13,10 @@ use std::{
     },
     time::{Duration, Instant},
 };
-use wayvr_ipc::frame::{DesktopSettings, HostMessage};
-use wlx_capture::pipewire::{ScreenCastManager, ScreenCastParams, ScreenCastResult};
+use wayvr_ipc::frame::{DesktopSettings, HostMessage, MonitorStatus};
+use wlx_capture::pipewire::{
+    ScreenCastError, ScreenCastManager, ScreenCastParams, ScreenCastResult,
+};
 
 /// One monitor: where it lies in the whole desktop (for pointer input) and its output name.
 #[derive(Clone)]
@@ -84,6 +86,7 @@ fn token_path() -> Result<PathBuf> {
 pub fn run(output: &Output, shared: &Shared) {
     if let Err(error) = capture(output, shared) {
         eprintln!("Desktop capture: {error:#}");
+        shared.capture(output, |status| status.failed = Some(format!("{error:#}")));
         output.send(&HostMessage::Error(format!(
             "PC desktop capture failed: {error:#}"
         )));
@@ -121,6 +124,13 @@ fn capture(output: &Output, shared: &Shared) -> Result<()> {
             monitor.name, monitor.region
         );
     }
+    shared.capture(output, |status| {
+        status.failed = None;
+        status.monitors = monitors
+            .iter()
+            .map(|monitor| (monitor.name.clone(), MonitorStatus::Queued))
+            .collect();
+    });
 
     let mut tokens = Tokens::load(token_path()?);
     let mut portal = ScreenCastManager::new()?;
@@ -165,12 +175,28 @@ fn capture(output: &Output, shared: &Shared) -> Result<()> {
                     ScreenCastResult::Ok(response) => break Some(response),
                     ScreenCastResult::Failed(error) => {
                         eprintln!("Desktop selection: {error}");
+                        if let Some(index) = expected {
+                            let reason = match error {
+                                ScreenCastError::PortalResponse(1) => {
+                                    "Screen sharing was declined".to_owned()
+                                }
+                                error => format!("Screen sharing failed: {error}"),
+                            };
+                            shared.monitor(
+                                output,
+                                &monitors[index].name,
+                                MonitorStatus::Failed(reason),
+                            );
+                        }
                         break None;
                     }
                     ScreenCastResult::WaitingForUser
                         if notification.is_none()
                             && (!restoring || requested.elapsed() > Duration::from_millis(500)) =>
                     {
+                        if let Some(index) = expected {
+                            shared.monitor(output, &monitors[index].name, MonitorStatus::Dialog);
+                        }
                         notification = Some(
                             notify::Notification::show(
                                 &format!("Pick {wanted} to share"),
@@ -190,6 +216,10 @@ fn capture(output: &Output, shared: &Shared) -> Result<()> {
                 continue;
             };
             let Some(selected) = response.streams.first() else {
+                if let Some(index) = expected {
+                    let reason = MonitorStatus::Failed("No monitor was picked".into());
+                    shared.monitor(output, &monitors[index].name, reason);
+                }
                 continue;
             };
             // The user may pick another monitor than asked for; the stream's position says which one it is
@@ -211,19 +241,23 @@ fn capture(output: &Output, shared: &Shared) -> Result<()> {
             if let Some(token) = response.restore_token {
                 tokens.set(&monitors[index].name, token)?;
             }
+            // Picked another monitor than asked for: ask for the wanted one again
+            if let Some(expected) = expected.filter(|&expected| expected != index) {
+                tried[expected] = false;
+                shared.monitor(output, &monitors[expected].name, MonitorStatus::Queued);
+            }
             if std::mem::replace(&mut streaming[index], true) {
                 eprintln!("{} is already streaming", monitors[index].name);
-                // Picked the wrong monitor: ask for the wanted one again
-                if let Some(expected) = expected.filter(|&expected| expected != index) {
-                    tried[expected] = false;
-                }
                 continue;
             }
+            shared.monitor(output, &monitors[index].name, MonitorStatus::Streaming);
             let (monitor, node) = (&monitors[index], selected.node_id);
             scope.spawn(move || {
                 let id = index as u32;
                 if let Err(error) = stream(id, node, monitor, output, shared) {
                     eprintln!("Desktop surface {id} ({}): {error:#}", monitor.name);
+                    let reason = MonitorStatus::Failed(format!("Stopped streaming: {error:#}"));
+                    shared.monitor(output, &monitor.name, reason);
                     output.send(&HostMessage::Error(format!(
                         "{} stopped streaming: {error:#}",
                         monitor.name

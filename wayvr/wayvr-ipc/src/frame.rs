@@ -26,6 +26,26 @@ pub enum HostMessage {
 	Identity(HostIdentity),
 	RuntimeUnavailable,
 	CompositionSupported,
+	/// Where monitor capture stands, sent whole on every change
+	Capture(CaptureStatus),
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct CaptureStatus {
+	/// Capture as a whole failed, before any monitor
+	pub failed: Option<String>,
+	/// By connector
+	pub monitors: Vec<(String, MonitorStatus)>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum MonitorStatus {
+	/// Behind another monitor's screen sharing request
+	Queued,
+	/// The PC's screen sharing dialog asks for this monitor
+	Dialog,
+	Streaming,
+	Failed(String),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

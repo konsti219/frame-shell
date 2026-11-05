@@ -23,7 +23,7 @@ use std::{
     thread::JoinHandle,
     time::{Duration, Instant},
 };
-use wayvr_ipc::frame::{DesktopSettings, HostMessage, ShellMessage};
+use wayvr_ipc::frame::{CaptureStatus, DesktopSettings, HostMessage, MonitorStatus, ShellMessage};
 
 /// The server's callbacks, callable from any thread until frame_host_stop returns
 struct Callbacks(frame_host_callbacks);
@@ -118,6 +118,7 @@ pub struct Shared {
     pub visibility: Mutex<HashMap<u32, bool>>,
     /// Monitors whose next frame must be a keyframe
     pub keyframes: Mutex<HashSet<u32>>,
+    pub capture: Mutex<CaptureStatus>,
 }
 
 pub fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -127,6 +128,25 @@ pub fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 impl Shared {
+    /// Changes the capture status and sends it if that changed it
+    pub fn capture(&self, output: &Output, change: impl FnOnce(&mut CaptureStatus)) {
+        let mut status = lock(&self.capture);
+        let old = status.clone();
+        change(&mut status);
+        if *status != old {
+            output.send(&HostMessage::Capture(status.clone()));
+        }
+    }
+
+    pub fn monitor(&self, output: &Output, name: &str, monitor: MonitorStatus) {
+        self.capture(output, |status| {
+            match status.monitors.iter_mut().find(|(known, _)| known == name) {
+                Some((_, old)) => *old = monitor,
+                None => status.monitors.push((name.to_owned(), monitor)),
+            }
+        });
+    }
+
     pub fn settings(&self) -> DesktopSettings {
         lock(&self.settings).unwrap_or(DesktopSettings {
             bitrate_per_1080p: 16000,
@@ -235,6 +255,8 @@ impl Host {
             ShellMessage::RequestState => {
                 self.output
                     .send(&HostMessage::Identity(self.identity.clone()));
+                let capture = lock(&self.shared.capture).clone();
+                self.output.send(&HostMessage::Capture(capture));
                 let _ = self.focus.send(clients::Command::Refresh);
                 let _ = self.games.send(games::Command::Refresh);
             }
