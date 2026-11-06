@@ -315,6 +315,7 @@ pub(crate) fn desktop_overlay(name: Arc<str>, key: u64, app: &AppState) -> Overl
             name: name.clone(),
             key,
             offline: None,
+            redraw: false,
             meta: None,
             planes: None,
             shown: None,
@@ -331,6 +332,8 @@ pub(crate) struct DesktopOverlay {
     /// Shown while the PC isn't streaming this screen, in the monitor's aspect, with the state it shows; a click
     /// connects
     offline: Option<(GuiPanel<()>, [String; 3])>,
+    /// Redraw without a new frame: edit mode left its panel in the swapchain image
+    redraw: bool,
     meta: Option<FrameMeta>,
     /// Luma and chroma views of the frame being shown
     planes: Option<(Arc<ImageView>, Arc<ImageView>)>,
@@ -435,8 +438,12 @@ impl OverlayBackend for DesktopOverlay {
     fn pause(&mut self, _: &mut AppState) -> anyhow::Result<()> {
         Ok(())
     }
-    fn resume(&mut self, _: &mut AppState) -> anyhow::Result<()> {
-        Ok(())
+    fn resume(&mut self, app: &mut AppState) -> anyhow::Result<()> {
+        self.redraw = true;
+        match &mut self.offline {
+            Some((offline, _)) => offline.resume(app),
+            None => Ok(()),
+        }
     }
     fn should_render(&mut self, app: &mut AppState) -> anyhow::Result<ShouldRender> {
         // Bound by name: the key of a monitor can differ between sessions, and remembered screens start without one
@@ -513,10 +520,10 @@ impl OverlayBackend for DesktopOverlay {
             self.meta = Some(meta);
             Ok(ShouldRender::Should)
         } else {
-            Ok(if self.planes.is_some() {
-                ShouldRender::Can
-            } else {
-                ShouldRender::Unable
+            Ok(match (self.planes.is_some(), std::mem::take(&mut self.redraw)) {
+                (true, true) => ShouldRender::Should,
+                (true, false) => ShouldRender::Can,
+                (false, _) => ShouldRender::Unable,
             })
         }
     }
