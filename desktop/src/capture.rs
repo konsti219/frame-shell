@@ -320,9 +320,10 @@ fn stream_codec(
         bail!("No hardware {codec} encoder available (va{codec}enc/nv{codec}enc)");
     };
     // DMA-bufs when the encoder path takes them: a shared-memory cast has the compositor read every frame back
-    // (tens of ms on Intel iGPUs)
+    // (tens of ms on Intel iGPUs). Load is shed by the leaky raw queue: a dropped encoded frame would corrupt the
+    // stream until the next keyframe without the headset seeing a loss.
     let pipeline = gst::parse::launch(&format!(
-        "pipewiresrc name=source path={node} do-timestamp=true keepalive-time=100 ! queue max-size-buffers=2 leaky=downstream ! videorate name=capture_rate drop-only=true ! video/x-raw(memory:DMABuf),framerate=60/1;video/x-raw,framerate=60/1 ! {encoder} ! {parse} config-interval=-1 ! {caps},stream-format=byte-stream,alignment=au ! appsink name=encoded sync=false max-buffers=2 drop=true"
+        "pipewiresrc name=source path={node} do-timestamp=true keepalive-time=100 ! queue max-size-buffers=2 leaky=downstream ! videorate name=capture_rate drop-only=true ! video/x-raw(memory:DMABuf),framerate=60/1;video/x-raw,framerate=60/1 ! {encoder} ! {parse} config-interval=-1 ! {caps},stream-format=byte-stream,alignment=au ! appsink name=encoded sync=false max-buffers=2 drop=false"
     ))?
     .downcast::<gst::Pipeline>()
     .map_err(|_| anyhow::anyhow!("Invalid capture pipeline"))?;
@@ -348,6 +349,10 @@ fn stream_codec(
         .unwrap()
         .downcast::<AppSink>()
         .unwrap();
+    // KWin's PTS is the output's last presentation, stale while a monitor is off: with a clock, pipewiresrc would
+    // sleep every frame by that age, so run clockless and stamp the time of capture (keepalives have no PTS then)
+    pipeline.use_clock(None::<&gst::Clock>);
+    let started = Instant::now();
     // A keepalive repeats the last PipeWire buffer, so its seq repeats too
     let name = monitor.name.clone();
     pipeline
@@ -356,7 +361,11 @@ fn stream_codec(
         .static_pad("src")
         .unwrap()
         .add_probe(gst::PadProbeType::BUFFER, move |_, info| {
-            if let Some(buffer) = info.buffer() {
+            if let Some(gst::PadProbeData::Buffer(buffer)) = &mut info.data {
+                let buffer = buffer.make_mut();
+                let now = gst::ClockTime::from_nseconds(started.elapsed().as_nanos() as u64);
+                buffer.set_pts(now);
+                buffer.set_dts(now);
                 metrics::emit(&name, "captured", buffer.offset(), buffer.size() as u64);
             }
             gst::PadProbeReturn::Ok
