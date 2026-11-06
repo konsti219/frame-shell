@@ -6239,6 +6239,7 @@ dependencies = [
  "base64",
  "bytes",
  "interprocess",
+ "libc",
  "libloading 0.8.9",
  "log",
  "serde",

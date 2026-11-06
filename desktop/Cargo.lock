@@ -1403,6 +1403,7 @@ dependencies = [
  "base64",
  "bytes",
  "interprocess",
+ "libc",
  "libloading",
  "log",
  "serde",

@@ -70,6 +70,11 @@ inline bool input_poll(input * event) { return api->input_poll(event); }
 inline void desktop_surface(const desktop_surface_info * info) { api->desktop_surface(info); }
 inline void connected(uint32_t source, bool value, bool vr) { api->connected(source, value, vr); }
 inline void lobby_state(const char * json) { api->lobby_state(json); }
+inline void metric(const std::string & stream, const char * stage, uint64_t seq = 0, uint64_t bytes = 0)
+{
+	if (api)
+		api->metric(stream.c_str(), stage, seq, bytes);
+}
 inline void stream_state(uint32_t source, const char * json)
 {
 	api->stream_state(source, json);

@@ -11,7 +11,7 @@
 extern "C" {
 #endif
 
-#define FRAME_SHELL_ABI_VERSION 6
+#define FRAME_SHELL_ABI_VERSION 7
 
 // ---- Headset: WiVRn client <-> WayVR ----
 
@@ -97,6 +97,8 @@ typedef struct frame_shell_api
 	bool (*command_poll)(char * buffer, size_t size);
 	// The shell's temporary space drag as floor-from-stage: qx, qy, qz, qw, x, y, z
 	void (*drag_offset)(float * out);
+	// A debug record for wayvr_ipc::metrics: dropped unless something reads them; strings are borrowed for this call
+	void (*metric)(const char * stream, const char * stage, uint64_t seq, uint64_t bytes);
 } frame_shell_api;
 
 typedef const frame_shell_api * (*frame_shell_api_fn)(void);

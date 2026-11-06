@@ -13,7 +13,10 @@ use std::{
     },
     time::{Duration, Instant},
 };
-use wayvr_ipc::frame::{DesktopSettings, HostMessage, MonitorStatus};
+use wayvr_ipc::{
+    frame::{DesktopSettings, HostMessage, MonitorStatus},
+    metrics,
+};
 use wlx_capture::pipewire::{
     ScreenCastError, ScreenCastManager, ScreenCastParams, ScreenCastResult,
 };
@@ -256,6 +259,7 @@ fn capture(output: &Output, shared: &Shared) -> Result<()> {
                 let id = index as u32;
                 if let Err(error) = stream(id, node, monitor, output, shared) {
                     eprintln!("Desktop surface {id} ({}): {error:#}", monitor.name);
+                    metrics::event(&monitor.name, &format!("{error:#}"));
                     let reason = MonitorStatus::Failed(format!("Stopped streaming: {error:#}"));
                     shared.monitor(output, &monitor.name, reason);
                     output.send(&HostMessage::Error(format!(
@@ -318,7 +322,7 @@ fn stream_codec(
     // DMA-bufs when the encoder path takes them: a shared-memory cast has the compositor read every frame back
     // (tens of ms on Intel iGPUs)
     let pipeline = gst::parse::launch(&format!(
-        "pipewiresrc path={node} do-timestamp=true keepalive-time=100 ! queue max-size-buffers=2 leaky=downstream ! videorate name=capture_rate drop-only=true ! video/x-raw(memory:DMABuf),framerate=60/1;video/x-raw,framerate=60/1 ! {encoder} ! {parse} config-interval=-1 ! {caps},stream-format=byte-stream,alignment=au ! appsink name=encoded sync=false max-buffers=2 drop=true"
+        "pipewiresrc name=source path={node} do-timestamp=true keepalive-time=100 ! queue max-size-buffers=2 leaky=downstream ! videorate name=capture_rate drop-only=true ! video/x-raw(memory:DMABuf),framerate=60/1;video/x-raw,framerate=60/1 ! {encoder} ! {parse} config-interval=-1 ! {caps},stream-format=byte-stream,alignment=au ! appsink name=encoded sync=false max-buffers=2 drop=true"
     ))?
     .downcast::<gst::Pipeline>()
     .map_err(|_| anyhow::anyhow!("Invalid capture pipeline"))?;
@@ -344,16 +348,34 @@ fn stream_codec(
         .unwrap()
         .downcast::<AppSink>()
         .unwrap();
+    // A keepalive repeats the last PipeWire buffer, so its seq repeats too
+    let name = monitor.name.clone();
+    pipeline
+        .by_name("source")
+        .unwrap()
+        .static_pad("src")
+        .unwrap()
+        .add_probe(gst::PadProbeType::BUFFER, move |_, info| {
+            if let Some(buffer) = info.buffer() {
+                metrics::emit(&name, "captured", buffer.offset(), buffer.size() as u64);
+            }
+            gst::PadProbeReturn::Ok
+        })
+        .unwrap();
     let capture_enabled = Arc::new(AtomicBool::new(true));
     let enabled = capture_enabled.clone();
+    let name = monitor.name.clone();
     // Keep rate limiting active while hidden so reopening does not produce catch-up bursts.
     pipeline
         .by_name("capture_rate")
         .unwrap()
         .static_pad("src")
         .unwrap()
-        .add_probe(gst::PadProbeType::BUFFER, move |_, _| {
+        .add_probe(gst::PadProbeType::BUFFER, move |_, info| {
             if enabled.load(Ordering::Acquire) {
+                if let Some(buffer) = info.buffer() {
+                    metrics::emit(&name, "to_encoder", buffer.offset(), buffer.size() as u64);
+                }
                 gst::PadProbeReturn::Ok
             } else {
                 gst::PadProbeReturn::Drop
@@ -362,6 +384,7 @@ fn stream_codec(
         .unwrap();
     pipeline.set_state(gst::State::Playing)?;
     eprintln!("Desktop surface {id}: {codec} at {} Mbit/s", bitrate / 1000);
+    metrics::event(&monitor.name, &format!("{codec} at {bitrate} kbit/s"));
     let force_keyframe = || {
         pipeline.send_event(gst::event::CustomUpstream::new(
             gst::Structure::builder("GstForceKeyUnit")
@@ -397,6 +420,8 @@ fn stream_codec(
                 }
                 capture_enabled.store(visible, Ordering::Release);
                 playing = visible;
+                let state = if visible { "encoding" } else { "encoding stopped" };
+                metrics::event(&monitor.name, state);
                 eprintln!(
                     "Desktop surface {id}: {}",
                     if playing {
@@ -412,6 +437,7 @@ fn stream_codec(
             }
             // The headset lost video and waits for a keyframe
             if lock(&shared.keyframes).remove(&id) {
+                metrics::event(&monitor.name, "keyframe requested");
                 force_keyframe();
             }
             if let Some(sample) = sink.try_pull_sample(gst::ClockTime::from_mseconds(100)) {
@@ -426,21 +452,32 @@ fn stream_codec(
                     output.surface(id, size, monitor.region, &monitor.name, settings.hevc);
                     announced = Some(size);
                 }
-                let map = sample
-                    .buffer()
-                    .context("Empty encoded frame")?
-                    .map_readable()?;
+                let buffer = sample.buffer().context("Empty encoded frame")?;
+                let map = buffer.map_readable()?;
+                let bytes = map.len() as u64;
+                if !buffer.flags().contains(gst::BufferFlags::DELTA_UNIT) {
+                    metrics::emit(&monitor.name, "keyframe", buffer.offset(), bytes);
+                }
+                metrics::emit(&monitor.name, "encoded", buffer.offset(), bytes);
                 if map.len() > 4 * 1024 * 1024 {
                     bail!("Desktop frame exceeds 4 MiB");
                 }
                 output.video(id, &map);
+                metrics::emit(&monitor.name, "sent", buffer.offset(), bytes);
             }
             if let Some(message) = pipeline
                 .bus()
                 .unwrap()
-                .pop_filtered(&[gst::MessageType::Error, gst::MessageType::Eos])
+                .pop_filtered(&[
+                    gst::MessageType::Error,
+                    gst::MessageType::Eos,
+                    gst::MessageType::Warning,
+                ])
             {
-                bail!("Desktop capture stopped: {message:?}");
+                if message.type_() != gst::MessageType::Warning {
+                    bail!("Desktop capture stopped: {message:?}");
+                }
+                metrics::event(&monitor.name, &format!("{message:?}"));
             }
         }
         Ok(())

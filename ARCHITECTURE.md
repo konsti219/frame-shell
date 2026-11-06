@@ -97,3 +97,10 @@ Stream replacement waits for submitted frames before freeing images; invalid str
 presentation mode; the host answers `CompositionSupported` once it applied it. Only such hosts stream overlays
 while not the background PC. Tracking goes to every streaming PC, the microphone only to the background PC. The
 lobby owns the combined frame: each stream adds its projection layer and sends its frame feedback after submission.
+
+## Debug metrics
+
+`$XDG_RUNTIME_DIR/frame-metrics.sock` on the headset and PC streams records as JSON lines while something reads it
+(`wayvr_ipc::metrics`); without a reader they are dropped. Monitors report their stages on each device: `captured`,
+`to_encoder`, `keyframe`, `encoded`, `sent` on the PC, `received`, `decoded`, `shown` and losses on the headset. A
+repeated `seq` at `captured` is a keepalive, not a new frame from the compositor.

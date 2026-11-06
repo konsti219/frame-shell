@@ -171,6 +171,7 @@ impl Host {
         identity: wayvr_ipc::frame::HostIdentity,
     ) -> anyhow::Result<Self> {
         gstreamer::init()?;
+        wayvr_ipc::metrics::serve();
         let output = Output {
             callbacks: Arc::new(Callbacks(callbacks)),
             stop: Arc::default(),

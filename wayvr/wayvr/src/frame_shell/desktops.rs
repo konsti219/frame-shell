@@ -49,6 +49,19 @@ pub(crate) extern "C" fn desktop_frame(frame: *const DesktopFrame) {
     }
 }
 
+pub(crate) extern "C" fn metric(
+    stream: *const std::ffi::c_char,
+    stage: *const std::ffi::c_char,
+    seq: u64,
+    bytes: u64,
+) {
+    use wayvr_ipc::metrics;
+    if metrics::listening() && !stream.is_null() && !stage.is_null() {
+        let text = |text| unsafe { std::ffi::CStr::from_ptr(text) }.to_string_lossy();
+        metrics::emit(&text(stream), &text(stage), seq, bytes);
+    }
+}
+
 /// Spawns an overlay for each announced monitor; vanished monitors keep theirs (blank) to keep its layout.
 pub fn poll_desktop_visibility<T: Default>(
     overlays: &crate::windowing::manager::OverlayWindowManager<T>,
@@ -67,6 +80,8 @@ pub fn poll_desktop_visibility<T: Default>(
         });
         if surface.visible != Some(visible) {
             surface.visible = Some(visible);
+            let state = if visible { "visible" } else { "hidden" };
+            wayvr_ipc::metrics::event(&surface.connector, state);
             crate::frame_host::send(
                 (key >> 32) as u32,
                 &wayvr_ipc::frame::ShellMessage::DesktopVisibility {
@@ -453,7 +468,11 @@ impl OverlayBackend for DesktopOverlay {
         {
             Some((&key, surface)) => {
                 self.key = key;
-                surface.frame.take()
+                let frame = surface.frame.take();
+                if let Some((frame, _)) = &frame {
+                    wayvr_ipc::metrics::emit(&surface.connector, "shown", frame.id, 0);
+                }
+                frame
             }
             None => {
                 self.planes = None;

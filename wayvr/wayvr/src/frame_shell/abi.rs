@@ -149,6 +149,7 @@ pub(crate) extern "C" fn run(callbacks: *const frame_shell_host) -> i32 {
         return 1;
     };
     *host() = Some(Host(*callbacks));
+    wayvr_ipc::metrics::serve();
     match std::panic::catch_unwind(run_embedded) {
         Ok(Ok(())) => 0,
         Ok(Err(error)) => {
@@ -176,6 +177,7 @@ pub(crate) static API: frame_shell_api = frame_shell_api {
     hosts_state: Some(hosts_state),
     command_poll: Some(command_poll),
     drag_offset: Some(drag_offset),
+    metric: Some(metric),
 };
 
 /// The shell's entry points for the WiVRn client (frame_abi.h)

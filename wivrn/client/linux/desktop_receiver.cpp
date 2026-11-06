@@ -103,6 +103,7 @@ void desktop_receiver::frame_lost(desktop_stream & stream)
 	if (now - stream.keyframe_requested < std::chrono::milliseconds(250))
 		return;
 	stream.keyframe_requested = now;
+	metric(stream.name, "keyframe_requested");
 	try
 	{
 		sender.keyframe(from_headset::desktop_keyframe{.surface = stream.surface});
@@ -155,6 +156,7 @@ void desktop_receiver::deliver_frames(streams_t::iterator it)
 		{
 			if (stream.requests++ == 0)
 				stream.requested = now;
+			metric(stream.name, "nack", expected);
 			from_headset::video_nack nack{
 			        .stream = to_headset::video_shard::desktop_streams + stream.surface,
 			        .generation = 0, .frame = expected,
@@ -174,6 +176,7 @@ void desktop_receiver::deliver_frames(streams_t::iterator it)
 		stream.recovery.frames.erase(expected);
 		stream.last_frame = expected;
 		stream.requests = 0;
+		metric(stream.name, "lost", expected);
 		frame_lost(stream);
 	}
 }
@@ -183,10 +186,12 @@ bool desktop_receiver::decode_frame(streams_t::iterator it, shards::receiver::fr
 {
 #if WIVRN_USE_V4L2
 	auto & stream = *it->second;
+	metric(stream.name, "received", *stream.last_frame, frame.size);
 	if (stream.wait_keyframe)
 	{
 		if (not wivrn::decoder::has_sps(frame.payload(0), stream.codec))
 		{
+			metric(stream.name, "waiting_keyframe", *stream.last_frame, frame.size);
 			frame_lost(stream);
 			return true;
 		}
@@ -215,6 +220,7 @@ bool desktop_receiver::decode_frame(streams_t::iterator it, shards::receiver::fr
 		failures.push_back(now);
 		bool retry = failures.size() <= 5;
 		spdlog::error("Desktop decoder for {}: {}{}", stream.name, e.what(), retry ? ", recreating it" : ", giving up");
+		metric(stream.name, "decoder_failed");
 		if (not retry)
 			std::terminate();
 
@@ -250,6 +256,7 @@ void desktop_receiver::push_blit_handle(shard_accumulator * decoder, std::shared
 	});
 	if (it == streams.end() or not it->second or handle->dmabuf_fd < 0)
 		return;
+	metric(it->second->name, "decoded", handle->feedback.frame_index);
 	desktop_frame_info info{
 	        .source = source,
 	        .surface = it->second->surface,
