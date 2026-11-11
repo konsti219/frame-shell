@@ -114,6 +114,8 @@ pub enum PacketServer {
 	WlxWindowAttribSetResponse(Serial, Result<(), String>),
 	WvrStateChanged(WvrStateChanged),
 	CustomEvent(CustomEvent),
+	/// JSON: `{"native": [client], "pcs": [{name, id, connected, clients_known, steam_running, clients: [client]}]}`
+	WlxAppListResponse(Serial, String),
 }
 
 impl PacketServer {
@@ -131,6 +133,7 @@ impl PacketServer {
 			PacketServer::WlxWindowAttribSetResponse(serial, _) => Some(serial),
 			PacketServer::WvrStateChanged(_) => None,
 			PacketServer::CustomEvent(_) => None,
+			PacketServer::WlxAppListResponse(serial, _) => Some(serial),
 		}
 	}
 }

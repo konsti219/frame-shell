@@ -103,6 +103,8 @@ build-headset: _fetch-eye-model
     cargo build --locked --manifest-path /work/wayvr/Cargo.toml \
         --target aarch64-unknown-linux-gnu -p wayvr --lib --bin wayvr --release \
         --no-default-features --features openxr,wayland,feat-monado-metrics
+    cargo build --locked --manifest-path /work/wayvr/Cargo.toml \
+        --target aarch64-unknown-linux-gnu -p wayvrctl --release
     # X11 apps in WayVR (Steam's client among them): SteamOS doesn't ship xwayland-satellite
     cargo install --locked --git https://github.com/Supreeeme/xwayland-satellite --tag v0.8.3 \
         --target aarch64-unknown-linux-gnu --root "$build/xwayland-satellite" xwayland-satellite
@@ -112,6 +114,7 @@ build-headset: _fetch-eye-model
     aarch64-linux-gnu-strip --strip-debug "$stage/frame-shell-client"
     install -Dm755 "$CARGO_TARGET_DIR/aarch64-unknown-linux-gnu/release/libwayvr.so" "$stage/libwayvr.so"
     install -Dm755 "$CARGO_TARGET_DIR/aarch64-unknown-linux-gnu/release/wayvr" "$stage/wayvr"
+    install -Dm755 "$CARGO_TARGET_DIR/aarch64-unknown-linux-gnu/release/wayvrctl" "$stage/wayvrctl"
     loader=$build/client/_deps/openxr_loader-build/src/loader/libopenxr_loader.so
     install -Dm755 "$loader" "$stage/libopenxr-shell.so"
     install -Dm755 "$loader" "$stage/libopenxr_loader.so.1"
@@ -180,7 +183,7 @@ deploy:
     ssh "$headset" 'bash -euo pipefail -s' <<'EOF'
     systemctl --user daemon-reload
     stage="$HOME/.local/state/frame-shell/deploy"
-    for binary in "$stage/frame-shell-client" "$stage/libwayvr.so" "$stage/wayvr"; do
+    for binary in "$stage/frame-shell-client" "$stage/libwayvr.so" "$stage/wayvr" "$stage/wayvrctl"; do
         if report=$(LD_LIBRARY_PATH="$stage" ldd "$binary" 2>&1) && [[ "$report" != *"not found"* ]]; then :; else
             printf '%s\n' "$report" >&2
             exit 1
@@ -202,6 +205,7 @@ deploy:
     install -m755 "$stage/frame-shell-client" "$HOME/.local/bin/frame-shell-client"
     install -Dm755 -t "$HOME/.local/lib/frame-shell/bin" "$stage/steamvr" "$stage/podman" "$stage/xwayland-satellite"
     install -m755 "$stage/wayvr" "$HOME/.local/bin/wayvr"
+    install -m755 "$stage/wayvrctl" "$HOME/.local/bin/wayvrctl"
     install -m755 "$stage/"*.so* "$HOME/.local/lib/frame-shell/"
     cp -a "$stage/xrizer" "$HOME/.local/lib/frame-shell/"
     install -Dm644 -t "$HOME/.local/share/frame-shell" "$stage/eye_kit_stage1_fp16.pte" "$stage/eye_kit_stage2_fp16.pte"

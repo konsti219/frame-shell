@@ -531,6 +531,10 @@ impl Connection {
             PacketClient::WlxOverlaySetVisible(overlay, visible) => {
                 Self::handle_wlx_overlay_set_visible(params, overlay, visible);
             }
+            PacketClient::WlxAppList(serial) => {
+                let apps = crate::frame_shell::app_list_json();
+                self.send(&PacketServer::WlxAppListResponse(serial, apps))?;
+            }
             PacketClient::CustomEventSubscribe(names) => {
                 self.custom_events = Some(names);
             }

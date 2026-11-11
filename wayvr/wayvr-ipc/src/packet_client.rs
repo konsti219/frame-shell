@@ -253,6 +253,8 @@ pub enum PacketClient {
 	WlxWindowAttribGet(Serial, WlxWindowAttribGetParams),
 	WlxWindowAttribSet(Serial, WlxWindowAttribSetParams),
 	WlxOverlaySetVisible(String, bool),
+	/// What runs on the headset and on each PC, as the keyboard's top row lists it
+	WlxAppList(Serial),
 	/// Receive `CustomEvent`s with these names, or all of them for an empty list
 	CustomEventSubscribe(Vec<String>),
 }

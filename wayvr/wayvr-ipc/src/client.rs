@@ -383,6 +383,15 @@ impl WayVRClient {
 		)
 	}
 
+	pub async fn fn_wlx_app_list(client: WayVRClientMutex, serial: Serial) -> anyhow::Result<String> {
+		Ok(send_and_wait!(
+			client,
+			serial,
+			&PacketClient::WlxAppList(serial),
+			WlxAppListResponse
+		))
+	}
+
 	pub async fn fn_wvr_process_get(
 		client: WayVRClientMutex,
 		serial: Serial,

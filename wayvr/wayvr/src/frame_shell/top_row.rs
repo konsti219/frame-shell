@@ -122,6 +122,31 @@ pub fn native_clients(_app: &AppState) -> Vec<RunningClient> {
     running_clients(None, clients)
 }
 
+/// What runs on the headset (not the shell itself) and on each PC, for `wayvrctl apps`
+pub fn app_list_json() -> String {
+    let own = std::process::id() as i32;
+    let native: Vec<_> = native_runtime(|runtime| runtime.clients())
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|client| client.pid != own)
+        .collect();
+    let pcs: Vec<_> = crate::frame_hosts::pcs()
+        .into_iter()
+        .map(|pc| {
+            let source = pc.source;
+            serde_json::json!({
+                "name": pc.name,
+                "id": pc.id,
+                "connected": source.is_some_and(crate::frame_host::is_connected),
+                "clients_known": source.is_some_and(crate::frame_host::clients_known),
+                "steam_running": source.and_then(crate::frame_host::games).unwrap_or_default(),
+                "clients": source.map(crate::frame_host::clients).unwrap_or_default(),
+            })
+        })
+        .collect();
+    serde_json::json!({ "native": native, "pcs": pcs }).to_string()
+}
+
 /// Shows a runtime client: a PC's (presenting that PC first) or the headset's own (None)
 pub fn focus_client(source: Option<u32>, client: u32) {
     control_client(source, client, wayvr_ipc::frame::ClientAction::Select);

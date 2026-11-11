@@ -37,7 +37,9 @@ For everyday installation, NixOS PCs import the flake's `nixosModules.host` and 
 `services.frame-shell.enable`: the server with its host services as a user service (`frame-shell.service`), its
 port, mDNS publishing and uinput (`inputUsers`). VR extras stay outside: `settings.openvr-compat-path` with the
 flake's `xrizer` (the Frame's controller patches), `steamPackage` to start Steam games. The flake also builds the
-`wayvrctl` is the PC-side WayVR IPC client from this tree. Patches for upstream packages are in `nix/`.
+`wayvrctl` is the PC-side WayVR IPC client from this tree; `just deploy` also installs it on the headset, where
+`wayvrctl apps` lists what runs on the headset and on each PC (the keyboard's top row). Patches for upstream packages
+are in `nix/`.
 
 The headset's "Desktop" app (WayVR's launcher) is SteamOS's nested Plasma (`steamos-nested-desktop`, as in
 SteamVR) in a WayVR window. It is registered in memory by the shell and uses WayVR's normal app launch path.

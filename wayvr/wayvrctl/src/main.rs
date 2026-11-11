@@ -152,6 +152,9 @@ async fn run_once(state: &mut WayVRClientState, args: Args) -> anyhow::Result<()
         Subcommands::ProcessList => {
             wvr_process_list(state).await;
         }
+        Subcommands::Apps => {
+            helper::wlx_app_list(state).await;
+        }
         Subcommands::ProcessTerminate { handle } => {
             let handle = serde_json::from_str(&handle).context("Invalid handle")?;
             wvr_process_terminate(state, handle).await;
@@ -319,6 +322,8 @@ enum Subcommands {
     },
     /// List all processes managed by WayVR
     ProcessList,
+    /// List what runs on the headset and on each PC (the keyboard's top row), without the shell itself
+    Apps,
     /// Terminate a WayVR-managed process
     ProcessTerminate {
         /// A JSON process handle returned by ProcessList or ProcessLaunch

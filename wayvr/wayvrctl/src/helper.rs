@@ -93,6 +93,17 @@ pub async fn wvr_process_list(state: &mut WayVRClientState) {
     )
 }
 
+pub async fn wlx_app_list(state: &mut WayVRClientState) {
+    let result = WayVRClient::fn_wlx_app_list(
+        state.wayvr_client.clone(),
+        state.serial_generator.increment_get(),
+    )
+    .await
+    .context("failed to list apps")
+    .and_then(|json| serde_json::from_str::<serde_json::Value>(&json).context("invalid app list"));
+    handle_result(state.pretty_print, result);
+}
+
 pub async fn wvr_process_terminate(
     state: &mut WayVRClientState,
     handle: packet_server::WvrProcessHandle,
