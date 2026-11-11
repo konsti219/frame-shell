@@ -214,7 +214,7 @@ pub fn poll_surfaces(app: &mut AppState) {
 pub struct PcInput {
     modifiers: u8,
     held: BTreeSet<u16>,
-    /// PC the pointer is on: buttons and keys go there
+    /// PC last clicked: buttons and keys go there
     source: u32,
 }
 
@@ -240,11 +240,6 @@ impl PcInput {
 impl HidProvider for PcInput {
     fn mouse_move(&mut self, pos: DVec2) {
         let key = POINTER_SURFACE.load(Ordering::Relaxed);
-        // Moving to another PC lets go of what is held on the previous one
-        if (key >> 32) as u32 != self.source {
-            PcInput::release(self);
-            self.source = (key >> 32) as u32;
-        }
         enqueue(ShellInput {
             kind: 2,
             x: pos.x.clamp(0., 1.) as f32,
@@ -256,6 +251,12 @@ impl HidProvider for PcInput {
     }
     fn mouse_move_rel(&mut self, _: DVec2) {}
     fn send_button(&mut self, button: u16, down: bool) {
+        let source = (POINTER_SURFACE.load(Ordering::Relaxed) >> 32) as u32;
+        // Clicking another PC lets go of what is held on the previous one
+        if down && source != self.source {
+            PcInput::release(self);
+            self.source = source;
+        }
         enqueue(ShellInput {
             kind: 1,
             code: button.saturating_sub(0x110).into(),
@@ -269,7 +270,7 @@ impl HidProvider for PcInput {
             kind: 3,
             x: delta.x,
             y: delta.y,
-            source: self.source,
+            source: (POINTER_SURFACE.load(Ordering::Relaxed) >> 32) as u32,
             ..Default::default()
         });
     }
@@ -569,13 +570,12 @@ impl OverlayBackend for DesktopOverlay {
     fn notify(&mut self, _: &mut AppState, _: OverlayEventData) -> anyhow::Result<()> {
         Ok(())
     }
-    // WayVR's own screen input (hand priority, move throttle, click freeze, left-handed mode, scrolling) on
+    // WayVR's own screen input (cursor owner, move throttle, click freeze, left-handed mode, scrolling) on
     // this surface's normalized coordinates
     fn on_hover(&mut self, app: &mut AppState, hit: &PointerHit) -> HoverResult {
         if let Some((offline, _)) = &mut self.offline {
             return offline.on_hover(app, hit);
         }
-        POINTER_SURFACE.store(self.key, Ordering::Relaxed);
         // A pointer that didn't move doesn't move the mouse, so the PC's own mouse keeps working
         if let Some(meta) = self.meta {
             let pixel = [
@@ -583,10 +583,13 @@ impl OverlayBackend for DesktopOverlay {
                 (hit.uv.y * meta.extent[1] as f32).round() as i32,
             ];
             if self.last_hover.replace((hit.pointer, pixel)) == Some((hit.pointer, pixel)) {
+                // Still counts as pointing at this PC, which keeps the cursor from the other laser
+                app.input_state.cursors.hover(self.key >> 32, hit.pointer);
                 return HoverResult::consume();
             }
         }
-        screen_hover(app, hit, hit.uv)
+        POINTER_SURFACE.store(self.key, Ordering::Relaxed);
+        screen_hover(app, hit, hit.uv, self.key >> 32)
     }
     fn on_left(&mut self, app: &mut AppState, pointer: usize) {
         if let Some((offline, _)) = &mut self.offline {
@@ -602,11 +605,12 @@ impl OverlayBackend for DesktopOverlay {
             return;
         }
         POINTER_SURFACE.store(self.key, Ordering::Relaxed);
-        screen_pointer(app, hit, pressed, hit.uv);
+        screen_pointer(app, hit, pressed, hit.uv, self.key >> 32);
     }
-    fn on_scroll(&mut self, app: &mut AppState, _: &PointerHit, delta: WheelDelta) {
+    fn on_scroll(&mut self, app: &mut AppState, hit: &PointerHit, delta: WheelDelta) {
         if self.offline.is_none() {
-            screen_scroll(app, delta);
+            POINTER_SURFACE.store(self.key, Ordering::Relaxed);
+            screen_scroll(app, hit, delta, self.key >> 32);
         }
     }
     fn get_interaction_transform(&mut self) -> Option<Affine2> {

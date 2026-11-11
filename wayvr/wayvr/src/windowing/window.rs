@@ -18,7 +18,6 @@ pub struct OverlayWindowData<T> {
     pub config: OverlayWindowConfig,
     pub data: T,
     pub birthframe: usize,
-    pub primary_pointer: Option<usize>,
     pub hover_pointers: [bool; 2],
 }
 
@@ -30,7 +29,6 @@ where
         Self {
             data: T::default(),
             config,
-            primary_pointer: None,
             hover_pointers: [false, false],
             birthframe: 0,
         }

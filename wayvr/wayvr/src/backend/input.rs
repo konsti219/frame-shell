@@ -84,6 +84,7 @@ pub struct InputState {
     pub devices: Vec<TrackedDevice>,
     pub handsfree_state: PointerState,
     pub picking_focus: FocusPickState,
+    pub cursors: Cursors,
     processes: Vec<Child>,
     disable_lerp_until: Instant,
     pub head_yaw_total: f64,
@@ -102,6 +103,7 @@ impl InputState {
             processes: Vec::new(),
             handsfree_state: PointerState::default(),
             picking_focus: FocusPickState::None,
+            cursors: Cursors::default(),
             disable_lerp_until: Instant::now(),
             head_yaw_total: 0.0,
             head_last_yaw: None,
@@ -199,9 +201,10 @@ impl InputState {
         }
     }
 
-    pub const fn pre_update(&mut self) {
+    pub fn pre_update(&mut self) {
         self.pointers[0].before = self.pointers[0].now;
         self.pointers[1].before = self.pointers[1].now;
+        self.cursors.next_frame();
     }
 
     pub fn post_update(&mut self, session: &AppSession) {
@@ -210,10 +213,6 @@ impl InputState {
         for hand in &mut self.pointers {
             #[cfg(debug_assertions)]
             debug_print_hand(hand);
-
-            if hand.now.any_click() {
-                hand.last_click = Instant::now();
-            }
 
             // Prevent the mode from changing during a click
             if !hand.before.any_click() {
@@ -272,6 +271,73 @@ impl InputState {
                 }
             }
         }
+    }
+}
+
+/// A mouse cursor that screens share: the local desktop's, or one PC's (its source id)
+pub type CursorId = u64;
+pub const LOCAL_CURSOR: CursorId = u64::MAX;
+
+struct CursorState {
+    id: CursorId,
+    owner: usize,
+    /// Moves wait until then (move throttle, click freeze)
+    next_move: Instant,
+}
+
+/// Which laser drives each cursor: only its owner moves it, so lasers on two screens of one cursor don't fight
+#[derive(Default)]
+pub struct Cursors {
+    cursors: Vec<CursorState>,
+    /// The cursor each laser points at, this frame and the last (hovers run in hand order)
+    hovering: [Option<CursorId>; 2],
+    hovered: [Option<CursorId>; 2],
+}
+
+impl Cursors {
+    const fn next_frame(&mut self) {
+        self.hovered = self.hovering;
+        self.hovering = [None, None];
+    }
+
+    /// A hover of `pointer` on a screen of `cursor`: true if it may move the cursor now. It takes the cursor
+    /// while the owner points at none of that cursor's screens.
+    pub fn hover(&mut self, cursor: CursorId, pointer: usize) -> bool {
+        self.hovering[pointer] = Some(cursor);
+        let owner_busy = self.cursors.iter().find(|c| c.id == cursor).is_some_and(|c| {
+            c.owner != pointer
+                && (self.hovering[c.owner] == Some(cursor) || self.hovered[c.owner] == Some(cursor))
+        });
+        if owner_busy {
+            return false;
+        }
+        self.take(cursor, pointer);
+        self.state(cursor).next_move <= Instant::now()
+    }
+
+    /// A click or scroll takes the cursor
+    pub fn take(&mut self, cursor: CursorId, pointer: usize) {
+        self.state(cursor).owner = pointer;
+    }
+
+    /// No moves of `cursor` for `millis`
+    pub fn hold(&mut self, cursor: CursorId, millis: u64) {
+        self.state(cursor).next_move = Instant::now() + Duration::from_millis(millis);
+    }
+
+    fn state(&mut self, cursor: CursorId) -> &mut CursorState {
+        let idx = match self.cursors.iter().position(|c| c.id == cursor) {
+            Some(idx) => idx,
+            None => {
+                self.cursors.push(CursorState {
+                    id: cursor,
+                    owner: 0,
+                    next_move: Instant::now(),
+                });
+                self.cursors.len() - 1
+            }
+        };
+        &mut self.cursors[idx]
     }
 }
 
@@ -369,7 +435,6 @@ pub struct Pointer {
     pub raw_pose: Affine3A,
     pub now: PointerState,
     pub before: PointerState,
-    pub last_click: Instant,
     pub pending_haptics: Option<Haptics>,
     pub(super) interaction: InteractionState,
     pub tracked: bool,
@@ -387,7 +452,6 @@ impl Pointer {
             raw_pose: Affine3A::IDENTITY,
             now: PointerState::default(),
             before: PointerState::default(),
-            last_click: Instant::now(),
             pending_haptics: None,
             interaction: InteractionState::default(),
             tracked: false,
@@ -438,7 +502,6 @@ pub struct PointerHit {
     pub pointer: usize,
     pub overlay: OverlayID,
     pub mode: PointerMode,
-    pub primary: bool,
     pub uv: Vec2,
 }
 
@@ -534,15 +597,7 @@ pub fn interact<O>(
 where
     O: Default,
 {
-    let hits = if app.input_state.pointers[1].last_click > app.input_state.pointers[0].last_click {
-        let right = interact_hand(1, overlays, app);
-        let left = interact_hand(0, overlays, app);
-        [left, right]
-    } else {
-        let left = interact_hand(0, overlays, app);
-        let right = interact_hand(1, overlays, app);
-        [left, right]
-    };
+    let hits = [interact_hand(0, overlays, app), interact_hand(1, overlays, app)];
 
     for (idx, hit) in hits.iter().enumerate() {
         populate_lines(
@@ -588,7 +643,7 @@ where
     }
 
     let hovered_id = pointer.interaction.hovered_id.take();
-    let (Some((mut hit, raw_hit)), haptics) = get_nearest_hit(idx, overlays, app) else {
+    let (Some((hit, raw_hit)), haptics) = get_nearest_hit(idx, overlays, app) else {
         if let Some(wvr_server) = app.wvr_server.as_mut() {
             wvr_server.clear_dnd_focus(idx);
         }
@@ -612,9 +667,6 @@ where
         && hovered_id != hit.overlay
         && let Some(old_hovered) = overlays.mut_by_id(hovered_id)
     {
-        if old_hovered.primary_pointer.is_some_and(|i| i == idx) {
-            old_hovered.primary_pointer = None;
-        }
         log::debug!("{} on_left (focus changed)", old_hovered.config.name);
         old_hovered.config.backend.on_left(app, idx);
         old_hovered.hover_pointers[idx] = false;
@@ -633,16 +685,6 @@ where
     pointer = &mut app.input_state.pointers[idx];
     pointer.interaction.hovered_id = Some(hit.overlay);
     hovered.hover_pointers[idx] = true;
-
-    if let Some(primary_pointer) = hovered.primary_pointer {
-        if hit.pointer <= primary_pointer {
-            hovered.primary_pointer = Some(hit.pointer);
-            hit.primary = true;
-        }
-    } else {
-        hovered.primary_pointer = Some(hit.pointer);
-        hit.primary = true;
-    }
 
     if let Some(state) = hovered.config.active_state.as_ref() {
         pointer.interaction.block_input = if !state.block_input {
@@ -906,7 +948,6 @@ where
             pointer: pointer_idx,
             overlay: hit.overlay,
             mode,
-            primary: false,
             uv,
         };
 

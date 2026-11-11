@@ -1,14 +1,11 @@
-use std::{
-    sync::{Arc, LazyLock, atomic::AtomicU64},
-    time::Instant,
-};
+use std::sync::Arc;
 
 use glam::{Affine2, DVec2, Vec2, vec2};
 use wlx_capture::{WlxCapture, frame::Transform};
 
 use crate::{
     XrBackend,
-    backend::input::{HoverResult, PointerHit, PointerMode},
+    backend::input::{CursorId, HoverResult, LOCAL_CURSOR, PointerHit, PointerMode},
     overlays::screen::capture::MyFirstDmaExporter,
     state::AppState,
     subsystem::{
@@ -26,22 +23,13 @@ use wlx_common::{
 
 use super::capture::{ScreenPipeline, WlxCaptureIn, WlxCaptureOut, receive_callback};
 
-static START: LazyLock<Instant> = LazyLock::new(Instant::now);
-static NEXT_MOVE: AtomicU64 = AtomicU64::new(0);
-
-fn can_move() -> bool {
-    START.elapsed().as_millis() as u64 > NEXT_MOVE.load(std::sync::atomic::Ordering::Relaxed)
-}
-
-fn set_next_move(millis_from_now: u64) {
-    NEXT_MOVE.store(
-        START.elapsed().as_millis() as u64 + millis_from_now,
-        std::sync::atomic::Ordering::Relaxed,
-    );
-}
-
 /// Desktop mouse input for a screen-like overlay; `pos` is the hit in the HID provider's coordinates.
-pub(crate) fn screen_hover(app: &mut AppState, hit: &PointerHit, pos: Vec2) -> HoverResult {
+pub(crate) fn screen_hover(
+    app: &mut AppState,
+    hit: &PointerHit,
+    pos: Vec2,
+    cursor: CursorId,
+) -> HoverResult {
     #[cfg(debug_assertions)]
     log::trace!("Hover: {:?}", hit.uv);
 
@@ -52,19 +40,26 @@ pub(crate) fn screen_hover(app: &mut AppState, hit: &PointerHit, pos: Vec2) -> H
             .set_input_focus(app.wvr_server.as_mut(), InputFocus::PhysicalScreen);
     }
 
-    if can_move()
-        && (!app.session.config.focus_follows_mouse_mode
-            || app.input_state.pointers[hit.pointer].now.move_mouse)
+    if (!app.session.config.focus_follows_mouse_mode
+        || app.input_state.pointers[hit.pointer].now.move_mouse)
+        && app.input_state.cursors.hover(cursor, hit.pointer)
     {
         app.hid_provider
             .inner
             .mouse_move(DVec2::new(pos.x as _, pos.y as _));
-        set_next_move(app.session.config.mouse_move_interval_ms as _);
+        let interval = app.session.config.mouse_move_interval_ms.max(0) as u64;
+        app.input_state.cursors.hold(cursor, interval);
     }
     HoverResult::consume()
 }
 
-pub(crate) fn screen_pointer(app: &mut AppState, hit: &PointerHit, pressed: bool, pos: Vec2) {
+pub(crate) fn screen_pointer(
+    app: &mut AppState,
+    hit: &PointerHit,
+    pressed: bool,
+    pos: Vec2,
+    cursor: CursorId,
+) {
     let mut btn = match hit.mode {
         PointerMode::Right => MOUSE_RIGHT,
         PointerMode::Middle => MOUSE_MIDDLE,
@@ -81,7 +76,9 @@ pub(crate) fn screen_pointer(app: &mut AppState, hit: &PointerHit, pressed: bool
     }
 
     if pressed {
-        set_next_move(app.session.config.click_freeze_time_ms as _);
+        app.input_state.cursors.take(cursor, hit.pointer);
+        let freeze = app.session.config.click_freeze_time_ms.max(0) as u64;
+        app.input_state.cursors.hold(cursor, freeze);
     }
 
     app.hid_provider.inner.send_button(btn, pressed);
@@ -94,7 +91,13 @@ pub(crate) fn screen_pointer(app: &mut AppState, hit: &PointerHit, pressed: bool
         .mouse_move(DVec2::new(pos.x as _, pos.y as _));
 }
 
-pub(crate) fn screen_scroll(app: &mut AppState, mut delta: WheelDelta) {
+pub(crate) fn screen_scroll(
+    app: &mut AppState,
+    hit: &PointerHit,
+    mut delta: WheelDelta,
+    cursor: CursorId,
+) {
+    app.input_state.cursors.take(cursor, hit.pointer);
     // convert to v120 value; maximum deflect scrolls at half speed
     delta.x *= 60.0;
     delta.y *= 60.0;
@@ -350,7 +353,12 @@ impl OverlayBackend for ScreenBackend {
     }
 
     fn on_hover(&mut self, app: &mut AppState, hit: &PointerHit) -> HoverResult {
-        screen_hover(app, hit, self.mouse_transform.transform_point2(hit.uv))
+        screen_hover(
+            app,
+            hit,
+            self.mouse_transform.transform_point2(hit.uv),
+            LOCAL_CURSOR,
+        )
     }
     fn on_pointer(&mut self, app: &mut AppState, hit: &PointerHit, pressed: bool) {
         screen_pointer(
@@ -358,11 +366,12 @@ impl OverlayBackend for ScreenBackend {
             hit,
             pressed,
             self.mouse_transform.transform_point2(hit.uv),
+            LOCAL_CURSOR,
         );
     }
 
-    fn on_scroll(&mut self, app: &mut AppState, _hit: &PointerHit, delta: WheelDelta) {
-        screen_scroll(app, delta);
+    fn on_scroll(&mut self, app: &mut AppState, hit: &PointerHit, delta: WheelDelta) {
+        screen_scroll(app, hit, delta, LOCAL_CURSOR);
     }
 
     fn on_left(&mut self, _app: &mut AppState, _hand: usize) {}
