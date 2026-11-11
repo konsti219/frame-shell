@@ -2,7 +2,9 @@ use std::process::{Child, Command};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use glam::{Affine3A, Quat, Vec2, Vec3A};
+use std::f32::consts::PI;
+
+use glam::{Affine3A, Mat3A, Quat, Vec2, Vec3A};
 
 use idmap_derive::IntegerId;
 use smallvec::{SmallVec, smallvec};
@@ -304,10 +306,15 @@ impl Cursors {
     /// while the owner points at none of that cursor's screens.
     pub fn hover(&mut self, cursor: CursorId, pointer: usize) -> bool {
         self.hovering[pointer] = Some(cursor);
-        let owner_busy = self.cursors.iter().find(|c| c.id == cursor).is_some_and(|c| {
-            c.owner != pointer
-                && (self.hovering[c.owner] == Some(cursor) || self.hovered[c.owner] == Some(cursor))
-        });
+        let owner_busy = self
+            .cursors
+            .iter()
+            .find(|c| c.id == cursor)
+            .is_some_and(|c| {
+                c.owner != pointer
+                    && (self.hovering[c.owner] == Some(cursor)
+                        || self.hovered[c.owner] == Some(cursor))
+            });
         if owner_busy {
             return false;
         }
@@ -525,6 +532,8 @@ pub struct GrabData {
     pub offset: Affine3A,
     pub grabbed_id: OverlayID,
     pub grab_anchor: bool,
+    /// Anchor grabs move and turn the group about its center (in anchor space), not the anchor itself
+    pub pivot: Vec3A,
 }
 
 #[repr(u8)]
@@ -597,7 +606,10 @@ pub fn interact<O>(
 where
     O: Default,
 {
-    let hits = [interact_hand(0, overlays, app), interact_hand(1, overlays, app)];
+    let hits = [
+        interact_hand(0, overlays, app),
+        interact_hand(1, overlays, app),
+    ];
 
     for (idx, hit) in hits.iter().enumerate() {
         populate_lines(
@@ -675,6 +687,13 @@ where
         }
     }
 
+    let grabbing = &app.input_state.pointers[idx];
+    let pivot = if grabbing.now.grab && !grabbing.before.grab {
+        anchored_center(overlays, &app.anchor)
+    } else {
+        Vec3A::ZERO
+    };
+
     overlays.edit_overlay(hit.overlay, true, app);
     let edit_mode = overlays.get_edit_mode();
 
@@ -729,6 +748,7 @@ where
             app,
             edit_mode,
             grab_float,
+            pivot,
         });
         log::debug!("Hand {}: grabbed {}", hit.pointer, hovered.config.name);
         return (
@@ -969,6 +989,68 @@ struct StartGrabParams<'a> {
     app: &'a mut AppState,
     edit_mode: bool,
     grab_float: bool,
+    pivot: Vec3A,
+}
+
+/// Center of the anchored overlays that show, in anchor space
+/// Rotation (upright along `up`) about `pivot` that makes the point at local offset `to_point` face `eye`
+fn face_about_pivot(
+    pivot: Vec3A,
+    to_point: Vec3A,
+    eye: Vec3A,
+    up: Vec3A,
+    snap_angle: f32,
+) -> Option<Mat3A> {
+    // solve in a frame whose Y is `up`: R⁻¹·(eye − pivot) = to_point + λ·Z with λ > 0
+    let up = up.normalize();
+    let side = up.any_orthonormal_vector();
+    let frame = Mat3A::from_cols(side, up, side.cross(up));
+    let v = frame.transpose() * (eye - pivot);
+    let a = to_point;
+    let disc = a.z * a.z - a.length_squared() + v.length_squared();
+    if disc < 0.0 {
+        return None;
+    }
+    let w = a + (-a.z + disc.sqrt()) * Vec3A::Z;
+    if w.z <= 0.0 {
+        return None;
+    }
+    // pitch first (about X) so w's height matches v's, then yaw (about Y) for the rest
+    let r = w.y.hypot(w.z);
+    if v.y.abs() > r {
+        return None;
+    }
+    let phi = w.z.atan2(w.y);
+    let base = (v.y / r).acos();
+    let (p1, p2) = (base - phi, -base - phi);
+    let wrap = |x: f32| (x + PI).rem_euclid(2.0 * PI) - PI;
+    let (p1, p2) = (wrap(p1), wrap(p2));
+    let mut pitch = if p1.abs() < p2.abs() { p1 } else { p2 };
+    let u = Mat3A::from_rotation_x(pitch) * w;
+    let yaw = v.x.atan2(v.z) - u.x.atan2(u.z);
+    if snap_angle > f32::EPSILON {
+        let step = snap_angle.to_radians();
+        pitch = (pitch / step).round() * step;
+    }
+    Some(frame * Mat3A::from_rotation_y(yaw) * Mat3A::from_rotation_x(pitch))
+}
+
+fn anchored_center<O>(overlays: &OverlayWindowManager<O>, anchor: &Affine3A) -> Vec3A
+where
+    O: Default,
+{
+    let (sum, count) = overlays
+        .iter()
+        .filter(|(_, o)| o.config.name != *ANCHOR_NAME)
+        .filter_map(|(_, o)| o.config.active_state.as_ref())
+        .filter(|state| matches!(state.positioning, Positioning::Anchored) && state.alpha > 0.05)
+        .fold((Vec3A::ZERO, 0), |(sum, n), state| {
+            (sum + state.transform.translation, n + 1)
+        });
+    if count == 0 {
+        return Vec3A::ZERO;
+    }
+    anchor.inverse().transform_point3a(sum / count as f32)
 }
 
 fn start_grab(par: StartGrabParams) {
@@ -989,7 +1071,7 @@ fn start_grab(par: StartGrabParams) {
             && pointer.interaction.mode == PointerMode::Middle);
 
     let relative_grab_transform = if grab_anchor {
-        app.anchor
+        app.anchor * Affine3A::from_translation(par.pivot.into())
     } else {
         state.transform
     };
@@ -1002,6 +1084,7 @@ fn start_grab(par: StartGrabParams) {
         offset,
         grabbed_id: id,
         grab_anchor,
+        pivot: par.pivot,
     });
 
     app.tasks.enqueue(TaskType::Overlay(OverlayTask::Modify(
@@ -1097,13 +1180,12 @@ where
         let scroll_factor = 90.0 * app.delta_time;
 
         if grab_anchor {
+            let pivot_local = Affine3A::from_translation(grab_data.pivot.into());
+            let mut pivot = app.anchor * pivot_local;
             if pointer.now.any_click() {
                 pointer.interaction.mode = PointerMode::Special;
                 let grab_dist = grab_data.offset.translation.length().clamp(0.5, 5.0) * 0.2 + 0.4;
-                handle_scale(
-                    &mut app.anchor,
-                    pointer.now.scroll_y * grab_dist * scroll_factor,
-                );
+                handle_scale(&mut pivot, pointer.now.scroll_y * grab_dist * scroll_factor);
                 handle_scale(
                     &mut grab_data.offset,
                     pointer.now.scroll_y * grab_dist * scroll_factor,
@@ -1116,18 +1198,30 @@ where
                 grab_data.offset.translation.z = grab_data.offset.translation.z.min(-0.05);
             }
             if pointer.now.click_right || pointer.now.click_modifier_right {
-                app.anchor = pointer.pose * grab_data.offset;
+                pivot = pointer.pose * grab_data.offset;
             } else {
-                app.anchor.translation =
-                    pointer.pose.transform_point3a(grab_data.offset.translation);
-                let scale = scalar_scale(&app.anchor);
-                realign(
-                    &mut app.anchor,
-                    &app.input_state.hmd,
-                    scale,
+                pivot.translation = pointer.pose.transform_point3a(grab_data.offset.translation);
+                let scale = scalar_scale(&pivot);
+                let hmd = &app.input_state.hmd;
+                // lying on the side: hmd up becomes up, as in realign
+                let up = if hmd.x_axis.dot(Vec3A::Y).abs() > 0.2
+                    || hmd.z_axis.dot(Vec3A::Y).abs() > 0.9
+                {
+                    hmd.y_axis
+                } else {
+                    Vec3A::Y
+                };
+                if let Some(rotation) = face_about_pivot(
+                    pivot.translation,
+                    -grab_data.pivot * scale,
+                    hmd.translation,
+                    up,
                     app.session.config.snap_angle_deg,
-                );
+                ) {
+                    pivot.matrix3 = rotation.mul_scalar(scale);
+                }
             }
+            app.anchor = pivot * pivot_local.inverse();
         } else {
             // single grab resize
             if pointer.now.any_click() {
