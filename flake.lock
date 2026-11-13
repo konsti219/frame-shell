@@ -36,18 +36,18 @@
     "host-monado": {
       "flake": false,
       "locked": {
-        "lastModified": 1792959408,
-        "narHash": "sha256-EM1C2TFDUqEu/6Z/4cpTN+uOLWEbGhNgEwO6aDm1GS4=",
-        "ref": "wivrn",
-        "rev": "b6a48cbea123485c19063f990e64207c7e63a3a0",
-        "revCount": 9032,
-        "type": "git",
-        "url": "ssh://github.com_konsti219/konsti219/frame-monado.git"
+        "lastModified": 1794577619,
+        "narHash": "sha256-6S54do5Sc1lsr/u21Kghz3tqGeAEuln5y7yEl14vW/I=",
+        "owner": "konsti219",
+        "repo": "frame-monado",
+        "rev": "60dab48852b1dfe40ac6268d9e9fa6547bc0bea7",
+        "type": "github"
       },
       "original": {
+        "owner": "konsti219",
         "ref": "wivrn",
-        "type": "git",
-        "url": "ssh://github.com_konsti219/konsti219/frame-monado.git"
+        "repo": "frame-monado",
+        "type": "github"
       }
     },
     "nixpkgs": {

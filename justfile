@@ -5,7 +5,7 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 root := justfile_directory()
 host_build := root / "out/host"
 headset_build := root / "out/headset"
-headset := env("FRAME_HEADSET", "steamos@frame")
+headset := env("FRAME_HEADSET", "steamos@frame.local")
 monado := env("FRAME_MONADO", root / "../frame-monado")
 
 _default:
@@ -165,7 +165,7 @@ _fetch-eye-model:
         mv "$dest.tmp" "$dest"
     done
 
-# Install the headset shell and restart it if Monado runs; FRAME_HEADSET overrides steamos@frame
+# Install the headset shell and restart it if Monado runs; FRAME_HEADSET overrides steamos@frame.local
 deploy:
     #!/usr/bin/env bash
     set -euo pipefail

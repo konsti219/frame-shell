@@ -7,7 +7,7 @@
     rust-overlay.url = "github:oxalica/rust-overlay";
     rust-overlay.inputs.nixpkgs.follows = "nixpkgs";
     host-monado = {
-      url = "git+ssh://github.com_konsti219/konsti219/frame-monado.git?ref=wivrn";
+      url = "github:konsti219/frame-monado/wivrn";
       flake = false;
     };
   };
