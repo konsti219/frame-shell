@@ -1,6 +1,6 @@
 //! The Steam Frame's battery, as SteamVR reads it (Valve's charger service in /run/deckardcharger), its power draw
-//! from the board's power monitors, and the frame shell's performance modes: a GPU clock cap the shell keeps applied
-//! (frame-shell.service lifts it when the shell stops).
+//! from the board's power monitors, and the frame shell's performance modes: steamos-manager's performance profiles,
+//! which the shell keeps applied (frame-shell.service goes back to Performance when the shell stops).
 
 use std::path::PathBuf;
 
@@ -92,16 +92,24 @@ pub fn power() -> Option<Power> {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PerformanceMode {
-	/// The frame shell's tuning for PC streaming: GPU capped at 578 MHz
+	/// PC streaming: steamos-manager's Powersave profile (GPU capped at 629 MHz, CPUs at 2.04 GHz)
 	StreamingOptimized,
-	/// Native games: GPU uncapped
+	/// Native games: the Performance profile (uncapped GPU)
 	Standard,
 }
 
 impl PerformanceMode {
+	const fn profile(self) -> &'static str {
+		match self {
+			Self::StreamingOptimized => "Powersave",
+			Self::Standard => "Performance",
+		}
+	}
+
+	/// The GPU clock limit the profile sets, to notice when something else changed it
 	const fn gpu_max_mhz(self) -> u32 {
 		match self {
-			Self::StreamingOptimized => 578,
+			Self::StreamingOptimized => 629,
 			Self::Standard => 903,
 		}
 	}
@@ -136,30 +144,49 @@ fn gpu_limit(mhz: u32) -> Option<u64> {
 		.max()
 }
 
-fn write_gpu_limit(hz: u64) -> anyhow::Result<()> {
-	use std::io::Write;
-	let mut tee = std::process::Command::new("sudo")
-		.args(["-n", "tee", &format!("{GPU}/max_freq")])
-		.stdin(std::process::Stdio::piped())
+fn set_profile(profile: &str) -> anyhow::Result<()> {
+	let status = std::process::Command::new("steamosctl")
+		.args(["set-performance-profile", profile])
 		.stdout(std::process::Stdio::null())
-		.spawn()?;
-	tee.stdin.take().unwrap().write_all(hz.to_string().as_bytes())?;
-	let status = tee.wait()?;
-	anyhow::ensure!(status.success(), "sudo tee max_freq failed: {status}");
+		.status()?;
+	anyhow::ensure!(status.success(), "steamosctl set-performance-profile {profile} failed: {status}");
 	Ok(())
 }
 
-/// Applies the mode when the GPU's limit differs: at the shell's start, and when something else changed it (Steam
-/// sets its performance level to auto, which lifts the cap)
+/// The GPU limit a profile left in place for a mode: when it differs from `gpu_max_mhz`, it's not applied again
+static SETTLED: std::sync::Mutex<Option<(PerformanceMode, u64)>> = std::sync::Mutex::new(None);
+
+fn gpu_max_freq() -> anyhow::Result<u64> {
+	Ok(std::fs::read_to_string(format!("{GPU}/max_freq"))?.trim().parse::<u64>()?)
+}
+
+/// Applies the mode's profile when the GPU's limit differs: at the shell's start, and when something else changed it
+/// (Steam sets its GPU performance level to auto, which lifts the cap). steamosctl runs on its own thread, one at a
+/// time, since the caller is the render loop.
 pub fn enforce_performance_mode() -> anyhow::Result<()> {
-	let Some(limit) = gpu_limit(performance_mode().gpu_max_mhz()) else {
+	static RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+	let mode = performance_mode();
+	let Some(limit) = gpu_limit(mode.gpu_max_mhz()) else {
 		return Ok(());
 	};
-	let current = std::fs::read_to_string(format!("{GPU}/max_freq"))?.trim().parse::<u64>()?;
-	if current != limit {
-		log::info!("GPU limit {current} Hz instead of {limit} Hz: applying the performance mode");
-		write_gpu_limit(limit)?;
+	let current = gpu_max_freq()?;
+	let settled = *SETTLED.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+	if current == limit || settled == Some((mode, current)) || RUNNING.swap(true, std::sync::atomic::Ordering::AcqRel) {
+		return Ok(());
 	}
+	log::info!("GPU limit {current} Hz instead of {limit} Hz: applying the {} profile", mode.profile());
+	std::thread::spawn(move || {
+		match set_profile(mode.profile()).and_then(|()| gpu_max_freq()) {
+			Ok(after) => {
+				if after != limit {
+					log::warn!("The {} profile left the GPU limit at {after} Hz, not {limit} Hz", mode.profile());
+				}
+				*SETTLED.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some((mode, after));
+			}
+			Err(error) => log::warn!("Performance mode: {error:?}"),
+		}
+		RUNNING.store(false, std::sync::atomic::Ordering::Release);
+	});
 	Ok(())
 }
 

@@ -16,8 +16,8 @@ Restart=always
 RestartSec=2
 # Restart without passing through "failed", so OnFailure= (back to SteamVR) only follows the start limit
 RestartMode=direct
-# Lifts the GPU cap of the performance mode
-ExecStopPost=-/bin/sh -c 'g=/sys/class/devfreq/3d00000.gpu; tr " " "\\n" < $$g/available_frequencies | sort -n | tail -1 | sudo -n tee $$g/max_freq > /dev/null'
+# Back to the default profile, lifting the streaming mode's caps
+ExecStopPost=-/usr/bin/steamosctl set-performance-profile Performance
 
 [Install]
 WantedBy=monado.service
