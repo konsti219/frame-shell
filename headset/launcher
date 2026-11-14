@@ -14,7 +14,7 @@ export PATH="$HOME/.local/lib/frame-shell/bin:$PATH"
 # FEX's separate graphics provider cannot import libraries from the host home directory
 export PRESSURE_VESSEL_IMPORT_OPENXR_1_RUNTIMES=0
 export PRESSURE_VESSEL_FILESYSTEMS_RW="$XDG_RUNTIME_DIR/monado_comp_ipc${PRESSURE_VESSEL_FILESYSTEMS_RW:+:$PRESSURE_VESSEL_FILESYSTEMS_RW}"
-export LD_LIBRARY_PATH="$HOME/.local/lib/frame-shell:$HOME/.local/lib/wivrn${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export LD_LIBRARY_PATH="$HOME/.local/lib/frame-shell${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 export FRAME_SHELL_OPENXR_LOADER="$HOME/.local/lib/frame-shell/libopenxr-shell.so"
 export FRAME_SHELL_LIBRARY="$HOME/.local/lib/frame-shell/libwayvr.so"
 export DISABLE_VULKAN_FDM_INJECTION_LAYER=1

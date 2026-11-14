@@ -20,7 +20,7 @@ restores the installed service/runtime on exit. Normally launched Steam VR games
 development and installed, share `${XDG_STATE_HOME:-~/.local/state}/frame-desktop/capture-token`.
 The first connection may ask you to select your monitors; subsequent sessions save and reuse replacement tokens.
 Do not copy tokens into separate test directories: portal restore tokens are single-use. An explicit
-`FRAME_SHELL_CAPTURE_TOKEN` overrides the shared path; development runs migrate the previous `out/host/` tokens.
+`FRAME_SHELL_CAPTURE_TOKEN` overrides the shared path.
 
 ```sh
 just deploy                       # headset shell/client only; Monado must already be running

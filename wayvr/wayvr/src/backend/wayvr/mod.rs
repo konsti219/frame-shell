@@ -1327,7 +1327,6 @@ impl WvrServerState {
         userdata: HashMap<String, String>,
     ) -> anyhow::Result<process::ProcessHandle> {
         let auth_key = generate_auth_key();
-        let exec_path = plasma::resolve_executable(exec_path);
 
         let is_flatpak =
             exec_path.ends_with("flatpak") && args.first().is_some_and(|a| *a == "run");

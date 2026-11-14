@@ -9,16 +9,6 @@ use wlx_common::desktop_finder::{DesktopEntry, DesktopFinder};
 const EXEC: &str = "/usr/bin/steamos-nested-desktop";
 const APP_ID: &str = "deckard-nested-desktop";
 
-pub fn resolve_executable(exec: &str) -> &str {
-    if crate::frame_shell::EMBEDDED.load(Ordering::Relaxed)
-        && std::path::Path::new(exec).file_name() == Some(OsStr::new("frame-shell-desktop"))
-    {
-        EXEC
-    } else {
-        exec
-    }
-}
-
 pub fn register(finder: &mut DesktopFinder) {
     if !crate::frame_shell::EMBEDDED.load(Ordering::Relaxed) || !std::path::Path::new(EXEC).exists()
     {

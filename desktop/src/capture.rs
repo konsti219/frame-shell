@@ -30,29 +30,21 @@ struct Monitor {
     pixels: f64,
 }
 
-/// Restore tokens per output ("<output> <token>" lines); a bare token is from the single-screen helper.
+/// Restore tokens per output ("<output> <token>" lines)
 struct Tokens {
     path: PathBuf,
     outputs: Vec<(String, String)>,
-    unassigned: Option<String>,
 }
 
 impl Tokens {
     fn load(path: PathBuf) -> Self {
         let text = std::fs::read_to_string(&path).unwrap_or_default();
-        let mut outputs = Vec::new();
-        let mut unassigned = None;
-        for line in text.lines().map(str::trim).filter(|line| !line.is_empty()) {
-            match line.split_once(' ') {
-                Some((output, token)) => outputs.push((output.to_owned(), token.trim().to_owned())),
-                None => unassigned = Some(line.to_owned()),
-            }
-        }
-        Self {
-            path,
-            outputs,
-            unassigned,
-        }
+        let outputs = text
+            .lines()
+            .filter_map(|line| line.trim().split_once(' '))
+            .map(|(output, token)| (output.to_owned(), token.trim().to_owned()))
+            .collect();
+        Self { path, outputs }
     }
     fn get(&self, output: &str) -> Option<&str> {
         self.outputs
@@ -142,17 +134,16 @@ fn capture(output: &Output, shared: &Shared) -> Result<()> {
     std::thread::scope(|scope| -> Result<()> {
         // The portal handles one request at a time, so ask one by one: known tokens first, dialogs last
         while !output.stopped() {
-            let unassigned = tokens.unassigned.take();
-            let next = unassigned.map(|token| (None, Some(token))).or_else(|| {
-                let index = (0..monitors.len())
-                    .filter(|&index| !streaming[index] && !tried[index])
-                    .min_by_key(|&index| tokens.get(&monitors[index].name).is_none())?;
-                tried[index] = true;
-                Some((
-                    Some(index),
-                    tokens.get(&monitors[index].name).map(str::to_owned),
-                ))
-            });
+            let next = (0..monitors.len())
+                .filter(|&index| !streaming[index] && !tried[index])
+                .min_by_key(|&index| tokens.get(&monitors[index].name).is_none())
+                .map(|index| {
+                    tried[index] = true;
+                    (
+                        Some(index),
+                        tokens.get(&monitors[index].name).map(str::to_owned),
+                    )
+                });
             let Some((expected, token)) = next else { break };
             let wanted = expected.map_or("a monitor", |index| monitors[index].name.as_str());
             let restoring = token.is_some();

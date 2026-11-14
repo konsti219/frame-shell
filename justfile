@@ -197,11 +197,6 @@ deploy:
     # Listed in SteamVR's non-Steam apps: switches to the desktop session, which is the frame shell
     install -m644 "$stage/frame-shell.desktop" "$HOME/.local/share/applications/frame-shell.desktop"
     install -Dm644 "$stage/frame-shell.png" "$HOME/.local/share/icons/hicolor/256x256/apps/frame-shell.png"
-    rm -f "$HOME/.local/share/wayvr/openxr-layer-control"
-    # Remove the retired Plasma helper files; Desktop is built into the shell now
-    rm -f "$HOME/.local/bin/frame-shell-desktop" "$HOME/.local/share/applications/deckard-nested-desktop.desktop" \
-        "$HOME/.local/share/frame-shell/desktop-config/autostart/steam.desktop" "$stage/desktop" "$stage/deckard-nested-desktop.desktop"
-    rmdir "$HOME/.local/share/frame-shell/desktop-config/autostart" "$HOME/.local/share/frame-shell/desktop-config" 2>/dev/null || true
     install -m755 "$stage/frame-shell-client" "$HOME/.local/bin/frame-shell-client"
     install -Dm755 -t "$HOME/.local/lib/frame-shell/bin" "$stage/steamvr" "$stage/podman" "$stage/xwayland-satellite"
     install -m755 "$stage/wayvr" "$HOME/.local/bin/wayvr"
@@ -209,7 +204,6 @@ deploy:
     install -m755 "$stage/"*.so* "$HOME/.local/lib/frame-shell/"
     cp -a "$stage/xrizer" "$HOME/.local/lib/frame-shell/"
     install -Dm644 -t "$HOME/.local/share/frame-shell" "$stage/eye_kit_stage1_fp16.pte" "$stage/eye_kit_stage2_fp16.pte"
-    rm -f "$HOME/.local/share/frame-shell/eye_split96_uncapped_fp16.pte" "$stage/eye_split96_uncapped_fp16.pte"
     systemctl --user daemon-reload
     systemctl --user enable frame-shell.service
     if systemctl --user is-active --quiet monado.service; then
@@ -263,9 +257,6 @@ run:
     export FRAME_SHELL_RUNTIME_JSON="$build/openxr_wivrn-dev.json"
     export FRAME_SHELL_CAPTURE_TOKEN="${FRAME_SHELL_CAPTURE_TOKEN:-${XDG_STATE_HOME:-$HOME/.local/state}/frame-desktop/capture-token}"
     mkdir -p -- "$(dirname -- "$FRAME_SHELL_CAPTURE_TOKEN")"
-    if [ ! -e "$FRAME_SHELL_CAPTURE_TOKEN" ] && [ -f "$build/capture-token" ]; then
-        install -m600 -- "$build/capture-token" "$FRAME_SHELL_CAPTURE_TOKEN"
-    fi
     export GST_REGISTRY="$build/gstreamer-registry.bin"
     # The portal keys restore tokens by app, taken from the systemd scope: in a terminal's app-*.scope the tokens
     # shared with the installed frame-shell.service don't match and every monitor asks again
