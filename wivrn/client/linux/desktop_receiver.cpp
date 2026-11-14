@@ -74,7 +74,7 @@ void desktop_receiver::operator()(to_headset::desktop_surface && surface)
 #endif
 }
 
-std::unique_ptr<desktop_receiver::desktop_stream> desktop_receiver::make_stream(uint32_t surface, uint16_t width, uint16_t height, const std::string & name, video_codec codec) noexcept
+std::unique_ptr<desktop_receiver::desktop_stream> desktop_receiver::make_stream(uint32_t surface, uint16_t width, uint16_t height, const std::string & name, video_codec codec)
 {
 	auto stream = std::make_unique<desktop_stream>();
 	stream->surface = surface;
@@ -88,9 +88,18 @@ std::unique_ptr<desktop_receiver::desktop_stream> desktop_receiver::make_stream(
 	        .height = height,
 	        .codec = {codec, codec, codec},
 	};
-	stream->decoder = std::make_shared<wivrn::v4l2::decoder>(
-	        device, physical_device, queue_family_index, description, 0, weak_from_this(),
-	        reinterpret_cast<shard_accumulator *>(stream.get()));
+	try
+	{
+		stream->decoder = std::make_shared<wivrn::v4l2::decoder>(
+		        device, physical_device, queue_family_index, description, 0, weak_from_this(),
+		        reinterpret_cast<shard_accumulator *>(stream.get()));
+	}
+	catch (const std::exception & e)
+	{
+		// Without a decoder the monitor gets no frames; the others carry on
+		spdlog::error("Desktop decoder for {}: {}", name, e.what());
+		metric(name, "decoder_failed");
+	}
 #endif
 	return stream;
 }
@@ -222,7 +231,12 @@ bool desktop_receiver::decode_frame(streams_t::iterator it, shards::receiver::fr
 		spdlog::error("Desktop decoder for {}: {}{}", stream.name, e.what(), retry ? ", recreating it" : ", giving up");
 		metric(stream.name, "decoder_failed");
 		if (not retry)
-			std::terminate();
+		{
+			// The monitor keeps its last frame and drops further video; the others carry on
+			auto decoder = std::move(stream.decoder);
+			decoder.reset();
+			return false;
+		}
 
 		std::unique_ptr<desktop_stream> failed;
 		{

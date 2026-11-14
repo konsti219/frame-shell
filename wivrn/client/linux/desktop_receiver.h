@@ -74,7 +74,7 @@ private:
 	std::shared_mutex mutex;
 	streams_t streams;
 
-	std::unique_ptr<desktop_stream> make_stream(uint32_t surface, uint16_t width, uint16_t height, const std::string & name, wivrn::video_codec codec) noexcept;
+	std::unique_ptr<desktop_stream> make_stream(uint32_t surface, uint16_t width, uint16_t height, const std::string & name, wivrn::video_codec codec);
 	void frame_lost(desktop_stream &);
 	void deliver_frames(streams_t::iterator);
 	bool decode_frame(streams_t::iterator, wivrn::shards::receiver::frame &);
