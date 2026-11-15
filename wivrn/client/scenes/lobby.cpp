@@ -1184,6 +1184,18 @@ void scenes::lobby::on_focused()
 	// assert(std::ranges::all_of(views, [width](const XrViewConfigurationView & view) { return view.recommendedImageRectWidth == width; }));
 	// assert(std::ranges::all_of(views, [height](const XrViewConfigurationView & view) { return view.recommendedImageRectHeight == height; }));
 
+#ifndef __ANDROID__
+	// render_shell draws nothing of the lobby: skip its scene, GUI and their assets
+	if (frame_shell::enabled())
+	{
+		setup_passthrough();
+		discover.emplace();
+		session.set_performance_level(XR_PERF_SETTINGS_DOMAIN_CPU_EXT, XR_PERF_SETTINGS_LEVEL_SUSTAINED_HIGH_EXT);
+		session.set_performance_level(XR_PERF_SETTINGS_DOMAIN_GPU_EXT, XR_PERF_SETTINGS_LEVEL_SUSTAINED_HIGH_EXT);
+		return;
+	}
+#endif
+
 	auto & config = application::get_config();
 
 	try
