@@ -11,12 +11,10 @@ monado := env("FRAME_MONADO", root / "../frame-monado")
 _default:
     @just --list
 
-# Build frame-monado, the headset shell and the PC server; deploy both to the headset
+# Build frame-monado, the headset shell and the PC server; install the headset bundle
 all:
     just --justfile "{{monado}}/justfile" build
-    just build-headset build-host
-    just --justfile "{{monado}}/justfile" deploy
-    just deploy
+    just build-headset build-host deploy
 
 # Build the headset shell and deploy it
 headset: build-headset deploy
@@ -165,53 +163,73 @@ _fetch-eye-model:
         mv "$dest.tmp" "$dest"
     done
 
-# Install the headset shell and restart it if Monado runs; FRAME_HEADSET overrides steamos@frame.local
-deploy:
+# Assemble the headset bundle (shell, Monado, installer) from both builds into out/headset/bundle/frame-shell
+bundle:
     #!/usr/bin/env bash
     set -euo pipefail
     stage="{{headset_build}}/stage/frame-shell"
-    [[ -x "$stage/frame-shell-client" && -f "$stage/xrizer/bin/linux64/vrclient.so" && -f "$stage/xrizer/bin/linuxarm64/vrclient.so" ]] || {
-        echo "Run just build-headset first" >&2; exit 1;
+    monado_stage=$(just --justfile "{{monado}}/justfile" --evaluate stage)
+    [[ -x "$stage/frame-shell-client" && -x "$monado_stage/bin/monado-service" ]] || {
+        echo "Build both first: just build-headset, and just build in frame-monado" >&2; exit 1;
     }
+    bundle="{{headset_build}}/bundle/frame-shell"
+    rm -rf "$bundle"
+    mkdir -p "$bundle/bin" "$bundle/lib" "$bundle/share" "$bundle/LICENSES/frame-monado"
+    install -m755 "{{root}}/headset/install.sh" "$bundle/"
+    install -m755 "{{root}}/headset/launcher" "$bundle/bin/frame-shell"
+    install -m755 -t "$bundle/bin" "{{root}}/headset/frame-sleep" "{{root}}/headset/steamvr" "{{root}}/headset/podman" \
+        "$stage/frame-shell-client" "$stage/wayvr" "$stage/wayvrctl" "$stage/xwayland-satellite"
+    install -m755 -t "$bundle/lib" "$stage/"*.so*
+    cp -a "$stage/xrizer" "$bundle/lib/"
+    install -m644 -t "$bundle" "$stage/"*.pte
+    install -m644 -t "$bundle/share" "{{root}}/headset/frame-shell.desktop" "{{root}}/headset/frame-shell.service"
+    install -m644 "{{root}}/wayvr/dash-frontend/assets/dashboard/frame_shell_logo.png" "$bundle/share/frame-shell.png"
+    # The client's assets, which it finds next to its binary (bin/../share/wivrn)
+    cp -a "{{headset_build}}/client/client/share/wivrn" "$bundle/share/"
+    # Only the stream scene loads assets in the shell: the Frame's controller profile, ray, fonts and logos
+    find "$bundle/share/wivrn/assets/controllers" -mindepth 1 -maxdepth 1 ! -name generic-trigger-squeeze -exec rm -r {} +
+    rm "$bundle/share/wivrn/assets/"{ground.glb,left-hand.glb,right-hand.glb,xyz-arrows.glb,default-environment.ktx2,passthrough.ktx2}
+    cp -a "$monado_stage" "$bundle/monado"
+    cp -a "{{monado}}/headset" "$bundle/session"
+    install -m644 "{{root}}/LICENSE" "$bundle/LICENSES/GPL-3.0.txt"
+    install -m644 "{{root}}/headset/NOTICE.md" "$bundle/LICENSES/"
+    install -m644 -t "$bundle/LICENSES/frame-monado" "{{monado}}/LICENSES/"*
+    echo "$(git -C "{{root}}" describe --tags --always --dirty) (frame-monado $(git -C "{{monado}}" describe --tags --always --dirty))" \
+        >"$bundle/VERSION"
+
+# Install the bundle on the headset with its installer, restarting what runs; FRAME_HEADSET overrides steamos@frame.local
+deploy: bundle
+    #!/usr/bin/env bash
+    set -euo pipefail
     headset="{{headset}}"
-    ssh "$headset" 'mkdir -p ~/.local/state/frame-shell/deploy ~/.config/systemd/user'
-    tar -C "$stage" -cf - . | ssh "$headset" 'tar -C ~/.local/state/frame-shell/deploy -xf -'
-    scp "{{root}}/headset/frame-sleep" "{{root}}/headset/launcher" "{{root}}/headset/frame-shell.desktop" \
-        "{{root}}/headset/steamvr" "{{root}}/headset/podman" "$headset":.local/state/frame-shell/deploy/
-    scp "{{root}}/wayvr/dash-frontend/assets/dashboard/frame_shell_logo.png" "$headset":.local/state/frame-shell/deploy/frame-shell.png
-    scp "{{root}}/headset/frame-shell.service" "$headset":.config/systemd/user/frame-shell.service
-    ssh "$headset" 'bash -euo pipefail -s' <<'EOF'
-    systemctl --user daemon-reload
-    stage="$HOME/.local/state/frame-shell/deploy"
-    for binary in "$stage/frame-shell-client" "$stage/libwayvr.so" "$stage/wayvr" "$stage/wayvrctl"; do
-        if report=$(LD_LIBRARY_PATH="$stage" ldd "$binary" 2>&1) && [[ "$report" != *"not found"* ]]; then :; else
-            printf '%s\n' "$report" >&2
-            exit 1
-        fi
+    ssh "$headset" 'mkdir -p ~/.local/state/frame-shell/bundle'
+    rsync -a --delete "{{headset_build}}/bundle/frame-shell/" "$headset:.local/state/frame-shell/bundle/"
+    ssh -t "$headset" '~/.local/state/frame-shell/bundle/install.sh'
+
+# Record frame-monado's current commit as the one releases bundle
+pin-monado:
+    git -C "{{monado}}" rev-parse HEAD >"{{root}}/monado-rev"
+
+# Build the release bundle from clean checkouts of HEAD and monado-rev into out/release/frame-shell.tar.zst (one name, for the latest release link)
+release:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    [ -z "$(git -C "{{root}}" status --porcelain --untracked-files=no)" ] || { echo "Commit first: releases build HEAD" >&2; exit 1; }
+    rev=$(cat "{{root}}/monado-rev")
+    out="{{root}}/out/release"
+    # Kept between releases, so their build caches stay
+    for repo in "{{root}}:frame-shell:HEAD" "{{monado}}:frame-monado:$rev"; do
+        IFS=: read -r path name commit <<<"$repo"
+        # Clones, not worktrees: the build container only sees the checkout, so it needs its own .git
+        [ -d "$out/src/$name" ] || git clone -q --local --no-checkout "$path" "$out/src/$name"
+        git -C "$out/src/$name" fetch -q origin
+        git -C "$out/src/$name" checkout -q --detach "$(git -C "$path" rev-parse "$commit")"
     done
-    systemctl --user stop frame-shell-dev.service 2>/dev/null || true
-    systemctl --user stop frame-shell.service
-    mkdir -p "$HOME/.local/bin" "$HOME/.local/lib/frame-shell" "$HOME/.local/share/applications"
-    install -m755 "$stage/launcher" "$HOME/.local/bin/frame-shell"
-    install -m755 "$stage/frame-sleep" "$HOME/.local/bin/frame-sleep"
-    # Listed in SteamVR's non-Steam apps: switches to the desktop session, which is the frame shell
-    install -m644 "$stage/frame-shell.desktop" "$HOME/.local/share/applications/frame-shell.desktop"
-    install -Dm644 "$stage/frame-shell.png" "$HOME/.local/share/icons/hicolor/256x256/apps/frame-shell.png"
-    install -m755 "$stage/frame-shell-client" "$HOME/.local/bin/frame-shell-client"
-    install -Dm755 -t "$HOME/.local/lib/frame-shell/bin" "$stage/steamvr" "$stage/podman" "$stage/xwayland-satellite"
-    install -m755 "$stage/wayvr" "$HOME/.local/bin/wayvr"
-    install -m755 "$stage/wayvrctl" "$HOME/.local/bin/wayvrctl"
-    install -m755 "$stage/"*.so* "$HOME/.local/lib/frame-shell/"
-    cp -a "$stage/xrizer" "$HOME/.local/lib/frame-shell/"
-    install -Dm644 -t "$HOME/.local/share/frame-shell" "$stage/eye_kit_stage1_fp16.pte" "$stage/eye_kit_stage2_fp16.pte"
-    systemctl --user daemon-reload
-    systemctl --user enable frame-shell.service
-    if systemctl --user is-active --quiet monado.service; then
-        systemctl --user start frame-shell.service
-    else
-        echo 'Installed. Switch the headset to desktop mode to start the shell.'
-    fi
-    EOF
+    export FRAME_MONADO="$out/src/frame-monado"
+    just --justfile "$FRAME_MONADO/justfile" build
+    just --justfile "$out/src/frame-shell/justfile" build-headset bundle
+    tar -C "$out/src/frame-shell/out/headset/bundle" --zstd -cf "$out/frame-shell.tar.zst" frame-shell
+    echo "$out/frame-shell.tar.zst: $(cat "$out/src/frame-shell/out/headset/bundle/frame-shell/VERSION")"
 
 # Serve the development PC server instead of the installed one until stopped
 run:

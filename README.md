@@ -19,17 +19,18 @@ Unofficial and experimental.
 
 ## Install
 
-Requirements: a Steam Frame with [Frame Monado](https://github.com/konsti219/frame-monado) installed, and a PC
-with Nix, Podman and `just`.
-
-Headset, from a clone of this repository:
+Headset: run the following commands (either over SSH or directly in the headset). This will ask for sudo during one step.
 
 ```sh
-just headset    # cross-builds in Podman, installs over SSH (default steamos@frame.local)
+curl -fL https://github.com/konsti219/frame-shell/releases/latest/download/frame-shell.tar.zst | tar --zstd -x
+frame-shell/install.sh
 ```
 
-This installs the WiVRn client with WayVR, a patched xrizer for OpenVR games and `wayvrctl` in `~/.local`, and
-`frame-shell.service`, which starts with Monado.
+This installs the shell with [Frame Monado](https://github.com/konsti219/frame-monado) in
+`~/.local/share/frame-shell`, and registers Monado as a SteamOS session (the one step that asks for the sudo
+password). Running a newer release's installer updates it. Running `~/.local/share/frame-shell/install.sh uninstall`
+removes everything again (`--purge` also removes settings and pairings). Building it yourself:
+[DEVELOPMENT.md](DEVELOPMENT.md).
 
 PC (NixOS):
 
@@ -49,7 +50,7 @@ services.frame-shell = {
 ```
 
 This runs the WiVRn server with the shell's host services (monitor capture, input, notifications) as a user
-service, and opens its port. The headset finds PCs over mDNS; the first connection is paired with a PIN, as in WiVRn.
+service, and opens its port. The headset finds PCs over mDNS, the first connection is paired with a PIN, as in WiVRn.
 
 ## Switching
 

@@ -9,6 +9,6 @@ fi
 runtime="/run/user/$UID"
 dir="$runtime/frame-shell-android-runtime"
 mkdir -p "$dir/bin/androidarm64"
-cp -u "$HOME/.local/opt/monado/lib/android-arm64/libopenxr_monado.so" "$dir/bin/androidarm64/vrclient.so"
+cp -u "$HOME/.local/share/frame-shell/monado/lib/android-arm64/libopenxr_monado.so" "$dir/bin/androidarm64/vrclient.so"
 ln -f "$runtime/monado_comp_ipc" "$dir/monado_comp_ipc"
 echo "$dir"

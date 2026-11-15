@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+prefix="$HOME/.local/share/frame-shell"
 # The session's Gamescope settings don't apply: the shell's apps (Steam's client among them) run under WayVR
 for var in $(compgen -e); do
     case "$var" in GAMESCOPE_* | STEAM_GAMESCOPE_* | STEAM_MANGOAPP_*) unset "$var" ;; esac
@@ -7,18 +8,18 @@ done
 unset ENABLE_GAMESCOPE_WSI STEAM_USE_MANGOAPP STEAM_DISABLE_MANGOAPP_ATOM_WORKAROUND STEAM_GAME_DISPLAY_0 \
     STEAM_MULTIPLE_XWAYLANDS MANGOHUD_CONFIGFILE LIBEI_SOCKET XDG_DESKTOP_PORTAL_DIR \
     DESKTOP_SESSION XDG_SESSION_DESKTOP XDG_CURRENT_DESKTOP
-export XR_RUNTIME_JSON="$HOME/.local/opt/monado/share/openxr/1/openxr_frame.json"
-export VR_OVERRIDE="$HOME/.local/lib/frame-shell/xrizer"
+export XR_RUNTIME_JSON="$prefix/monado/share/openxr/1/openxr_frame.json"
+export VR_OVERRIDE="$prefix/lib/xrizer"
 # Its steamvr and podman commands give Lepton (Android games) Monado's Android client and the user's session
-export PATH="$HOME/.local/lib/frame-shell/bin:$PATH"
+export PATH="$prefix/bin:$PATH"
 # FEX's separate graphics provider cannot import libraries from the host home directory
 export PRESSURE_VESSEL_IMPORT_OPENXR_1_RUNTIMES=0
 export PRESSURE_VESSEL_FILESYSTEMS_RW="$XDG_RUNTIME_DIR/monado_comp_ipc${PRESSURE_VESSEL_FILESYSTEMS_RW:+:$PRESSURE_VESSEL_FILESYSTEMS_RW}"
-export LD_LIBRARY_PATH="$HOME/.local/lib/frame-shell${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-export FRAME_SHELL_OPENXR_LOADER="$HOME/.local/lib/frame-shell/libopenxr-shell.so"
-export FRAME_SHELL_LIBRARY="$HOME/.local/lib/frame-shell/libwayvr.so"
+export LD_LIBRARY_PATH="$prefix/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export FRAME_SHELL_OPENXR_LOADER="$prefix/lib/libopenxr-shell.so"
+export FRAME_SHELL_LIBRARY="$prefix/lib/libwayvr.so"
 export DISABLE_VULKAN_FDM_INJECTION_LAYER=1
 export WIVRN_AUTOCONNECT=1
 # Monado clears the previous projection when WiVRn discards a repeated frame.
 export WIVRN_DISCARD_FRAME=false
-exec "$HOME/.local/bin/frame-shell-client"
+exec "$prefix/bin/frame-shell-client"

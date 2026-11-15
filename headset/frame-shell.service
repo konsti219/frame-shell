@@ -11,7 +11,7 @@ OnFailure=monado-session-fallback.service
 
 [Service]
 ExecStartPre=/bin/sh -c 'for i in $(seq 150); do [ -S "$XDG_RUNTIME_DIR/monado_comp_ipc" ] && exit 0; sleep 0.2; done; exit 1'
-ExecStart=%h/.local/bin/frame-shell
+ExecStart=%h/.local/share/frame-shell/bin/frame-shell
 Restart=always
 RestartSec=2
 # Restart without passing through "failed", so OnFailure= (back to SteamVR) only follows the start limit

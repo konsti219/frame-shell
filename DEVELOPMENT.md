@@ -23,9 +23,10 @@ Do not copy tokens into separate test directories: portal restore tokens are sin
 `FRAME_SHELL_CAPTURE_TOKEN` overrides the shared path.
 
 ```sh
-just deploy                       # headset shell/client only; Monado must already be running
+just deploy                       # bundle the builds and run its installer on the headset
 just headset                      # build-headset, then deploy
-just all                          # also builds and deploys ../frame-monado (FRAME_MONADO), and builds the host
+just all                          # also builds ../frame-monado (FRAME_MONADO) and the host
+just release                      # the release bundle from clean checkouts of HEAD and monado-rev
 just app <command> <arguments>    # launch explicitly against the development runtime
 just ctl list-paired
 just stop                         # recover after a killed just run
@@ -37,7 +38,7 @@ For everyday installation, NixOS PCs import the flake's `nixosModules.host` and 
 `services.frame-shell.enable`: the server with its host services as a user service (`frame-shell.service`), its
 port, mDNS publishing and uinput (`inputUsers`). VR extras stay outside: `settings.openvr-compat-path` with the
 flake's `xrizer` (the Frame's controller patches), `steamPackage` to start Steam games.
-`wayvrctl` is the PC-side WayVR IPC client from this tree; `just deploy` also installs it on the headset, where
+`wayvrctl` is the PC-side WayVR IPC client from this tree; the installer also links it into `~/.local/bin` on the headset, where
 `wayvrctl apps` lists what runs on the headset and on each PC (the keyboard's top row). Patches for upstream packages
 are in `nix/`.
 
@@ -114,8 +115,16 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for process ownership, ABI, wire messages
 
 ## Monado dependency
 
-The headset runtime is independently built/deployed from `frame-monado`'s `main` branch. `just build-headset`
-builds only the WiVRn client and WayVR; `just deploy` restarts only the shell and leaves Monado installed.
+The headset bundle carries Monado from `frame-monado`'s `main` branch: `just bundle` takes it from `FRAME_MONADO`'s
+build (`just build` there), `just release` builds the commit in `monado-rev` (`just pin-monado` records frame-monado's
+HEAD). `just deploy` restarts Monado only when its files changed. For runtime work alone, frame-monado's
+`just deploy` replaces Monado in an existing install.
+
+The installer (`headset/install.sh`, also in the bundle) puts everything in `~/.local/share/frame-shell` and only
+these outside it: the systemd user units and a steamos-manager drop-in in `~/.local/share/systemd/user`, the
+"Frame Shell" desktop entry and icon, the `~/.local/bin/wayvrctl` link, the session entry in `/etc/frame-monado`
+and `/etc/sddm.conf.d` (sudo, only when it changes), and the default desktop session. `install.sh uninstall`
+removes those and restores the previous default session; `--purge` also removes settings, pairing and calibration.
 
 The PC server needs WiVRn's different Monado revision. That committed source is on `frame-monado`'s `wivrn`
 branch, pinned in this repository's `flake.lock`. No runtime integration patches are applied during our builds.

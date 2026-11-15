@@ -55,7 +55,7 @@ pub fn power_action(action: &str) {
                 "--",
                 "/bin/sh",
                 "-c",
-                "exec \"$HOME/.local/bin/frame-sleep\"",
+                "exec \"$HOME/.local/share/frame-shell/bin/frame-sleep\"",
             ],
         ),
         "restart_stack" => (
