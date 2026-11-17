@@ -69,10 +69,11 @@ static std::optional<std::string> wivrn_app_path()
 {
 	if (auto app_path = wivrn::flatpak_key(wivrn::flatpak::section::instance, "app-path"))
 	{
+		auto id = wivrn::flatpak_key(wivrn::flatpak::section::application, "name").value_or("");
 		if (app_path->starts_with("/var"))
-			return find_dir(*app_path, "io.github.wivrn.wivrn");
+			return find_dir(*app_path, id);
 		// assume it's in home
-		return "xdg-data/flatpak/app/io.github.wivrn.wivrn";
+		return "xdg-data/flatpak/app/" + id;
 	}
 	return {};
 }

@@ -14,7 +14,7 @@ Kirigami.Page {
         ColumnLayout {
             Image {
                 id: img
-                source: Qt.resolvedUrl("wivrn.svg")
+                source: Qt.resolvedUrl("frame-shell.png")
             }
             Item {
                 Layout.fillHeight: true

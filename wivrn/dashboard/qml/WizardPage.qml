@@ -246,7 +246,7 @@ Kirigami.ScrollablePage {
                 Layout.fillHeight: true
             }
 
-            // image: Qt.resolvedUrl("wivrn.svg")
+            // image: Qt.resolvedUrl("frame-shell.png")
 
             actions: [
                 Kirigami.Action {

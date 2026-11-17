@@ -9,7 +9,7 @@ import io.github.wivrn.wivrn
 
 Kirigami.ApplicationWindow {
     id: root
-    title: i18n("WiVRn dashboard")
+    title: i18n("Frame Shell")
 
     ConnectUsbDialog {
         id: select_usb_device
@@ -18,7 +18,7 @@ Kirigami.ApplicationWindow {
     SystemTrayIcon {
         id: systray
         visible: true
-        icon.source: Qt.resolvedUrl("wivrn.svg")
+        icon.source: Qt.resolvedUrl("frame-shell.png")
         onActivated: root.visible = !root.visible
     }
 
@@ -48,8 +48,8 @@ Kirigami.ApplicationWindow {
 
     Kirigami.PromptDialog {
         id: confirm_close
-        title: i18n("Quit WiVRn")
-        subtitle: i18n("The WiVRn server is active.\nClosing the window will terminate it.")
+        title: i18n("Quit Frame Shell")
+        subtitle: i18n("The Frame Shell server is active.\nClosing the window will terminate it.")
         iconName: "dialog-warning"
         popupType: Controls.Popup.Native
         standardButtons: Kirigami.Dialog.Ok | Kirigami.Dialog.Cancel
@@ -290,7 +290,7 @@ Kirigami.ApplicationWindow {
                 columnSpacing: 0
 
                 Image {
-                    source: Qt.resolvedUrl("wivrn.svg")
+                    source: Qt.resolvedUrl("frame-shell.png")
                     Layout.columnSpan: parent.width < implicitWidth + main_form.implicitWidth ? 3 : 1
                 }
 

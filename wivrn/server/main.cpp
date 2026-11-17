@@ -40,6 +40,7 @@
 #include "protocol_version.h"
 #include "start_application.h"
 #include "start_systemd_unit.h"
+#include "utils/flatpak.h"
 #include "utils/overloaded.h"
 #include "version.h"
 #include "wivrn_config.h"
@@ -188,7 +189,7 @@ static std::string steam_command()
 		if (p.starts_with("/usr"))
 			command += "VR_OVERRIDE=/run/host" + p + ' ';
 		else if (p.starts_with("/var") and not p.starts_with(home))
-			command += "PRESSURE_VESSEL_FILESYSTEMS_RW=" + find_dir(p, "io.github.wivrn.wivrn").string() + ' ';
+			command += "PRESSURE_VESSEL_FILESYSTEMS_RW=" + find_dir(p, flatpak_key(flatpak::section::application, "name").value_or("")).string() + ' ';
 	}
 
 	if (not command.empty())
@@ -1065,7 +1066,7 @@ int inner_main(int argc, char * argv[], bool show_instructions)
 	                             nullptr);
 
 	// Initialize libnotify
-	notify_init("WiVRn");
+	notify_init("Frame Shell");
 
 	// Main loop
 	g_main_loop_run(main_loop);

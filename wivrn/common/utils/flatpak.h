@@ -27,6 +27,7 @@ namespace wivrn
 
 namespace flatpak::section
 {
+inline const char * application = "Application";
 inline const char * instance = "Instance";
 inline const char * session_bus_policy = "Session Bus Policy";
 }; // namespace flatpak::section

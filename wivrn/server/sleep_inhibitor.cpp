@@ -50,7 +50,7 @@ sleep_inhibitor::sleep_inhibitor()
 	        g_variant_new(
 	                "(ssss)",
 	                "sleep:idle",                // What
-	                "WiVRn",                     // Who
+	                "Frame Shell",               // Who
 	                "A WiVRn session is active", // Why
 	                "block"),                    // Mode
 	        G_DBUS_CALL_FLAGS_NONE,

@@ -33,8 +33,8 @@ set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/../dbus/io.github.wivrn.
 qt_add_dbus_interface(DBUS_INTERFACE_SRC ${CMAKE_CURRENT_SOURCE_DIR}/../dbus/io.github.wivrn.Server.xml wivrn_server_dbus)
 target_sources(wivrn-dashboard PRIVATE ${DBUS_INTERFACE_SRC})
 
-set_source_files_properties(../images/wivrn.svg PROPERTIES QT_RESOURCE_ALIAS qml/wivrn.svg)
-qt_add_resources(wivrn-dashboard PREFIX "/" BASE .. FILES ../images/wivrn.svg)
+set_source_files_properties(../images/frame-shell.png PROPERTIES QT_RESOURCE_ALIAS qml/frame-shell.png)
+qt_add_resources(wivrn-dashboard PREFIX "/" BASE .. FILES ../images/frame-shell.png)
 
 set_source_files_properties(qml/DashboardSettings.qml PROPERTIES
     QT_QML_SINGLETON_TYPE TRUE
@@ -60,7 +60,7 @@ qt_add_qml_module(wivrn-dashboard
         qml/TroubleshootPage.qml
         qml/TroubleshootCard.qml
     RESOURCES
-        ../images/wivrn.svg
+        ../images/frame-shell.png
         qml/Discord.svg
         qml/Github.svg
 )
@@ -95,9 +95,9 @@ install(FILES io.github.wivrn.wivrn.metainfo.xml
 	DESTINATION share/metainfo
 )
 
-install(FILES ../images/wivrn.svg
-	DESTINATION share/icons/hicolor/scalable/apps
-	RENAME io.github.wivrn.wivrn.svg
+install(FILES ../images/frame-shell.png
+	DESTINATION share/icons/hicolor/256x256/apps
+	RENAME io.github.wivrn.wivrn.png
 )
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/io.github.wivrn.wivrn.desktop
 	DESTINATION share/applications

@@ -23,18 +23,18 @@ int main(int argc, char * argv[])
 
 	KAboutData aboutData(
 	        QStringLiteral("wivrn-dashboard"),
-	        i18nc("@title", "WiVRn"),
+	        i18nc("@title", "Frame Shell"),
 	        wivrn::display_version(),
-	        i18n("WiVRn server"),
+	        i18n("Frame Shell PC host"),
 	        KAboutLicense::GPL_V3,
 	        i18n("(c) 2022-2026 WiVRn development team"));
 
 	aboutData.setDesktopFileName(QStringLiteral("io.github.wivrn.wivrn"));
 	aboutData.setOrganizationDomain("wivrn.github.io");
 
-	aboutData.setHomepage("https://github.com/WiVRn/WiVRn");
-	aboutData.setBugAddress("https://github.com/WiVRn/WiVRn/issues");
-	aboutData.setProgramLogo(QIcon(":/qml/wivrn.svg"));
+	aboutData.setHomepage("https://github.com/konsti219/frame-shell");
+	aboutData.setBugAddress("https://github.com/konsti219/frame-shell/issues");
+	aboutData.setProgramLogo(QIcon(":/qml/frame-shell.png"));
 
 	aboutData.addComponent(
 	        i18n("Monado"),

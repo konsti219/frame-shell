@@ -39,7 +39,7 @@ curl -fLO https://github.com/konsti219/frame-shell/releases/latest/download/fram
 flatpak install --user frame-shell.flatpak
 ```
 
-Start it as "WiVRn" from the application menu, or in the background with
+Start it as "Frame Shell" from the application menu, or in the background with
 `flatpak run --command=wivrn-server io.github.konsti219.FrameShell`. The headset's keyboard and mouse need write
 access to `/dev/uinput`, which Steam's udev rules (the `steam-devices` package) grant.
 Steam libraries outside your home, `/mnt`, `/media` and `/run/media` need
