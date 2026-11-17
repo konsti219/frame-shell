@@ -100,6 +100,18 @@
     </div>
   </template>
 
+  <!-- Frame time graph with its current value above, filled by the watch's metrics -->
+  <template name="GraphCard">
+    <div flex_direction="column" gap="2" flex_grow="1" flex_basis="0" min_width="0">
+      <div flex_direction="row" justify_content="space_between" align_items="center">
+        <label text="${title}" color="on_background_variant" size="12" />
+        <label id="${value_id}" text="--" color="on_background" size="16" />
+      </div>
+      <BarGraph id="${graph_id}" width="100%" height="60" unit="ms" limit_min="0" limit_max="24"
+        bar_width="2" capacity="256" show_limits="0" show_midline="1" />
+    </div>
+  </template>
+
   <template name="VerticalSeparator">
     <rectangle width="2" height="100%" color="outline" />
   </template>
@@ -147,6 +159,14 @@
             </div>
           </div>
         </rectangle>
+
+        <!-- CPU and GPU frame times, shown for a while when the watch is revealed -->
+        <div id="perf_section" display="none" width="100%">
+          <rectangle macro="decorative_rect" flex_direction="row" gap="8" width="100%">
+            <GraphCard title="CPU" value_id="cpu_value_label" graph_id="cpu_frametime_graph" />
+            <GraphCard title="GPU" value_id="gpu_value_label" graph_id="gpu_frametime_graph" />
+          </rectangle>
+        </div>
 
         <!-- Bottom buttons -->
         <div flex_direction="row" gap="8">
