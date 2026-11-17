@@ -63,6 +63,7 @@ impl OverlayList {
                 .get_widget_id("panels_root")
                 .unwrap_or_default();
             let apps_root = parser_state.get_widget_id("apps_root").unwrap_or_default();
+            let hosts_root = parser_state.get_widget_id("hosts_root").unwrap_or_default();
 
             layout.remove_children(panels_root);
             me.overlay_buttons.clear();
@@ -71,12 +72,14 @@ impl OverlayList {
 
             for (i, meta) in me.last_metas.iter().enumerate() {
                 let mut params = TemplateParams::new();
+                params.insert("title", meta.name.as_ref());
 
                 let (template, root) = match meta.category {
-                    // The frame shell groups screens by PC (rebuild_groups)
+                    // The frame shell groups screens by PC where the layout has PC groups (rebuild_groups)
                     OverlayCategory::Screen
-                        if crate::frame_shell::EMBEDDED
-                            .load(std::sync::atomic::Ordering::Relaxed) =>
+                        if !hosts_root.is_null()
+                            && crate::frame_shell::EMBEDDED
+                                .load(std::sync::atomic::Ordering::Relaxed) =>
                     {
                         continue;
                     }
@@ -89,15 +92,30 @@ impl OverlayList {
                                 "none"
                             },
                         );
+                        // A frame shell screen's name starts with its PC's identity: show the connector
+                        let embedded =
+                            crate::frame_shell::EMBEDDED.load(std::sync::atomic::Ordering::Relaxed);
+                        let label = if embedded {
+                            crate::frame_hosts::monitor_label(&meta.name)
+                                .unwrap_or_else(|| meta.name.to_string())
+                        } else {
+                            meta.name.to_string()
+                        };
                         params.insert_rc(
                             "display",
                             format!(
                                 "{}{}",
-                                (*meta.name).chars().next().unwrap_or_default(),
-                                (*meta.name).chars().last().unwrap_or_default()
+                                label.chars().next().unwrap_or_default(),
+                                label.chars().last().unwrap_or_default()
                             )
                             .into(),
                         );
+                        if embedded {
+                            params.insert_rc(
+                                "title",
+                                crate::frame_hosts::screen_title(&meta.name).into(),
+                            );
+                        }
                         ("Screen", panels_root)
                     }
                     OverlayCategory::Mirror => {
@@ -166,7 +184,6 @@ impl OverlayList {
 
                 params.insert_rc("idx", i.to_string().into());
                 params.insert("name", meta.name.as_ref());
-                params.insert("title", meta.name.as_ref());
                 parser_state.instantiate_template(doc_params, template, layout, root, params)?;
                 let overlay_button =
                     parser_state.fetch_component_as::<ComponentButton>(&format!("overlay_{i}"))?;
