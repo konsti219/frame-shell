@@ -40,8 +40,8 @@ flatpak install --user frame-shell.flatpak
 ```
 
 Start it as "Frame Shell" from the application menu, or in the background with
-`flatpak run --command=wivrn-server io.github.konsti219.FrameShell`. The headset's keyboard and mouse need write
-access to `/dev/uinput`, which Steam's udev rules (the `steam-devices` package) grant.
+`flatpak run --command=wivrn-server io.github.konsti219.FrameShell`. Complete the [PC input setup](#pc-input-access)
+below to use the headset's keyboard and mouse.
 Steam libraries outside your home, `/mnt`, `/media` and `/run/media` need
 `flatpak override --user --filesystem=<library path>:ro io.github.konsti219.FrameShell`.
 
@@ -64,6 +64,26 @@ services.frame-shell = {
 
 This runs the WiVRn server with the shell's host services (monitor capture, input, notifications) as a user
 service, and opens its port. The headset finds PCs over mDNS, the first connection is paired with a PIN, as in WiVRn.
+
+### PC input access
+
+Input forwarding is enabled by default. Frame Shell's udev rule grants `/dev/uinput` access to the active
+local desktop user; it does not require Steam or membership in the `input` group. Native packages install
+the rule automatically, and the NixOS module configures it for you.
+
+For Flatpak, install the bundled rule on the host once:
+
+```sh
+flatpak run --command=cat io.github.konsti219.FrameShell /app/share/frame-shell/70-frame-shell-input.rules > /tmp/70-frame-shell-input.rules
+sudo install -m644 /tmp/70-frame-shell-input.rules /etc/udev/rules.d/70-frame-shell-input.rules
+sudo modprobe uinput
+sudo udevadm control --reload-rules
+sudo udevadm trigger --action=add --subsystem-match=misc --sysname-match=uinput
+sudo udevadm settle
+```
+
+Restart Frame Shell afterward. The rule also applies after reboot. Input forwarding can be disabled in
+the PC dashboard's settings.
 
 ## Switching
 

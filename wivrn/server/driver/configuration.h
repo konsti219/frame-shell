@@ -63,7 +63,7 @@ struct configuration
 	int tracking_sample_ms = 6;
 	// Steam Frame eye data to VRChat's native eye and face tracking OSC endpoints: host:port (empty: off)
 	std::string eye_osc = "127.0.0.1:9000";
-	bool hid_forwarding = false;
+	bool hid_forwarding = true;
 	bool tcp_only = false;
 	int port = wivrn::default_port;
 	std::string hostname = wivrn::hostname();

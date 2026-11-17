@@ -12,8 +12,8 @@
 class wivrn_uinput
 {
 public:
-	// Devices are created lazily on first use, so only forwarded classes are exposed.
-	wivrn_uinput() = default;
+	// Check access now; create each device on first use.
+	wivrn_uinput();
 
 	void handle_input(wivrn::from_headset::hid::input &);
 	void handle_shell_input(const wivrn::from_headset::shell_input &);

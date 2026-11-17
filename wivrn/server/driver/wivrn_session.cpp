@@ -295,10 +295,10 @@ wivrn::wivrn_session::wivrn_session(std::unique_ptr<wivrn_connection> connection
 		catch (...)
 		{
 			U_LOG_W("Could not initialize input forwarding");
-			U_LOG_W("Ensure that the uinput kernel module is loaded and your user is in the input group.");
+			U_LOG_W("Install Frame Shell's PC input-access rule, then reconnect. See https://github.com/konsti219/frame-shell#pc-input-access");
 			wivrn_ipc_socket_monado->send(from_monado::server_error{
 			        .where = "Could not initialize input forwarding",
-			        .message = "Ensure that the uinput kernel module is loaded and your user is in the input group.",
+			        .message = "Install Frame Shell's PC input-access rule, then reconnect. See https://github.com/konsti219/frame-shell#pc-input-access",
 			});
 		}
 	}

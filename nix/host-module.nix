@@ -85,6 +85,7 @@ in
     };
 
     hardware.uinput.enable = true;
+    services.udev.packages = [ cfg.package ];
     users.users = lib.genAttrs cfg.inputUsers (_: { extraGroups = [ "uinput" ]; });
 
     environment = {

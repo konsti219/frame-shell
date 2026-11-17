@@ -108,14 +108,22 @@ Kirigami.ScrollablePage {
                 text: i18n("Check system configuration on start")
             }
             RowLayout {
-                visible: Settings.hid_forwarding_supported
                 Controls.CheckBox {
                     id: hid_forwarding
+                    enabled: Settings.hid_forwarding_supported
                     text: i18n("Expose forwarded input devices via uinput")
                 }
                 Kirigami.ContextualHelpButton {
                     toolTipText: i18n("Replicate mouse, keyboard and gamepad connected to the headset as virtual devices on PC.\nReplicated devices will appear as if they were plugged to the PC, some keys may be reserved by the headset OS and not be available. Gamepad is also available without virtual devices for applications that access it through OpenXR.")
                 }
+            }
+            Controls.Label {
+                visible: !Settings.hid_forwarding_supported
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                text: i18n("Keyboard and mouse access needs host setup. <a href=\"%1\">Install Frame Shell's input-access rule</a>, then restart Frame Shell.").arg("https://github.com/konsti219/frame-shell#pc-input-access")
+                textFormat: Text.RichText
+                onLinkActivated: link => Qt.openUrlExternally(link)
             }
             Controls.CheckBox {
                 id: debug_gui

@@ -297,6 +297,11 @@ void wivrn_uinput::mouse_scroll(int16_t vertical, int16_t horizontal)
 	syn(mouse_fd);
 }
 
+wivrn_uinput::wivrn_uinput()
+{
+	auto probe = open_uinput_or_throw(O_RDWR);
+}
+
 void wivrn_uinput::init_keyboard()
 {
 	kbd_fd = open_uinput_or_throw();

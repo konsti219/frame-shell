@@ -375,7 +375,7 @@ bool Settings::hidForwarding() const
 	auto it = m_jsonSettings.find("hid-forwarding");
 	if (it != m_jsonSettings.end() and it->is_boolean())
 		return *it;
-	return false;
+	return true;
 }
 
 void Settings::set_hidForwarding(const bool & value)

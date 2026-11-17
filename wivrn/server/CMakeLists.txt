@@ -301,6 +301,11 @@ if (WIVRN_BUILD_SERVER)
 		DESTINATION lib/firewalld/services)
 
 	install(TARGETS wivrn-server)
+	install(FILES dist/70-frame-shell-input.rules DESTINATION share/frame-shell)
+	option(WIVRN_INSTALL_UDEV_RULES "Install host input-access rules" ON)
+	if (WIVRN_INSTALL_UDEV_RULES)
+		install(FILES dist/70-frame-shell-input.rules DESTINATION lib/udev/rules.d)
+	endif()
 endif()
 
 if (WIVRN_BUILD_SERVER_LIBRARY)

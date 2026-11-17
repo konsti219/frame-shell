@@ -295,7 +295,7 @@ void spawn_server(TCP tcp)
 	posix_spawnattr_setflags(&attributes, POSIX_SPAWN_SETSID);
 	std::vector<std::string> args{"wivrn-server", "--session", "100", "101", "102", "103"};
 	auto config = configuration::get_config_file();
-	if (!config.empty())
+	if (std::filesystem::exists(config))
 	{
 		args.emplace_back("-f");
 		args.push_back(config.string());
