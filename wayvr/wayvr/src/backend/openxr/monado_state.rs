@@ -49,7 +49,18 @@ pub struct MonadoWatchMetrics {
     // to appear in the metrics stream is WayVR's own XR session.  Any other
     // session_id is treated as the game session.
     own_session_id: Option<i64>,
+    // The last non-discarded frame of the active session, for the app's whole cycle
+    last_frame: Option<LastFrame>,
     remote: bool,
+}
+
+#[cfg(feature = "feat-monado-metrics")]
+#[derive(Clone, Copy)]
+struct LastFrame {
+    session_id: i64,
+    frame_id: i64,
+    delivered_ns: u64,
+    submit_begin_ns: u64,
 }
 
 #[cfg(feature = "feat-monado-metrics")]
@@ -135,28 +146,43 @@ impl MonadoWatchMetrics {
                     Self::push_sample(&mut self.cpu_ms, &mut self.cpu_ms_count, -1.0);
                     Self::push_sample(&mut self.gpu_ms, &mut self.gpu_ms_count, -1.0);
                     self.dropped_frames = self.dropped_frames.saturating_add(1);
+                    self.last_frame = None;
                 } else {
-                    // CPU: xrWaitFrame return → xrEndFrame, i.e. the app's whole
-                    // CPU frame, which is also what WiVRn's pacer itself uses.
-                    // Measuring from when_begin_ns (xrBeginFrame) instead misses
-                    // everything an engine does between waking and beginning the
-                    // frame — for engines that simulate before xrBeginFrame that
-                    // is most of the work, so the graph reads plausible but low.
-                    //
-                    // Both stamps are taken server-side as the IPC calls are
-                    // handled, so this reads ~0.5ms above what an in-process
-                    // profiler reports. That gap is the IPC hop, not the app.
+                    // CPU: the app's whole cycle without the runtime's waits, i.e. hand-over to
+                    // hand-over minus the pacer's hold in xrWaitFrame and the block in the previous
+                    // xrEndFrame on its predecessor's fence. Wake → hand-over alone is only the render
+                    // thread: engines simulate the next frame after the hand-over, which it misses.
+                    // Server-side stamps, so ~0.5 ms above an in-process profiler (the IPC hop).
                     if frame.when_wait_woke_ns > 0
                         && frame.when_delivered_ns > frame.when_wait_woke_ns
                     {
-                        let cpu_ms = frame
-                            .when_delivered_ns
-                            .saturating_sub(frame.when_wait_woke_ns)
-                            as f32
-                            / 1_000_000.0;
+                        let render_ns = frame.when_delivered_ns - frame.when_wait_woke_ns;
+                        let cycle_ns = self
+                            .last_frame
+                            .filter(|p| {
+                                p.session_id == frame.session_id
+                                    && p.frame_id + 1 == frame.frame_id
+                                    && frame.when_predicted_ns > 0
+                            })
+                            .map(|p| {
+                                frame
+                                    .when_delivered_ns
+                                    .saturating_sub(p.delivered_ns)
+                                    .saturating_sub(
+                                        frame.when_wait_woke_ns.saturating_sub(frame.when_predicted_ns),
+                                    )
+                                    .saturating_sub(p.submit_begin_ns.saturating_sub(p.delivered_ns))
+                            });
+                        let cpu_ms = cycle_ns.unwrap_or(0).max(render_ns) as f32 / 1_000_000.0;
                         self.latest_cpu_ms = Some(cpu_ms);
                         Self::push_sample(&mut self.cpu_ms, &mut self.cpu_ms_count, cpu_ms);
                     }
+                    self.last_frame = Some(LastFrame {
+                        session_id: frame.session_id,
+                        frame_id: frame.frame_id,
+                        delivered_ns: frame.when_delivered_ns,
+                        submit_begin_ns: frame.when_submit_begin_ns,
+                    });
                     // GPU: submit-end → GPU fence.
                     //
                     // Do *not* measure from when_delivered_ns: that is stamped at
