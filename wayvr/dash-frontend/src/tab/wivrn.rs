@@ -185,7 +185,9 @@ impl<T> Tab<T> for TabWivrn<T> {
 							.tasks
 							.push(FrontendTask::WivrnCommand(format!("forget {cookie}").into()));
 						self.confirm_forget = None;
-						self.selected = None;
+						if self.pending_setting.as_ref().is_some_and(|(host, ..)| host == &cookie) {
+							self.pending_setting = None;
+						}
 					} else {
 						self.confirm_forget = Some(cookie);
 					}
@@ -242,7 +244,7 @@ impl<T> Tab<T> for TabWivrn<T> {
 		if dirty || self.version != Some(version) {
 			let mut state = WivrnState::parse(&lobby, &stream);
 			let stream = std::mem::take(&mut state.stream);
-			let can_refresh = self.pending_setting.is_none() && !dragging;
+			let can_refresh = self.pending_setting.is_none() && !dragging && self.confirm_forget.is_none();
 			if dirty || (can_refresh && self.page_state.as_ref() != Some(&state)) {
 				self.rebuild(&mut frontend.layout, &frontend.globals, &state)?;
 				self.page_state = Some(state);

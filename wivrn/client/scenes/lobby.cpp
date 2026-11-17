@@ -1893,8 +1893,21 @@ void scenes::lobby::handle_shell_command(const std::string & command)
 			request.notify_one();
 			async_session.cancel();
 		}
-		std::erase_if(requested_connections, [&](const auto & id) { return id == cookie; });
-		config.servers.erase(cookie);
+		standby_retry[cookie] = std::chrono::steady_clock::time_point::max();
+		connection_errors.erase(cookie);
+		auto server = config.servers.find(cookie);
+		if (server != config.servers.end() && server->second.visible)
+		{
+			server->second = configuration::server_data{
+			        .autoconnect = false,
+			        .manual = false,
+			        .visible = true,
+			        .compatible = server->second.compatible,
+			        .service = server->second.service,
+			};
+		}
+		else
+			config.servers.erase(cookie);
 		config.save();
 	}
 }

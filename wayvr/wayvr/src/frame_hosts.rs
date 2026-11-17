@@ -95,6 +95,8 @@ struct Registry {
     identities: BTreeMap<u32, HostIdentity>,
     selected_source: Option<u32>,
     screens: BTreeSet<String>,
+    forgotten_screens: Vec<String>,
+    forgotten_sources: BTreeSet<u32>,
 }
 fn screens_file() -> PathBuf {
     std::env::var_os("XDG_CONFIG_HOME")
@@ -104,7 +106,11 @@ fn screens_file() -> PathBuf {
 }
 static REGISTRY: LazyLock<Mutex<Registry>> = LazyLock::new(|| {
     let screens = match std::fs::read_to_string(screens_file()) {
-        Ok(text) => text.lines().filter(|s| !s.is_empty()).map(String::from).collect(),
+        Ok(text) => text
+            .lines()
+            .filter(|s| !s.is_empty())
+            .map(String::from)
+            .collect(),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => BTreeSet::new(),
         Err(error) => panic!("Reading frame-shell-screens: {error}"),
     };
@@ -114,6 +120,8 @@ static REGISTRY: LazyLock<Mutex<Registry>> = LazyLock::new(|| {
         identities: BTreeMap::new(),
         selected_source: None,
         screens,
+        forgotten_screens: Vec::new(),
+        forgotten_sources: BTreeSet::new(),
     })
 });
 fn registry() -> std::sync::MutexGuard<'static, Registry> {
@@ -130,10 +138,9 @@ impl Registry {
                 pc.name = identity.name.clone();
                 pc.version = identity.version.clone();
             }
-            if pcs
-                .get(&pc.id)
-                .is_some_and(|known| known.source.is_some() || (pc.source.is_none() && !pc.available))
-            {
+            if pcs.get(&pc.id).is_some_and(|known| {
+                known.source.is_some() || (pc.source.is_none() && !pc.available)
+            }) {
                 continue;
             }
             pcs.insert(pc.id.clone(), pc);
@@ -176,7 +183,9 @@ pub fn layouts() -> Vec<String> {
     registry().screens.iter().cloned().collect()
 }
 pub fn monitor_label(screen: &str) -> Option<String> {
-    screen.split_once(' ').map(|(_, connector)| connector.to_owned())
+    screen
+        .split_once(' ')
+        .map(|(_, connector)| connector.to_owned())
 }
 /// A screen as people know it: its PC's name and connector, the connector alone for a PC no longer known
 pub fn screen_title(screen: &str) -> String {
@@ -191,12 +200,27 @@ pub fn target(id: &str) -> Option<String> {
 pub fn forget(id: &str) {
     let mut registry = registry();
     let prefix = format!("{id} ");
+    let removed: Vec<_> = registry
+        .screens
+        .iter()
+        .filter(|s| s.starts_with(&prefix))
+        .cloned()
+        .collect();
+    registry.forgotten_screens.extend(removed);
+    if let Some(source) = registry.pcs.get(id).and_then(|pc| pc.source) {
+        registry.forgotten_sources.insert(source);
+    }
     registry.screens.retain(|s| !s.starts_with(&prefix));
     registry.save_screens();
 }
 
+pub fn take_forgotten_screens() -> Vec<String> {
+    std::mem::take(&mut registry().forgotten_screens)
+}
+
 pub fn disconnected(source: u32) {
     let mut registry = registry();
+    registry.forgotten_sources.remove(&source);
     registry.identities.remove(&source);
     if registry.selected_source == Some(source) {
         registry.selected_source = None;
@@ -222,6 +246,9 @@ pub fn identity(source: u32, identity: HostIdentity) {
 /// Registers a connected PC's monitor and gives its screen key
 pub fn monitor(source: u32, connector: &str) -> Option<String> {
     let mut registry = registry();
+    if registry.forgotten_sources.contains(&source) {
+        return None;
+    }
     let pc = registry.pcs.values().find(|pc| pc.source == Some(source))?;
     // A manual address is keyed by its server's identity, which may arrive after the monitors
     if pc.manual && !registry.identities.contains_key(&source) {

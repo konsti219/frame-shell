@@ -97,6 +97,27 @@ pub fn poll_surfaces(app: &mut AppState) {
     if !EMBEDDED.load(Ordering::Relaxed) {
         return;
     }
+    let forgotten = crate::frame_hosts::take_forgotten_screens();
+    if !forgotten.is_empty() {
+        surfaces().retain(|_, surface| {
+            if !forgotten.iter().any(|name| name == surface.name.as_ref()) {
+                return true;
+            }
+            if let Some((frame, _)) = surface.frame.take() {
+                release_frame(frame.id);
+            }
+            false
+        });
+        for name in forgotten {
+            app.session.config.attribs.retain(|(key, _)| key.as_ref() != name);
+            app.tasks
+                .enqueue(TaskType::Overlay(OverlayTask::DropImmediate(
+                    OverlaySelector::Name(name.into()),
+                )));
+        }
+        app.tasks
+            .enqueue(TaskType::Overlay(OverlayTask::SaveLayout));
+    }
     #[cfg(feature = "feat-monado-metrics")]
     {
         let frames = crate::frame_host::take_frames();

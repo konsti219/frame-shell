@@ -448,7 +448,7 @@ where
                 {
                     log::debug!("Dropping overlay {}", o.config.name);
                     if let (Some(id), Some(name)) = (id, name) {
-                        self.remove_saved_state(id, &name);
+                        self.remove_saved_state(Some(id), &name);
                     }
                     self.dropped_overlays.push_back(o);
                 }
@@ -469,10 +469,10 @@ where
 
                 if let Some(o) = self.remove_by_selector(&sel, app) {
                     log::debug!("Dropping overlay {} immediately", o.config.name);
-                    if let (Some(id), Some(name)) = (id, name) {
-                        self.remove_saved_state(id, &name);
-                    }
                     self.dropped_overlays.push_back(o);
+                }
+                if let Some(name) = name {
+                    self.remove_saved_state(id, &name);
                 }
             }
             OverlayTask::DropExpired(id) => {
@@ -487,7 +487,7 @@ where
                 {
                     log::debug!("Dropping expired overlay {}", o.config.name);
                     let name = o.config.name.clone();
-                    self.remove_saved_state(id, &name);
+                    self.remove_saved_state(Some(id), &name);
                     self.dropped_overlays.push_back(o);
                 }
             }
@@ -561,9 +561,9 @@ impl<T> OverlayWindowManager<T> {
         self.dropped_overlays.pop_front()
     }
 
-    fn remove_saved_state(&mut self, id: OverlayID, name: &str) {
+    fn remove_saved_state(&mut self, id: Option<OverlayID>, name: &str) {
         for set in &mut self.sets {
-            set.overlays.retain(|k, _| k != id);
+            set.overlays.retain(|k, _| Some(k) != id);
             set.inactive_overlays.arc_rm(name);
             set.hidden_overlays.arc_rm(name);
         }
