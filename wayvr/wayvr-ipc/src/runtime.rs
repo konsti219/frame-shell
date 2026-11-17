@@ -71,16 +71,6 @@ fn libmonado_path() -> Result<PathBuf> {
 	)
 }
 
-/// The Steam game a process belongs to: Steam starts games with SteamAppId in their environment
-fn steam_app_id(pid: i32) -> Option<String> {
-	let environ = std::fs::read(format!("/proc/{pid}/environ")).ok()?;
-	environ
-		.split(|byte| *byte == 0)
-		.find_map(|entry| entry.strip_prefix(b"SteamAppId="))
-		.map(|id| String::from_utf8_lossy(id).into_owned())
-		.filter(|id| !id.is_empty() && id != "0")
-}
-
 impl Runtime {
 	pub fn connect() -> Result<Self> {
 		let library = unsafe { Library::new(libmonado_path()?) }?;
@@ -133,10 +123,16 @@ impl Runtime {
 		let state = self.function::<unsafe extern "C" fn(*mut c_void, u32, *mut u32) -> i32>(
 			b"mnd_root_get_client_state\0",
 		)?;
-		// API 1.9 (frame-monado); without it no client maps to a Steam game
+		// API 1.9 (frame-monado)
 		let pid = self
 			.function::<unsafe extern "C" fn(*mut c_void, u32, *mut i32) -> i32>(
 				b"mnd_root_get_client_pid\0",
+			)
+			.ok();
+		// The SteamAppId the client reports: its /proc may be in another pid namespace (Flatpak)
+		let app_id = self
+			.function::<unsafe extern "C" fn(*mut c_void, u32, *mut u64) -> i32>(
+				b"mnd_root_get_client_steam_app_id\0",
 			)
 			.ok();
 
@@ -163,13 +159,17 @@ impl Runtime {
 			if let Some(pid) = pid {
 				unsafe { pid(self.root, id, &mut process) };
 			}
+			let mut steam_app_id = 0;
+			if let Some(app_id) = app_id {
+				unsafe { app_id(self.root, id, &mut steam_app_id) };
+			}
 			clients.push(RuntimeClient {
 				id,
 				name: unsafe { CStr::from_ptr(text) }
 					.to_string_lossy()
 					.into_owned(),
 				pid: process,
-				steam_app_id: (process > 0).then(|| steam_app_id(process)).flatten(),
+				steam_app_id: (steam_app_id != 0).then(|| steam_app_id.to_string()),
 				primary: flags & CLIENT_PRIMARY_APP != 0,
 				overlay: flags & CLIENT_SESSION_OVERLAY != 0,
 				visible: flags & CLIENT_SESSION_VISIBLE != 0,

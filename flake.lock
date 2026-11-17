@@ -36,11 +36,11 @@
     "host-monado": {
       "flake": false,
       "locked": {
-        "lastModified": 1794876322,
-        "narHash": "sha256-gDvfuiGhwqYLs14vzTTFO6UpAZQM/qr0WIcSUhTq6mE=",
+        "lastModified": 1794927050,
+        "narHash": "sha256-+4boTpB/g5E8fvlMHg12DHCi/V/uzIaPe2at7QRFmx4=",
         "owner": "konsti219",
         "repo": "frame-monado",
-        "rev": "65a9f81e90ea17904f38858b7a9a9481fa8d4c20",
+        "rev": "c9e3351577ab646e142c34cd76a14ef91e263d6f",
         "type": "github"
       },
       "original": {
