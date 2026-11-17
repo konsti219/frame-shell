@@ -49,6 +49,8 @@ class app_pacer : public u_pacing_app
 	int64_t cpu_time = 0;
 	int64_t gpu_time = 0;
 	int64_t compositor_time = 0;
+	// Wake to the next xrWaitFrame call: the app's own cycle, without the pacer's hold
+	int64_t loop_time = 0;
 	// The app's Vulkan layer reports GPU times, which arrive after a frame's GPU fence
 	bool measures_gpu_time = false;
 
@@ -173,12 +175,17 @@ public:
 	}
 };
 
+int64_t lerp0(int64_t a, int64_t b, double t);
+
 void app_pacer::predict(int64_t now_ns,
                         int64_t * out_frame_id,
                         int64_t * out_wake_up_time,
                         int64_t * out_predicted_display_time,
                         int64_t * out_predicted_display_period)
 {
+	if (const auto & previous = get_frame(frame_id); frame_id > 0 and previous.frame_id == frame_id and previous.wake_up)
+		loop_time = lerp0(loop_time, std::min(3 * period, now_ns - previous.wake_up), 0.1);
+
 	*out_frame_id = ++frame_id;
 
 	// no need to lock, called in same thread as writes
@@ -205,7 +212,11 @@ void app_pacer::predict(int64_t now_ns,
 
 		*out_predicted_display_time = last_display_time;
 		*out_predicted_display_period = period;
-		*out_wake_up_time = last_display_time - (cpu_time + gpu_time + compositor_time + int64_t(U_TIME_1MS_IN_NS * min_margin_ms.val));
+		// An app slower than a refresh only loses frames when held: let it run
+		if (loop_time + U_TIME_HALF_MS_IN_NS > period)
+			*out_wake_up_time = now_ns;
+		else
+			*out_wake_up_time = last_display_time - (cpu_time + gpu_time + compositor_time + int64_t(U_TIME_1MS_IN_NS * min_margin_ms.val));
 	}
 
 	// wake_up is deliberately left at 0: it is filled in by mark_point() when
