@@ -33,6 +33,8 @@ pub struct SessionFrame {
     pub when_submit_begin_ns: u64,
     #[prost(uint64, tag = "16")]
     pub when_submit_end_ns: u64,
+    #[prost(uint64, tag = "17")]
+    pub gpu_time_ns: u64,
 }
 #[derive(Clone, PartialEq, prost::Message)]
 pub struct Record {
@@ -59,6 +61,7 @@ impl From<SessionFrame> for wayvr_ipc::frame::SessionFrame {
             discarded: f.discarded,
             when_submit_begin_ns: f.when_submit_begin_ns,
             when_submit_end_ns: f.when_submit_end_ns,
+            gpu_time_ns: f.gpu_time_ns,
         }
     }
 }

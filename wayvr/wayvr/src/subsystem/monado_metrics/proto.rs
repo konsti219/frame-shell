@@ -58,6 +58,9 @@ pub struct SessionFrame {
     /// ! When submitting app GPU work ended, if the runtime reports it.
     #[prost(uint64, tag = "16")]
     pub when_submit_end_ns: u64,
+    /// ! How long the GPU worked on the frame as measured in the app, 0 when unknown.
+    #[prost(uint64, tag = "17")]
+    pub gpu_time_ns: u64,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Used {

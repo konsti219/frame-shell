@@ -28,6 +28,7 @@
 #include <cassert>
 #include <cmath>
 #include <ranges>
+#include <utility>
 
 // Default value is half the compositor margin
 DEBUG_GET_ONCE_FLOAT_OPTION(min_margin_ms, "U_PACING_APP_MIN_MARGIN_MS", 1.5f)
@@ -48,6 +49,8 @@ class app_pacer : public u_pacing_app
 	int64_t cpu_time = 0;
 	int64_t gpu_time = 0;
 	int64_t compositor_time = 0;
+	// The app's Vulkan layer reports GPU times, which arrive after a frame's GPU fence
+	bool measures_gpu_time = false;
 
 	u_var_draggable_f32 min_margin_ms;
 
@@ -65,7 +68,10 @@ class app_pacer : public u_pacing_app
 		int64_t predicted_display_time = 0;
 		int64_t predicted_display_period = 0;
 		int64_t display_time = 0;
+		uint64_t gpu_time = 0;
+		bool has_gpu_time = false;
 		bool discarded = false;
+		bool written = false;
 	};
 	std::array<frame, 16> frames{};
 
@@ -75,9 +81,9 @@ class app_pacer : public u_pacing_app
 		return frames[id % frames.size()];
 	}
 
-	void write_metrics(const frame & frame)
+	void write_metrics(frame & frame)
 	{
-		if (!u_metrics_is_active())
+		if (!u_metrics_is_active() or std::exchange(frame.written, true))
 			return;
 
 		struct u_metrics_session_frame umsf = {
@@ -97,6 +103,7 @@ class app_pacer : public u_pacing_app
 		        .discarded = frame.discarded,
 		        .when_submit_begin_ns = frame.submit_begin,
 		        .when_submit_end_ns = frame.submit_end,
+		        .gpu_time_ns = frame.gpu_time,
 		};
 
 		u_metrics_write_session_frame(&umsf);
@@ -112,6 +119,7 @@ public:
 	                .mark_discarded = method_pointer<&app_pacer::mark_discarded>,
 	                .mark_delivered = method_pointer<&app_pacer::mark_delivered>,
 	                .mark_gpu_done = method_pointer<&app_pacer::mark_gpu_done>,
+	                .mark_gpu_time = method_pointer<&app_pacer::mark_gpu_time>,
 	                .latched = method_pointer<&app_pacer::latched>,
 	                .retired = method_pointer<&app_pacer::retired>,
 	                .info = method_pointer<&app_pacer::info>,
@@ -145,6 +153,7 @@ public:
 	void mark_discarded(int64_t frame_id, int64_t when_ns);
 	void mark_delivered(int64_t frame_id, int64_t when_ns, int64_t display_time_ns);
 	void mark_gpu_done(int64_t frame_id, int64_t when_ns);
+	void mark_gpu_time(int64_t frame_id, uint64_t gpu_time_ns);
 	void latched(int64_t frame_id, int64_t when_ns, int64_t system_frame_id) {}
 	void retired(int64_t frame_id, int64_t when_ns) {}
 	void info(int64_t predicted_display_time_ns,
@@ -282,7 +291,20 @@ void app_pacer::mark_gpu_done(int64_t frame_id, int64_t when_ns)
 	std::lock_guard lock(mutex);
 	cpu_time = lerp0(cpu_time, std::min(3 * period, frame.delivered - frame.wake_up), 0.1);
 	gpu_time = lerp0(gpu_time, std::min(3 * period, when_ns - frame.delivered), 0.1);
-	write_metrics(frame);
+	if (not measures_gpu_time or frame.has_gpu_time)
+		write_metrics(frame);
+}
+
+void app_pacer::mark_gpu_time(int64_t frame_id, uint64_t gpu_time_ns)
+{
+	measures_gpu_time = true;
+	auto & frame = get_frame(frame_id);
+	if (frame.frame_id != frame_id)
+		return;
+	frame.gpu_time = gpu_time_ns;
+	frame.has_gpu_time = true;
+	if (frame.gpu_done)
+		write_metrics(frame);
 }
 
 pacing_app_factory::pacing_app_factory() :

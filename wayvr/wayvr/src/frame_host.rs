@@ -355,6 +355,7 @@ impl From<SessionFrame> for crate::subsystem::monado_metrics::proto::SessionFram
             discarded: f.discarded,
             when_submit_begin_ns: f.when_submit_begin_ns,
             when_submit_end_ns: f.when_submit_end_ns,
+            gpu_time_ns: f.gpu_time_ns,
         }
     }
 }

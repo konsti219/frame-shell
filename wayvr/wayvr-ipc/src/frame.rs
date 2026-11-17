@@ -123,6 +123,7 @@ pub struct SessionFrame {
 	pub discarded: bool,
 	pub when_submit_begin_ns: u64,
 	pub when_submit_end_ns: u64,
+	pub gpu_time_ns: u64,
 }
 
 impl HostMessage {

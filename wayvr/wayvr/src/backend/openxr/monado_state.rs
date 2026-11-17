@@ -170,7 +170,14 @@ impl MonadoWatchMetrics {
                     // when_submit_begin_ns marks the other end of that block. It is
                     // emitted but not graphed: delivered → submit_begin is the only
                     // view of the back-pressure, which is worth keeping reachable.
-                    if frame.when_submit_end_ns > 0
+                    //
+                    // That only sees the work left at xrEndFrame. A runtime with the
+                    // GPU-time Vulkan layer in the app reports the measured time instead.
+                    if frame.gpu_time_ns > 0 {
+                        let gpu_ms = frame.gpu_time_ns as f32 / 1_000_000.0;
+                        self.latest_gpu_ms = Some(gpu_ms);
+                        Self::push_sample(&mut self.gpu_ms, &mut self.gpu_ms_count, gpu_ms);
+                    } else if frame.when_submit_end_ns > 0
                         && frame.when_gpu_done_ns > frame.when_submit_end_ns
                     {
                         let gpu_ms = frame

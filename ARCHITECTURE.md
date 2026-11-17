@@ -104,3 +104,14 @@ lobby owns the combined frame: each stream adds its projection layer and sends i
 (`wayvr_ipc::metrics`); without a reader they are dropped. Monitors report their stages on each device: `captured`,
 `to_encoder`, `keyframe`, `encoded`, `sent` on the PC, `received`, `decoded`, `shown` and losses on the headset. A
 repeated `seq` at `captured` is a keepalive, not a new frame from the compositor.
+
+## App frame times
+
+The watch's CPU and GPU graphs of a streamed app come from the server's app pacer (`SessionFrame` metrics records,
+sent over the host link). GPU time is measured inside the app by the implicit Vulkan layer `VK_LAYER_FRAME_gpu_time`.
+The server writes its manifest to `~/.local/share/vulkan/implicit_layer.d` while it is the active OpenXR runtime
+(a headset is connected) and removes it afterwards, so only apps started in that time load it. The layer passes
+everything through until the runtime's Vulkan client asks, then brackets every queue submission with two GPU
+timestamps and hands the runtime each frame's sum. `DISABLE_FRAME_GPU_TIME=1` keeps it out of a process. Without it
+(OpenGL apps, apps started before the headset connected) the graph falls back to the time from `xrEndFrame` to the
+GPU fence, which misses work the GPU finished earlier.

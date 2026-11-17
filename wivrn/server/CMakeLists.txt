@@ -342,4 +342,13 @@ if (WIVRN_BUILD_SERVER_LIBRARY)
 		LIBRARY
 		DESTINATION ${CMAKE_INSTALL_LIBDIR}/wivrn
 		COMPONENT Runtime)
+
+	# Vulkan layer in the apps, measuring their GPU time for the runtime; the server installs its manifest while active
+	add_library(frame_gpu_time MODULE gpu_time_layer/gpu_time_layer.c)
+	target_link_libraries(frame_gpu_time PRIVATE Vulkan::Headers)
+	set_target_properties(frame_gpu_time PROPERTIES C_VISIBILITY_PRESET hidden)
+	install(TARGETS frame_gpu_time
+		LIBRARY
+		DESTINATION ${CMAKE_INSTALL_LIBDIR}/wivrn
+		COMPONENT Runtime)
 endif()

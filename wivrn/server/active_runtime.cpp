@@ -24,6 +24,7 @@
 #include "utils/xdg_base_directory.h"
 #include "wivrn_config.h"
 #include <algorithm>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -90,6 +91,38 @@ std::filesystem::path active_runtime::openvr_compat_path()
 	                },
 	        },
 	        configuration().openvr_compat_path);
+}
+
+// The Vulkan layer measuring the apps' GPU time, installed next to the OpenXR runtime
+static std::filesystem::path gpu_time_layer_path()
+{
+	const auto location = std::filesystem::path(WIVRN_INSTALL_LIBDIR) / "wivrn" / "libframe_gpu_time.so";
+	if (auto path = flatpak_key(flatpak::section::instance, "app-path"))
+		return *path / location;
+
+	// Running from the build directory
+	auto dev = std::filesystem::read_symlink("/proc/self/exe").parent_path() / "libframe_gpu_time.so";
+	if (std::filesystem::exists(dev))
+		return dev;
+
+	return WIVRN_INSTALL_PREFIX / location;
+}
+
+// An implicit layer of the user, so only apps started while this runtime is active load it
+static std::filesystem::path gpu_time_layer_manifest()
+{
+	auto data_home = xdg_data_home();
+	// A Flatpak's XDG_DATA_HOME is its private directory: the filesystem permission mounts the host's at its real path
+	if (wivrn::is_flatpak())
+	{
+		const char * host = std::getenv("HOST_XDG_DATA_HOME");
+		const char * home = std::getenv("HOME");
+		if (host and *host)
+			data_home = host;
+		else if (home)
+			data_home = std::filesystem::path(home) / ".local/share";
+	}
+	return data_home / "vulkan/implicit_layer.d/frame_gpu_time.json";
 }
 
 static std::filesystem::path backup_name(std::filesystem::path file)
@@ -206,6 +239,32 @@ active_runtime::active_runtime() :
 	{
 		std::cerr << "Cannot set active OpenVR runtime: " << e.what() << std::endl;
 	}
+
+	try
+	{
+		nlohmann::json manifest;
+		manifest["file_format_version"] = "1.1.0";
+		manifest["layer"] = {
+		        {"name", "VK_LAYER_FRAME_gpu_time"},
+		        {"type", "GLOBAL"},
+		        {"library_path", gpu_time_layer_path().string()},
+		        {"api_version", "1.3.0"},
+		        {"implementation_version", "1"},
+		        {"description", "GPU time of an app's frames, for the frame shell's OpenXR runtime"},
+		        {"functions", {{"vkNegotiateLoaderLayerInterfaceVersion", "frame_gpu_time_negotiate"}}},
+		        {"disable_environment", {{"DISABLE_FRAME_GPU_TIME", "1"}}},
+		};
+		auto path = gpu_time_layer_manifest();
+		std::filesystem::create_directories(path.parent_path());
+		std::ofstream manifest_file(path.c_str());
+		manifest_file.exceptions(std::ofstream::failbit);
+		manifest_file << manifest.dump(1, '\t') << std::endl;
+		vulkan_layer_manifest = path;
+	}
+	catch (std::exception & e)
+	{
+		std::cerr << "Cannot install the GPU time Vulkan layer: " << e.what() << std::endl;
+	}
 }
 
 active_runtime::~active_runtime()
@@ -237,6 +296,10 @@ active_runtime::~active_runtime()
 	{
 		std::cerr << "Cannot unset active OpenVR runtime: " << e.what() << std::endl;
 	}
+
+	std::error_code ec;
+	if (not vulkan_layer_manifest.empty())
+		std::filesystem::remove(vulkan_layer_manifest, ec);
 }
 
 void active_runtime::cleanup_openxr()
@@ -252,6 +315,8 @@ void active_runtime::cleanup_openxr()
 		}
 		std::filesystem::rename(backup_name(manifest), manifest, ec);
 	}
+	std::error_code ec;
+	std::filesystem::remove(gpu_time_layer_manifest(), ec);
 }
 
 } // namespace wivrn

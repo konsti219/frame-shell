@@ -29,6 +29,7 @@ class active_runtime
 {
 	std::vector<std::filesystem::path> active_runtime_json;
 	std::filesystem::path openvr_manifest;
+	std::filesystem::path vulkan_layer_manifest;
 	pid_t pid;
 
 public:
