@@ -123,13 +123,22 @@ pub fn poll_surfaces(app: &mut AppState) {
         let frames = crate::frame_host::take_frames();
         if !CONNECTED.load(Ordering::Relaxed) {
             app.remote_metrics = None;
-        } else if !frames.is_empty() {
-            let (updated, metrics) = app
-                .remote_metrics
-                .get_or_insert_with(|| (std::time::Instant::now(), Default::default()));
-            *updated = std::time::Instant::now();
-            for frame in frames {
-                metrics.ingest_remote(frame.into());
+        } else {
+            // A hidden app's frames are discarded on purpose, not dropped
+            let hidden = pc_app_hidden();
+            if let Some((_, metrics)) = app.remote_metrics.as_mut() {
+                metrics.set_paused(hidden);
+            }
+            if !frames.is_empty() {
+                let (updated, metrics) = app.remote_metrics.get_or_insert_with(|| {
+                    let mut metrics = crate::backend::openxr::monado_state::MonadoWatchMetrics::default();
+                    metrics.set_paused(hidden);
+                    (std::time::Instant::now(), metrics)
+                });
+                *updated = std::time::Instant::now();
+                for frame in frames {
+                    metrics.ingest_remote(frame.into());
+                }
             }
         }
     }

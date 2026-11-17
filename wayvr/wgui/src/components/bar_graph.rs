@@ -104,6 +104,10 @@ impl ComponentBarGraph {
 		self.update_limits_text(&state, c);
 	}
 
+	pub fn clear(&self) {
+		self.state.borrow_mut().values.clear();
+	}
+
 	pub fn push_value(&self, cell: ValueCell) {
 		let mut state = self.state.borrow_mut();
 		if state.values.len() > self.data.capacity as usize {

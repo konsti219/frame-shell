@@ -308,11 +308,28 @@ pub fn remote_connected() -> bool {
     EMBEDDED.load(Ordering::Relaxed) && CONNECTED.load(Ordering::Relaxed)
 }
 
+/// Whether the PC in VR hides its application (a click on it in the top row): its runtime discards the frames
+#[cfg(feature = "feat-monado-metrics")]
+pub fn pc_app_hidden() -> bool {
+    crate::frame_host::vr_source().is_some_and(|source| {
+        crate::frame_host::clients_known(source)
+            && !crate::frame_host::clients(source)
+                .iter()
+                .any(|client| client.visible && !client.overlay)
+    })
+}
+
+/// Whether the watch and dashboard show the PC's frame metrics (its application is shown) rather than the headset's
+#[cfg(feature = "feat-monado-metrics")]
+pub fn pc_metrics_shown() -> bool {
+    remote_connected() && REMOTE_LAYER_VISIBLE.load(Ordering::Relaxed) && !pc_app_hidden()
+}
+
 #[cfg(feature = "feat-monado-metrics")]
 pub fn watch_metrics(
     app: &AppState,
 ) -> Option<&crate::backend::openxr::monado_state::MonadoWatchMetrics> {
-    if remote_connected() && REMOTE_LAYER_VISIBLE.load(Ordering::Relaxed) {
+    if pc_metrics_shown() {
         app.remote_metrics
             .as_ref()
             .filter(|(updated, _)| updated.elapsed() < std::time::Duration::from_secs(2))

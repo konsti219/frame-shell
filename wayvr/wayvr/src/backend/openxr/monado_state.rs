@@ -25,6 +25,13 @@ const WATCH_METRICS_CAPACITY: usize = 256;
 #[cfg(feature = "feat-monado-metrics")]
 const FPS_TIMESTAMPS_CAPACITY: usize = 512;
 
+/// Graph sample for a frame the compositor dropped
+#[cfg(feature = "feat-monado-metrics")]
+pub const SAMPLE_DROPPED: f32 = -1.0;
+/// Graph sample marking where the app's metrics were paused (its VR hidden)
+#[cfg(feature = "feat-monado-metrics")]
+pub const SAMPLE_PAUSED: f32 = -2.0;
+
 #[cfg(feature = "feat-monado-metrics")]
 #[derive(Default)]
 pub struct MonadoWatchMetrics {
@@ -52,6 +59,8 @@ pub struct MonadoWatchMetrics {
     // The last non-discarded frame of the active session, for the app's whole cycle
     last_frame: Option<LastFrame>,
     remote: bool,
+    /// The app's frames are ignored: they are discarded on purpose while its VR is hidden
+    pub paused: bool,
 }
 
 #[cfg(feature = "feat-monado-metrics")]
@@ -71,6 +80,35 @@ impl MonadoWatchMetrics {
         }
         queue.push_back(value);
         *count += 1;
+    }
+
+    /// The discards before the PC's hiding arrives here are the hiding's, not drops
+    fn trim_trailing_drops(&mut self) {
+        while self.cpu_ms.back() == Some(&SAMPLE_DROPPED) && self.gpu_ms.back() == Some(&SAMPLE_DROPPED) {
+            self.cpu_ms.pop_back();
+            self.gpu_ms.pop_back();
+            self.cpu_ms_count -= 1;
+            self.gpu_ms_count -= 1;
+            self.dropped_frames = self.dropped_frames.saturating_sub(1);
+        }
+    }
+
+    /// Ignore the app's frames (true) or measure them again from a fresh start (false)
+    pub fn set_paused(&mut self, paused: bool) {
+        if paused == self.paused {
+            return;
+        }
+        self.paused = paused;
+        if paused {
+            self.trim_trailing_drops();
+            Self::push_sample(&mut self.cpu_ms, &mut self.cpu_ms_count, SAMPLE_PAUSED);
+            Self::push_sample(&mut self.gpu_ms, &mut self.gpu_ms_count, SAMPLE_PAUSED);
+            self.fps_current = None;
+        } else {
+            // The first frame after the pause would otherwise span all of it
+            self.last_frame = None;
+            self.frame_timestamps.clear();
+        }
     }
 
     fn push_record(&mut self, record: proto::Record) {
@@ -93,6 +131,9 @@ impl MonadoWatchMetrics {
                     self.own_session_id = Some(frame.session_id);
                 }
                 let own = self.own_session_id.unwrap();
+                if self.paused {
+                    return;
+                }
 
                 if self.frame_timestamps.len() >= FPS_TIMESTAMPS_CAPACITY {
                     self.frame_timestamps.pop_front();
@@ -141,10 +182,10 @@ impl MonadoWatchMetrics {
                 }
 
                 if frame.discarded {
-                    // Push a sentinel (-1) into both graph queues so the drop appears
-                    // as a distinct full-height red bar rather than a gap.
-                    Self::push_sample(&mut self.cpu_ms, &mut self.cpu_ms_count, -1.0);
-                    Self::push_sample(&mut self.gpu_ms, &mut self.gpu_ms_count, -1.0);
+                    // A sentinel in both graph queues so the drop appears as a distinct
+                    // full-height red bar rather than a gap.
+                    Self::push_sample(&mut self.cpu_ms, &mut self.cpu_ms_count, SAMPLE_DROPPED);
+                    Self::push_sample(&mut self.gpu_ms, &mut self.gpu_ms_count, SAMPLE_DROPPED);
                     self.dropped_frames = self.dropped_frames.saturating_add(1);
                     self.last_frame = None;
                 } else {
@@ -237,7 +278,9 @@ impl MonadoWatchMetrics {
             record: Some(record::Record::SessionFrame(frame)),
         };
         self.ingest(&record);
-        self.push_record(record);
+        if !self.paused {
+            self.push_record(record);
+        }
     }
 
     pub fn take_dashboard_records(&mut self) -> Vec<proto::Record> {

@@ -42,6 +42,7 @@ const PERF_REVEAL_DURATION: Duration = Duration::from_secs(30);
 const WATCH_GRAPH_LOW: Color = Color::new(0.63, 0.90, 0.57, 1.0);
 const WATCH_GRAPH_WARN: Color = Color::new(0.96, 0.68, 0.22, 1.0);
 const WATCH_GRAPH_HOT: Color = Color::new(0.93, 0.34, 0.22, 1.0);
+const WATCH_GRAPH_PAUSED: Color = Color::new(0.55, 0.55, 0.55, 0.6);
 
 #[derive(Default)]
 struct WatchState {
@@ -53,14 +54,17 @@ struct WatchState {
 }
 
 /// The watch's frame timings (the presenting PC's runtime while streaming, else the headset's), for markup that has
-/// their elements: `fps_current_label`, `fps_avg_label`, `cpu_frametime_graph`, `gpu_frametime_graph`, `net_graph`
+/// their elements: `fps_current_label`, `fps_avg_label`, `cpu_frametime_graph`, `gpu_frametime_graph`, `net_graph`,
+/// `metrics_source_label` (PC or Headset)
 /// with `*_value_label`s, `dropped_value_label`, a `perf_section` revealed by `reveal_watch` and a
 /// `notification_label`. Everything else on a custom watch comes over IPC (`panel-modify`).
 struct WatchMetrics {
-    labels: [Option<wgui::layout::WidgetID>; 7],
+    labels: [Option<wgui::layout::WidgetID>; 8],
     graphs: [Option<Rc<ComponentBarGraph>>; 3],
     perf_section: Option<wgui::layout::WidgetID>,
     seen: [usize; 3],
+    /// Whether the graphs hold the PC's metrics (else the headset's)
+    pc_shown: Option<bool>,
     fps_history: VecDeque<f32>,
     next_fps_sample: Instant,
     perf_visible_until: Option<Instant>,
@@ -73,6 +77,7 @@ const GPU_VALUE: usize = 3;
 const NET_VALUE: usize = 4;
 const DROPPED_VALUE: usize = 5;
 const NOTIFICATION: usize = 6;
+const SOURCE: usize = 7;
 
 pub fn create_watch(app: &mut AppState) -> anyhow::Result<OverlayWindowConfig> {
     let state = WatchState {
@@ -250,6 +255,7 @@ fn init_metrics(panel: &mut GuiPanel<WatchState>) {
         "net_value_label",
         "dropped_value_label",
         "notification_label",
+        "metrics_source_label",
     ]
     .map(id);
     let graph = |name: &str| panel.parser_state.fetch_component_as::<ComponentBarGraph>(name).ok();
@@ -266,6 +272,7 @@ fn init_metrics(panel: &mut GuiPanel<WatchState>) {
         graphs,
         perf_section,
         seen: [0; 3],
+        pc_shown: None,
         fps_history: VecDeque::new(),
         next_fps_sample: Instant::now(),
         perf_visible_until: None,
@@ -318,6 +325,17 @@ impl WatchMetrics {
 
         #[cfg(feature = "openxr")]
         if let Some(metrics) = crate::frame_shell::watch_metrics(app) {
+            // Another source's history doesn't continue this one's
+            let pc = crate::frame_shell::pc_metrics_shown();
+            if self.pc_shown != Some(pc) {
+                self.pc_shown = Some(pc);
+                self.seen = [0; 3];
+                self.fps_history.clear();
+                for graph in self.graphs.iter().flatten() {
+                    graph.clear();
+                }
+            }
+            self.label(common, SOURCE, if pc { "PC" } else { "Headset" });
             let now = Instant::now();
             if let Some(fps) = metrics.fps_current
                 && now >= self.next_fps_sample
@@ -353,6 +371,11 @@ impl WatchMetrics {
                     if i < 2 {
                         graph.set_limits(common, limits);
                     }
+                    // Samples were taken back (drops that were a hiding): redraw from what's left
+                    if count < self.seen[i] {
+                        graph.clear();
+                        self.seen[i] = 0;
+                    }
                     self.seen[i] = push_new_graph_values(graph, values, count, self.seen[i], limits);
                 }
             }
@@ -367,10 +390,12 @@ impl WatchMetrics {
         for which in [FPS_CURRENT, CPU_VALUE, GPU_VALUE, NET_VALUE, DROPPED_VALUE] {
             self.label(common, which, "--");
         }
+        self.label(common, SOURCE, "");
         self.label(common, FPS_AVG, "AVG --");
     }
 }
 
+#[cfg(feature = "openxr")]
 fn push_new_graph_values(
     graph: &Rc<ComponentBarGraph>,
     values: &VecDeque<f32>,
@@ -378,11 +403,7 @@ fn push_new_graph_values(
     previous_count: usize,
     limits: (f32, f32),
 ) -> usize {
-    let new_count = if total_count < previous_count {
-        total_count
-    } else {
-        total_count - previous_count
-    };
+    let new_count = total_count - previous_count;
     if new_count == 0 {
         return total_count;
     }
@@ -390,8 +411,11 @@ fn push_new_graph_values(
     let to_push = new_count.min(values.len());
     let skip = values.len().saturating_sub(to_push);
     for &value in values.iter().skip(skip) {
-        // Sentinel -1 means a dropped frame: render as full-height red bar.
-        let (bar_value, color) = if value < 0.0 {
+        // Sentinels: a dropped frame is a full-height red bar, a pause (VR hidden) a grey one
+        use crate::backend::openxr::monado_state::{SAMPLE_DROPPED, SAMPLE_PAUSED};
+        let (bar_value, color) = if value == SAMPLE_PAUSED {
+            (limits.1, WATCH_GRAPH_PAUSED)
+        } else if value == SAMPLE_DROPPED {
             (limits.1, WATCH_GRAPH_HOT)
         } else {
             (value, graph_color(value, limits))
@@ -405,6 +429,7 @@ fn push_new_graph_values(
     total_count
 }
 
+#[cfg(feature = "openxr")]
 fn graph_color(value: f32, limits: (f32, f32)) -> Color {
     let midpoint = (limits.0 + limits.1) * 0.5;
     if value <= midpoint {

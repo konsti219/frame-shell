@@ -719,11 +719,9 @@ impl DashInterface<AppState> for DashInterfaceLive {
     fn monado_metrics_set_enabled(&mut self, app: &mut AppState, enabled: bool) -> bool {
         #[cfg(feature = "feat-monado-metrics")]
         {
-            if crate::frame_shell::remote_connected() {
-                return true;
-            }
+            // The headset's metrics are shown while a PC's VR is hidden
             let Some(monado) = &mut app.monado_state else {
-                return false;
+                return crate::frame_shell::remote_connected();
             };
 
             if let Err(e) = monado.set_metrics_enabled(enabled) {
@@ -749,7 +747,7 @@ impl DashInterface<AppState> for DashInterfaceLive {
     ) -> Vec<dash_interface::MonadoDumpSessionFrame> {
         #[cfg(feature = "feat-monado-metrics")]
         {
-            let metrics = if crate::frame_shell::remote_connected() {
+            let metrics = if crate::frame_shell::pc_metrics_shown() {
                 let Some((_, metrics)) = app.remote_metrics.as_mut() else {
                     return Vec::new();
                 };

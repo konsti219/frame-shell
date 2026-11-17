@@ -162,9 +162,12 @@
 
         <!-- CPU and GPU frame times, shown for a while when the watch is revealed -->
         <div id="perf_section" display="none" width="100%">
-          <rectangle macro="decorative_rect" flex_direction="row" gap="8" width="100%">
-            <GraphCard title="CPU" value_id="cpu_value_label" graph_id="cpu_frametime_graph" />
-            <GraphCard title="GPU" value_id="gpu_value_label" graph_id="gpu_frametime_graph" />
+          <rectangle macro="decorative_rect" flex_direction="column" gap="4" width="100%">
+            <label id="metrics_source_label" text="" color="on_background_variant" size="12" />
+            <div flex_direction="row" gap="8" width="100%">
+              <GraphCard title="CPU" value_id="cpu_value_label" graph_id="cpu_frametime_graph" />
+              <GraphCard title="GPU" value_id="gpu_value_label" graph_id="gpu_frametime_graph" />
+            </div>
           </rectangle>
         </div>
 
