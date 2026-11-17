@@ -145,16 +145,26 @@ pub struct TabWivrn<T> {
 
 	id_hosts: WidgetID,
 	id_content: WidgetID,
+	id_settings: WidgetID,
 	/// Template instances (their components) of the current host bar and page
 	cells: Vec<ParserData>,
+	/// The stream settings shown, kept across page rebuilds so their sliders don't flash
+	settings: Option<Settings>,
 
 	version: Option<u64>,
 	page_state: Option<WivrnState>,
-	settings_cell: Option<usize>,
 	selected: Option<Rc<str>>,
 	confirm_forget: Option<Rc<str>>,
 	/// Slider changes wait until the drag rests before rebuilding the page
 	pending_setting: Option<(Rc<str>, &'static str, f32, Instant)>,
+}
+
+/// A PC's stream settings section, created for a PC and its limits, updated in place otherwise
+struct Settings {
+	cookie: Rc<str>,
+	limits: (u64, u64),
+	shown: Option<(Value, bool)>,
+	data: ParserData,
 }
 
 fn doc_params(globals: &WguiGlobals) -> ParseDocumentParams<'_> {
@@ -199,7 +209,7 @@ impl<T> Tab<T> for TabWivrn<T> {
 			}
 		}
 
-		let dragging = self.cells.iter().any(|cell| {
+		let dragging = self.settings.iter().map(|settings| &settings.data).any(|cell| {
 			[
 				"bitrate",
 				"resolution",
@@ -275,13 +285,14 @@ impl<T> TabWivrn<T> {
 		Ok(Self {
 			id_hosts: state.get_widget_id("hosts_root")?,
 			id_content: state.get_widget_id("content")?,
+			id_settings: state.get_widget_id("settings")?,
 			state,
 			tasks: Tasks::new(),
 			marker: PhantomData,
 			cells: Vec::new(),
 			version: None,
 			page_state: None,
-			settings_cell: None,
+			settings: None,
 			selected: None,
 			confirm_forget: None,
 			pending_setting: None,
@@ -311,9 +322,10 @@ impl<T> TabWivrn<T> {
 		layout.remove_children(self.id_hosts);
 		layout.remove_children(self.id_content);
 		self.cells.clear();
-		self.settings_cell = None;
 
 		if wivrn.hosts.is_empty() {
+			layout.remove_children(self.id_settings);
+			self.settings = None;
 			wgui_simple::create_label(
 				layout,
 				self.id_content,
@@ -384,6 +396,14 @@ impl<T> TabWivrn<T> {
 		params.insert("show_auto", if host.paired { "flex" } else { "none" });
 		params.insert("show_forget", if host.paired && !active { "flex" } else { "none" });
 		params.insert(
+			"forget_label",
+			if self.confirm_forget.as_ref() == Some(&host.cookie) {
+				"Forget (click again)"
+			} else {
+				"Forget"
+			},
+		);
+		params.insert(
 			"auto_label",
 			if host.autoconnect {
 				"Auto-connect: on"
@@ -408,14 +428,7 @@ impl<T> TabWivrn<T> {
 				host.cookie,
 				if host.autoconnect { 0 } else { 1 }
 			))));
-		let forget = self.button(page, "btn_forget")?;
-		if self.confirm_forget.as_ref() == Some(&host.cookie) {
-			forget.set_text(
-				&mut layout.common(),
-				Translation::from_raw_text("Click again to forget"),
-			);
-		}
-		forget.on_click(self.tasks.get_button_click_callback(Task::Forget(host.cookie.clone())));
+		self.button(page, "btn_forget")?.on_click(self.tasks.get_button_click_callback(Task::Forget(host.cookie.clone())));
 
 		if host.connection == "pin" {
 			let shown: String = wivrn.pin_typed.chars().chain(std::iter::repeat('-')).take(6).collect();
@@ -460,33 +473,54 @@ impl<T> TabWivrn<T> {
 		game_running: bool,
 	) -> anyhow::Result<()> {
 		let Some(bitrate) = settings.get("bitrate").and_then(Value::as_u64) else {
+			layout.remove_children(self.id_settings);
+			self.settings = None;
 			return Ok(());
 		};
 		let max_bitrate = settings
 			.get("max_bitrate")
 			.and_then(Value::as_u64)
 			.unwrap_or(200_000_000);
-		let mut params = TemplateParams::new();
-		params.insert_str("max_bitrate", format!("{}", max_bitrate / 1_000_000));
-		params.insert_str(
-			"max_foveation",
-			settings
-				.get("max_foveation")
-				.and_then(Value::as_u64)
-				.unwrap_or(100)
-				.to_string(),
-		);
+		let max_foveation = settings.get("max_foveation").and_then(Value::as_u64).unwrap_or(100);
+		if self
+			.settings
+			.as_ref()
+			.is_none_or(|shown| shown.cookie != *cookie || shown.limits != (max_bitrate, max_foveation))
+		{
+			let mut params = TemplateParams::new();
+			params.insert_str("max_bitrate", format!("{}", max_bitrate / 1_000_000));
+			params.insert_str("max_foveation", max_foveation.to_string());
+			layout.remove_children(self.id_settings);
+			let data = self.state.parse_template_only(
+				&doc_params(globals),
+				"StreamSettings",
+				layout,
+				self.id_settings,
+				params,
+			)?;
+			self.settings = Some(Settings {
+				cookie: cookie.clone(),
+				limits: (max_bitrate, max_foveation),
+				shown: None,
+				data,
+			});
+		}
+		let section = self.settings.as_mut().expect("created above");
+		let shown = Some((settings.clone(), game_running));
+		if section.shown == shown {
+			return Ok(());
+		}
+		section.shown = shown;
+		let cell = &section.data;
 
 		let desktop_codec = settings.get("desktop_codec").and_then(Value::as_str).unwrap_or("h264");
-		let cell = self.template(layout, globals, "StreamSettings", self.id_content, params)?;
-		self.settings_cell = Some(cell);
 		let codec = settings.get("codec").and_then(Value::as_str).unwrap_or("auto");
 		for (key, selected, choices) in [
 			("codec", codec, &["auto", "h264", "h265", "av1"][..]),
 			("desktop_codec", desktop_codec, &["h264", "h265"][..]),
 		] {
 			for choice in choices {
-				let button = self.button(cell, &format!("{key}_{choice}"))?;
+				let button = cell.fetch_component_as::<ComponentButton>(&format!("{key}_{choice}"))?;
 				button.set_sticky_state_immediate(&mut layout.common(), *choice == selected);
 				let available = *choice == "auto" || settings["codec_support"][*choice].as_bool().unwrap_or(false);
 				button.set_enabled(&mut layout.common(), available);
@@ -499,7 +533,7 @@ impl<T> TabWivrn<T> {
 		}
 
 		for (key, default) in [("foveation_debug", false)] {
-			let checkbox = self.cells[cell].fetch_component_as::<ComponentCheckbox>(key)?;
+			let checkbox = cell.fetch_component_as::<ComponentCheckbox>(key)?;
 			checkbox.set_checked(
 				&mut layout.common(),
 				settings.get(key).and_then(Value::as_bool).unwrap_or(default),
@@ -535,7 +569,7 @@ impl<T> TabWivrn<T> {
 					/ 1000.0,
 			),
 		] {
-			let slider = self.cells[cell].fetch_component_as::<ComponentSlider>(key)?;
+			let slider = cell.fetch_component_as::<ComponentSlider>(key)?;
 			slider.set_value_primary(&mut layout.common(), value);
 			if key == "resolution" {
 				slider.set_enabled(&mut layout.common(), !game_running);
@@ -548,7 +582,7 @@ impl<T> TabWivrn<T> {
 	}
 
 	fn update_stream_debug(&self, layout: &mut Layout, stream: &Value) -> anyhow::Result<()> {
-		let Some(cell) = self.settings_cell else {
+		let Some(settings) = &self.settings else {
 			return Ok(());
 		};
 		let debug = stream
@@ -632,7 +666,7 @@ impl<T> TabWivrn<T> {
 			("eyes_debug", eyes),
 		] {
 			let mut common = layout.common();
-			let mut label = self.cells[cell].fetch_widget_as::<WidgetLabel>(common.state, id)?;
+			let mut label = settings.data.fetch_widget_as::<WidgetLabel>(common.state, id)?;
 			label.set_text(&mut common, Translation::from_raw_text_string(text));
 		}
 		Ok(())
