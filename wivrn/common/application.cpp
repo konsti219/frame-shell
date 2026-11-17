@@ -240,6 +240,7 @@ std::unordered_map<std::string, application> list_applications()
 			            application{
 			                    .name = std::move(app.name),
 			                    .exec = cmd + app.url,
+			                    .url = app.url,
 			                    .icon_path = shortcut ? steam.get_icon(app.appid) : std::nullopt,
 			                    .last_played = app.last_played,
 			            });

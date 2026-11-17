@@ -585,7 +585,20 @@ gboolean control_received(gint fd, GIOCondition condition, gpointer user_data)
 			                   {
 				                   try
 				                   {
-					                   children->start_application(it->second.exec, it->second.path);
+					                   // A Flatpak opens Steam's URLs through the OpenURI portal, with the host's handler
+					                   if (it->second.url and wivrn::is_flatpak())
+					                   {
+						                   std::cerr << "Opening " << *it->second.url << std::endl;
+						                   GError * error = nullptr;
+						                   if (not g_app_info_launch_default_for_uri(it->second.url->c_str(), nullptr, &error))
+						                   {
+							                   std::runtime_error e(error->message);
+							                   g_error_free(error);
+							                   throw e;
+						                   }
+					                   }
+					                   else
+						                   children->start_application(it->second.exec, it->second.path);
 				                   }
 				                   catch (std::exception & e)
 				                   {
@@ -878,8 +891,11 @@ void on_headset_info_packet(const wivrn::from_headset::headset_info_packet & inf
 
 void on_name_acquired(GDBusConnection * connection, const gchar * name, gpointer user_data)
 {
+	// Transient units would run on the host with the sandbox's environment: a Flatpak forks through flatpak-spawn
 	try
 	{
+		if (wivrn::is_flatpak())
+			throw std::runtime_error("Flatpak");
 		children = std::make_unique<systemd_units_manager>(connection, update_fsm);
 	}
 	catch (...)

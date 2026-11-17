@@ -27,6 +27,7 @@ just deploy                       # bundle the builds and run its installer on t
 just headset                      # build-headset, then deploy
 just all                          # also builds ../frame-monado (FRAME_MONADO) and the host
 just release                      # the release bundle from clean checkouts of HEAD and monado-rev
+just flatpak                      # the PC Flatpak from HEAD, in WiVRn's Flatpak build container
 just app <command> <arguments>    # launch explicitly against the development runtime
 just ctl list-paired
 just stop                         # recover after a killed just run

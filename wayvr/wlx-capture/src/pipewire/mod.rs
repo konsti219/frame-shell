@@ -3,6 +3,7 @@ use std::{
     error::Error as StdError,
     fmt,
     future::Future,
+    os::fd::{FromRawFd, OwnedFd},
     pin::Pin,
     rc::Rc,
     sync::{Arc, Mutex, MutexGuard},
@@ -38,6 +39,8 @@ pub struct PipewireStream {
 pub struct ScreenCastResponse {
     pub streams: Vec<PipewireStream>,
     pub restore_token: Option<String>,
+    /// The PipeWire connection showing the streams; a sandboxed app sees them nowhere else.
+    pub remote: Arc<OwnedFd>,
 }
 
 #[derive(Default, Debug, Clone)]
@@ -426,12 +429,36 @@ impl ScreenCastManager {
                         self.begin_step(PortalStep::Start { session_handle })
                     }
 
-                    PortalStep::Start { .. } => {
-                        let response = parse_start_response(&response.results)?;
-                        Ok(RequestState::Terminal(ScreenCastResult::Ok(response)))
+                    PortalStep::Start { session_handle } => {
+                        let proxy = portal_proxy(self.conn.clone(), self.timeout);
+                        Ok(RequestState::OpenRemote {
+                            streams: parse_streams(&response.results)?,
+                            restore_token: optional_string(&response.results, "restore_token"),
+                            reply: proxy.open_pipe_wire_remote(session_handle, arg::PropMap::new()),
+                        })
                     }
                 }
             }
+
+            RequestState::OpenRemote {
+                streams,
+                restore_token,
+                mut reply,
+            } => match poll_unpin(&mut reply) {
+                Poll::Pending => Ok(RequestState::OpenRemote {
+                    streams,
+                    restore_token,
+                    reply,
+                }),
+                Poll::Ready(Err(e)) => Err(e.into()),
+                Poll::Ready(Ok(fd)) => Ok(RequestState::Terminal(ScreenCastResult::Ok(
+                    ScreenCastResponse {
+                        streams,
+                        restore_token,
+                        remote: Arc::new(unsafe { OwnedFd::from_raw_fd(fd.into_fd()) }),
+                    },
+                ))),
+            },
 
             RequestState::Terminal(result) => Ok(RequestState::Terminal(result)),
         }
@@ -564,7 +591,8 @@ impl ScreenCastManager {
             RequestState::Queued => ScreenCastResult::Queued,
             RequestState::Init
             | RequestState::AddMatch { .. }
-            | RequestState::MethodCall { .. } => ScreenCastResult::Pending,
+            | RequestState::MethodCall { .. }
+            | RequestState::OpenRemote { .. } => ScreenCastResult::Pending,
             RequestState::WaitResponse { step, .. } => match step {
                 PortalStep::Start { .. } => ScreenCastResult::WaitingForUser,
                 _ => ScreenCastResult::Pending,
@@ -598,6 +626,11 @@ enum RequestState {
         step: PortalStep,
         request_path: String,
         match_handle: MsgMatch,
+    },
+    OpenRemote {
+        streams: Vec<PipewireStream>,
+        restore_token: Option<String>,
+        reply: nonblock::MethodReply<arg::OwnedFd>,
     },
     Terminal(ScreenCastResult),
 }
@@ -679,13 +712,6 @@ fn parse_portal_response_message(msg: &Message) -> Result<PortalResponse, Screen
         .map_err(|_| ScreenCastError::InvalidResponse("Request::Response signal"))?;
 
     Ok(PortalResponse { response, results })
-}
-
-fn parse_start_response(results: &arg::PropMap) -> Result<ScreenCastResponse, ScreenCastError> {
-    Ok(ScreenCastResponse {
-        streams: parse_streams(results)?,
-        restore_token: optional_string(results, "restore_token"),
-    })
 }
 
 fn parse_streams(results: &arg::PropMap) -> Result<Vec<PipewireStream>, ScreenCastError> {

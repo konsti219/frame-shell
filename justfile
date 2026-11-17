@@ -206,6 +206,27 @@ deploy: bundle
     rsync -a --delete "{{headset_build}}/bundle/frame-shell/" "$headset:.local/state/frame-shell/bundle/"
     ssh -t "$headset" '~/.local/state/frame-shell/bundle/install.sh'
 
+# Build the PC host Flatpak from HEAD (committed files only) in WiVRn's Flatpak container into out/flatpak/frame-shell.flatpak
+flatpak:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mkdir -p "{{root}}/out/flatpak/user"
+    # The image has the KDE runtime and SDK but cannot update them on its overlay filesystem: the SDK extensions
+    # go into a user installation kept in out/flatpak/user
+    podman run --rm --privileged -v "{{root}}:/work" -v "{{root}}/out/flatpak/user:/root/.local/share/flatpak" -w /work \
+        ghcr.io/flathub-infra/flatpak-github-actions:kde-6.11 bash -euo pipefail -c '
+            git config --global --add safe.directory "*"
+            pip install --quiet --root-user-action=ignore toml aiohttp
+            manifest=$(python3 flatpak/gen-manifest.py out/flatpak/manifest)
+            flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+            flatpak install --user -y --noninteractive flathub \
+                org.freedesktop.Sdk.Extension.rust-stable//25.08 org.freedesktop.Sdk.Extension.llvm20//25.08
+            flatpak-builder --force-clean --disable-rofiles-fuse --ccache \
+                --state-dir=out/flatpak/state --repo=out/flatpak/repo out/flatpak/build "$manifest"
+            flatpak build-bundle out/flatpak/repo out/flatpak/frame-shell.flatpak io.github.konsti219.FrameShell
+            chown -R "$(stat -c %u:%g /work)" out/flatpak'
+    echo "{{root}}/out/flatpak/frame-shell.flatpak"
+
 # Record frame-monado's current commit as the one releases bundle
 pin-monado:
     git -C "{{monado}}" rev-parse HEAD >"{{root}}/monado-rev"

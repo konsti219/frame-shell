@@ -31,6 +31,8 @@ struct application
 	// localised names, with empty locale for default
 	std::unordered_map<std::string, std::string> name;
 	std::string exec;
+	// Steam games: the steam:// URL exec opens
+	std::optional<std::string> url;
 	std::optional<std::filesystem::path> icon_path;
 	std::optional<std::string> path;
 	// Steam games: Unix time last played, 0 if never or not a Steam game

@@ -32,6 +32,19 @@ password). Running a newer release's installer updates it. Running `~/.local/sha
 removes everything again (`--purge` also removes settings and pairings). Building it yourself:
 [DEVELOPMENT.md](DEVELOPMENT.md).
 
+PC (Flatpak):
+
+```sh
+curl -fLO https://github.com/konsti219/frame-shell/releases/latest/download/frame-shell.flatpak
+flatpak install --user frame-shell.flatpak
+```
+
+Start it as "WiVRn" from the application menu, or in the background with
+`flatpak run --command=wivrn-server io.github.konsti219.FrameShell`. The headset's keyboard and mouse need write
+access to `/dev/uinput`, which Steam's udev rules (the `steam-devices` package) grant.
+Steam libraries outside your home, `/mnt`, `/media` and `/run/media` need
+`flatpak override --user --filesystem=<library path>:ro io.github.konsti219.FrameShell`.
+
 PC (NixOS):
 
 ```nix

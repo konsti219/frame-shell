@@ -134,7 +134,7 @@ bool wivrn::vdf::string::operator==(const char * b) const
 
 wivrn::vdf::root::root(const std::filesystem::path & file)
 {
-	boost::iostreams::mapped_file in{file};
+	boost::iostreams::mapped_file_source in{file};
 	opaque = in;
 
 	const char * pos = in.begin();

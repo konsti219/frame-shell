@@ -1,0 +1,478 @@
+# The frame shell's PC host as a Flatpak, from WiVRn's manifest (wivrn/flatpak): the server with the host services,
+# frame-monado's wivrn branch, our patched xrizer and the GPU time layer. Filled in by flatpak/gen-manifest.py.
+id: io.github.konsti219.FrameShell
+runtime: org.kde.Platform
+runtime-version: '6.11'
+sdk: org.kde.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+  - org.freedesktop.Sdk.Extension.llvm20
+command: wivrn-dashboard
+separate-locales: false
+rename-desktop-file: io.github.wivrn.wivrn.desktop
+rename-icon: io.github.wivrn.wivrn
+rename-appdata-file: io.github.wivrn.wivrn.metainfo.xml
+
+finish-args:
+  - --share=ipc
+  - --socket=fallback-x11
+  - --socket=wayland
+  # GPU, and /dev/uinput for the headset's keyboard and mouse (no narrower permission covers it)
+  - --device=all
+  - --share=network
+  - --system-talk-name=org.freedesktop.Avahi
+  - --system-talk-name=org.freedesktop.hostname1
+  - --filesystem=host-os:ro
+  - --filesystem=xdg-data/applications:ro
+  - --filesystem=xdg-data/Steam:ro
+  - --filesystem=~/.steam:ro
+  # Steam libraries on other drives, for the games list
+  - --filesystem=/mnt:ro
+  - --filesystem=/media:ro
+  - --filesystem=/run/media:ro
+  - --filesystem=~/.var/app/com.valvesoftware.Steam:ro
+  - --filesystem=xdg-run/pipewire-0
+  - --filesystem=xdg-config/openxr:create
+  - --filesystem=xdg-config/openvr:create
+  # The GPU time layer's manifest, written while a headset is connected
+  - --filesystem=xdg-data/vulkan/implicit_layer.d:create
+  - --filesystem=xdg-run/wivrn:create
+  - --own-name=io.github.wivrn.Server
+  - --filesystem=host-etc
+  - --system-talk-name=org.fedoraproject.FirewallD1
+  - --system-talk-name=org.fedoraproject.FirewallD1.config
+  - --talk-name=org.kde.StatusNotifierWatcher
+  - --talk-name=org.freedesktop.Flatpak
+  - --system-talk-name=org.freedesktop.login1
+  # Desktop notifications forwarded to the headset: monitoring the bus needs it unfiltered (the Flatpak talk name
+  # above already allows running host commands)
+  - --socket=session-bus
+  # The host services find the runtime through its manifest, which the active runtime link names by its host path
+  - --env=FRAME_SHELL_RUNTIME_JSON=/app/share/openxr/1/openxr_wivrn.json
+  - --env=GST_PLUGIN_SYSTEM_PATH_1_0=/app/lib/gstreamer-1.0:/usr/lib/x86_64-linux-gnu/gstreamer-1.0
+
+cleanup:
+  - /lib/pkgconfig
+  - /share/pkgconfig
+  - /include
+  - /share/man
+  - /share/cmake
+  - /share/gir-1.0
+  - /lib/girepository-1.0
+  - /lib/systemd
+  - '*.a'
+  - '*.la'
+  - '*.cmake'
+
+modules:
+  # Libraries loaded into games (runtime, GPU time layer, xrizer) are built with an old glibc
+  - name: crosstool
+    buildsystem: autotools
+    sources:
+    - type: git
+      url: https://github.com/crosstool-ng/crosstool-ng.git
+      commit: 620b909cd0713f68084378b63cf61b5232757b90
+    - type: shell
+      commands:
+       - sed -i 's/-O2 -g/-O2/' scripts/crosstool-NG.sh
+       - sed -i 's/-g -O2/-O2/' scripts/build/cc/gcc.sh
+       - sed -i '/# Cleanup/a rm -r "$(readlink "${kernel_path}")"' scripts/build/kernel/linux.sh
+       - sed -i '2228i CT_DoExecLog FILE rm "$(readlink -f "${file}")"' scripts/functions
+       - sed -i '/CT_ExtractPatch GCC/a CT_Pushd "${CT_SRC_DIR}/gcc/gcc/testsuite/";CT_DoExecLog ALL rm -rf $(ls -1 | grep -v selftests);CT_Popd' scripts/build/cc/gcc.sh
+    cleanup:
+      - '*'
+
+  - name: rsync
+    buildsystem: autotools
+    config-opts:
+      - --disable-md2man
+    sources:
+    - type: git
+      url: https://github.com/RsyncProject/rsync.git
+      commit: 3305a7a063ab0167cab5bf7029da53abaa9fdb6e
+    cleanup:
+      - '*'
+
+  - name: toolchain
+    sources:
+    - type: file
+      url: https://cdn.kernel.org/pub/linux/kernel/v5.x/linux-5.15.177.tar.xz
+      mirror-urls:
+        - https://mirrors.edge.kernel.org/pub/linux/kernel/v5.x/linux-5.15.177.tar.xz
+      sha256: ea9eb8088d4231f8a01b191ceef5f4d92238f6c7519f6fbcb57e448ee9e0a6e0
+    - type: file
+      url: https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.xz
+      sha256: 38ef96b8dfe510d42707d9c781877914792541133e1870841463bfa73f883e32
+    - type: file
+      url: https://github.com/facebook/zstd/releases/download/v1.5.6/zstd-1.5.6.tar.gz
+      sha256: 8c29e06cf42aacc1eafc4077ae2ec6c6fcb96a626157e0593d5e82a34fd403c1
+    - type: file
+      url: https://ftpmirror.gnu.org/gnu/gmp/gmp-6.3.0.tar.xz
+      mirror-urls:
+        - https://ftp.gnu.org/gnu/gmp/gmp-6.3.0.tar.xz
+        - https://mirrors.kernel.org/gnu/gmp/gmp-6.3.0.tar.xz
+      sha256: a3c2b80201b89e68616f4ad30bc66aee4927c3ce50e33929ca819d5c43538898
+    - type: file
+      url: https://www.mpfr.org/mpfr-4.2.1/mpfr-4.2.1.tar.xz
+      mirror-urls:
+        - https://ftp.gnu.org/gnu/mpfr/mpfr-4.2.1.tar.xz
+        - https://mirrors.kernel.org/gnu/mpfr/mpfr-4.2.1.tar.xz
+      sha256: 277807353a6726978996945af13e52829e3abd7a9a5b7fb2793894e18f1fcbb2
+    - type: file
+      dest-filename: isl-0.26.tar.xz
+      url: https://sourceforge.net/projects/libisl/files/isl-0.26.tar.xz/download
+      mirror-urls:
+        - https://libisl.sourceforge.io/isl-0.26.tar.xz
+      sha256: a0b5cb06d24f9fa9e77b55fabbe9a3c94a336190345c2555f9915bb38e976504
+    - type: file
+      url: https://ftpmirror.gnu.org/gnu/mpc/mpc-1.3.1.tar.gz
+      mirror-urls:
+        - https://ftp.gnu.org/gnu/mpc/mpc-1.3.1.tar.gz
+        - https://mirrors.kernel.org/gnu/mpc/mpc-1.3.1.tar.gz
+      sha256: ab642492f5cf882b74aa0cb730cd410a81edcdbec895183ce930e706c1c759b8
+    - type: file
+      url: https://invisible-mirror.net/archives/ncurses/ncurses-6.4.tar.gz
+      mirror-urls:
+        - https://ftp.gnu.org/gnu/ncurses/ncurses-6.4.tar.gz
+        - https://mirrors.kernel.org/gnu/ncurses/ncurses-6.4.tar.gz
+      sha256: 6931283d9ac87c5073f30b6290c4c75f21632bb4fc3603ac8100812bed248159
+    - type: file
+      url: https://ftpmirror.gnu.org/gnu/libiconv/libiconv-1.16.tar.gz
+      mirror-urls:
+        - https://ftp.gnu.org/gnu/libiconv/libiconv-1.16.tar.gz
+        - https://mirrors.kernel.org/gnu/libiconv/libiconv-1.16.tar.gz
+      sha256: e6a1b1b589654277ee790cce3734f07876ac4ccfaecbee8afa0b649cf529cc04
+    - type: file
+      url: https://ftpmirror.gnu.org/gnu/gettext/gettext-0.23.1.tar.xz
+      mirror-urls:
+        - https://ftp.gnu.org/gnu/gettext/gettext-0.23.1.tar.xz
+        - https://mirrors.kernel.org/gnu/gettext/gettext-0.23.1.tar.xz
+      sha256: c1f97a72a7385b7e71dd07b5fea6cdaf12c9b88b564976b23bd8c11857af2970
+    - type: file
+      url: https://ftpmirror.gnu.org/gnu/binutils/binutils-2.43.1.tar.xz
+      mirror-urls:
+        - https://ftp.gnu.org/gnu/binutils/binutils-2.43.1.tar.xz
+        - https://mirrors.kernel.org/gnu/binutils/binutils-2.43.1.tar.xz
+      sha256: 13f74202a3c4c51118b797a39ea4200d3f6cfbe224da6d1d95bb938480132dfd
+    - type: file
+      url: https://ftpmirror.gnu.org/gnu/gcc/gcc-11.5.0/gcc-11.5.0.tar.xz
+      mirror-urls:
+        - https://ftp.gnu.org/gnu/gcc/gcc-11.5.0/gcc-11.5.0.tar.xz
+        - https://mirrors.kernel.org/gnu/gcc/gcc-11.5.0/gcc-11.5.0.tar.xz
+      sha256: a6e21868ead545cf87f0c01f84276e4b5281d672098591c1c896241f09363478
+    - type: file
+      url: https://ftpmirror.gnu.org/gnu/glibc/glibc-2.35.tar.xz
+      mirror-urls:
+        - https://ftp.gnu.org/gnu/glibc/glibc-2.35.tar.xz
+        - https://mirrors.kernel.org/gnu/glibc/glibc-2.35.tar.xz
+      sha256: 5123732f6b67ccd319305efd399971d58592122bcc2a6518a1bd2510dd0cf52e
+    - type: file
+      path: ../../wivrn/flatpak/ct-ng-x86_64.config
+      dest-filename: .config
+    buildsystem: simple
+    build-commands:
+      - env -u CXXFLAGS -u CFLAGS -u CPLUS_INCLUDE_PATH -u C_INCLUDE_PATH -u LD_LIBRARY_PATH CT_PREFIX=/app TAR_OPTIONS=--no-same-owner ct-ng build
+    cleanup:
+      - '*'
+
+  - name: libavahi-client
+    buildsystem: autotools
+    config-opts:
+      - --disable-mono
+      - --enable-compat-libdns_sd
+      - --with-autoipd-group=avahi
+      - --with-autoipd-user=avahi
+      - --with-avahi-priv-access-group=network
+      - --disable-libdaemon
+      - --with-distro=none
+      - --disable-libevent
+      - --disable-qt4
+      - --disable-qt5
+      - --disable-gtk
+      - --disable-gtk3
+      - --disable-python
+      - --disable-manpages
+      - --disable-static
+    sources:
+    - type: git
+      url: https://github.com/avahi/avahi.git
+      tag: v0.8
+      commit: f060abee2807c943821d88839c013ce15db17b58
+    cleanup:
+      - /share/locale
+      - /share/runtime/locale
+      - /bin/avahi-*
+
+  - name: x264
+    buildsystem: autotools
+    config-opts:
+      - --enable-shared
+    sources:
+    - type: git
+      url: https://code.videolan.org/videolan/x264.git
+      commit: 31e19f92f00c7003fa115047ce50978bc98c3a0d
+    cleanup:
+      - /bin/x264
+
+  - name: ffmpeg-libdrm
+    config-opts:
+      - --optflags="${CFLAGS}"
+      - --extra-ldflags="${LDFLAGS}"
+      - --disable-stripping
+      - --disable-debug
+      - --disable-doc
+      - --disable-static
+      - --disable-everything
+      - --enable-shared
+      - --enable-libdrm
+      - --enable-vaapi
+      - --enable-pthreads
+      - --enable-encoder=hevc_vaapi,h264_vaapi,av1_vaapi
+    build-commands:
+      - make install
+    cleanup:
+      - /share/ffmpeg
+      - /bin/ffmpeg
+      - /bin/ffplay
+      - /bin/ffprobe
+    sources:
+    - type: git
+      url: https://gitlab.com/freedesktop-sdk/mirrors/ffmpeg/ffmpeg.git
+      tag: n7.1.4
+      commit: 9abe92e3af7fa7becc8f7f742b1457b4c28220a6
+
+  - name: eigen3
+    buildsystem: cmake-ninja
+    config-opts:
+      - -DBUILD_TESTING=OFF
+    builddir: true
+    sources:
+    - type: git
+      url: https://gitlab.com/libeigen/eigen.git
+      tag: 5.0.1
+      commit: bc3b39870ecb690a623a3f49149a358b95c5781d
+    cleanup:
+      - '*'
+
+  - name: nlohmann_json
+    buildsystem: cmake-ninja
+    config-opts:
+      - -DJSON_BuildTests=OFF
+    sources:
+    - type: git
+      url: https://github.com/nlohmann/json.git
+      tag: v3.12.0
+      commit: 55f93686c01528224f448c19128836e7df245f72
+
+  - name: cli11
+    buildsystem: cmake-ninja
+    config-opts:
+      - -DCMAKE_BUILD_TYPE=RelWithDebInfo
+      - -DBUILD_TESTING=OFF
+      - -DCLI11_BUILD_TESTS=OFF
+      - -DCLI11_BUILD_EXAMPLES=OFF
+    sources:
+    - type: git
+      url: https://github.com/CLIUtils/CLI11
+      tag: v2.6.2
+      commit: 37bb6edc5317e99af72ef48405e65d9ca5218861
+    cleanup:
+      - '*'
+
+  # xrizer links the OpenXR loader (nix/xrizer-linked-openxr.patch); it sits next to vrclient.so
+  - name: openxr-loader
+    buildsystem: cmake-ninja
+    builddir: true
+    build-options:
+      cflags: -idirafter/usr/include
+      cxxflags: -idirafter/usr/include
+      ldflags: -L/usr/lib/x86_64-linux-gnu -Wl,--warn-unresolved-symbols
+      env:
+        CC: /app/x86_64-unknown-linux-gnu/bin/x86_64-unknown-linux-gnu-gcc
+        CXX: /app/x86_64-unknown-linux-gnu/bin/x86_64-unknown-linux-gnu-g++
+    config-opts:
+      - -DCMAKE_BUILD_TYPE=Release
+      - -DCMAKE_INSTALL_PREFIX=/app/xrizer
+      - -DBUILD_TESTS=OFF
+      - -DBUILD_API_LAYERS=OFF
+      - -DDYNAMIC_LOADER=ON
+    sources:
+    - type: archive
+      url: https://github.com/KhronosGroup/OpenXR-SDK/archive/refs/tags/release-1.1.65.tar.gz
+      sha256: 27aa797baf680c5f836b6138e78e59e2f72d6becfef6d4587ed9a57756d6d3b3
+
+  - name: xrizer
+    buildsystem: simple
+    build-options:
+      append-path: /usr/lib/sdk/rust-stable/bin:/usr/lib/sdk/llvm20/bin
+      cflags: -idirafter/usr/include
+      cxxflags: -idirafter/usr/include
+      ldflags: -L/usr/lib/x86_64-linux-gnu -Wl,--warn-unresolved-symbols
+      env:
+        CARGO_HOME: /run/build/xrizer/cargo
+        CC: /app/x86_64-unknown-linux-gnu/bin/x86_64-unknown-linux-gnu-gcc
+        CXX: /app/x86_64-unknown-linux-gnu/bin/x86_64-unknown-linux-gnu-g++
+        RUSTFLAGS: -C linker=/app/x86_64-unknown-linux-gnu/bin/x86_64-unknown-linux-gnu-gcc -L /app/xrizer/lib
+        XRIZER_VERSION: XRIZER_VERSION_STRING
+    build-commands:
+      - cargo --offline rustc --locked --release --lib -- -C 'link-arg=-Wl,-rpath,$ORIGIN'
+      - install -Dm755 target/release/libxrizer.so /app/xrizer/bin/linux64/vrclient.so
+      - cp -a /app/xrizer/lib/libopenxr_loader.so* /app/xrizer/bin/linux64/
+    sources:
+      - type: git
+        url: https://github.com/Supreeeme/xrizer.git
+        commit: XRIZER_COMMIT
+XRIZER_PATCHES
+      - xrizer-cargo-sources.json
+    cleanup:
+      - /xrizer/lib
+      - /xrizer/share
+
+  # The host services (monitor streaming, WayVR IPC tunnel, notifications), a static library linked into the server
+  # The runtime's PipeWire 1.4 pipewiresrc fails when KWin renegotiates a screen cast's format; 1.6 handles it
+  - name: pipewire
+    buildsystem: meson
+    config-opts:
+      - -Dsession-managers=[]
+      - -Ddocs=disabled
+      - -Dman=disabled
+      - -Dexamples=disabled
+      - -Dtests=disabled
+      - -Dgstreamer=enabled
+      - -Dgstreamer-device-provider=disabled
+      - -Dlibsystemd=disabled
+      - -Dsystemd-system-service=disabled
+      - -Dsystemd-user-service=disabled
+      - -Dlogind=disabled
+      - -Dselinux=disabled
+      - -Dpipewire-alsa=disabled
+      - -Dpipewire-jack=disabled
+      - -Dpipewire-v4l2=disabled
+      - -Djack-devel=false
+      - -Dalsa=disabled
+      - -Dbluez5=disabled
+      - -Djack=disabled
+      - -Dlibcamera=disabled
+      - -Dv4l2=disabled
+      - -Dudev=disabled
+      - -Dvulkan=disabled
+      - -Dffmpeg=disabled
+      - -Dpw-cat=disabled
+      - -Dsdl2=disabled
+      - -Dsndfile=disabled
+      - -Dlibmysofa=disabled
+      - -Dlibpulse=disabled
+      - -Droc=disabled
+      - -Davahi=disabled
+      - -Decho-cancel-webrtc=disabled
+      - -Dlibusb=disabled
+      - -Draop=disabled
+      - -Dlv2=disabled
+      - -Dx11=disabled
+      - -Dx11-xfixes=disabled
+      - -Dlibcanberra=disabled
+      - -Dlegacy-rtkit=false
+      - -Davb=disabled
+      - -Dflatpak=disabled
+      - -Dreadline=disabled
+      - -Dgsettings=disabled
+      - -Dcompress-offload=disabled
+      - -Dopus=disabled
+      - -Dlibffado=disabled
+      - -Dsnap=disabled
+      - -Debur128=disabled
+      - -Dfftw=disabled
+      - -Donnxruntime=disabled
+    cleanup:
+      - /bin
+      - /include
+      - /lib/pkgconfig
+    sources:
+      - type: git
+        url: https://gitlab.freedesktop.org/pipewire/pipewire.git
+        tag: 1.6.6
+        commit: a1c1d9f9f128ec987f23a0140a1704b8f8781787
+
+  - name: frame-host
+    buildsystem: simple
+    build-options:
+      append-path: /usr/lib/sdk/rust-stable/bin:/usr/lib/sdk/llvm20/bin
+      env:
+        CARGO_HOME: /run/build/frame-host/cargo
+        LIBCLANG_PATH: /usr/lib/sdk/llvm20/lib
+    build-commands:
+      - cargo --offline build --locked --release --manifest-path desktop/Cargo.toml
+      - install -Dm644 desktop/target/release/libframe_host.a /app/lib/libframe_host.a
+    sources:
+      - type: git
+        url: FRAMESHELL_URL
+        commit: FRAMESHELL_COMMIT
+      - frame-host-cargo-sources.json
+
+  - name: wivrn-library
+    buildsystem: cmake-ninja
+    subdir: wivrn
+    build-options:
+      cflags: -Wp,-U_FORTIFY_SOURCE -Wp,-D_FORTIFY_SOURCE=2 -idirafter/usr/include -idirafter/usr/lib/x86_64-linux-gnu/include/
+      cxxflags: -Wp,-U_FORTIFY_SOURCE -Wp,-D_FORTIFY_SOURCE=2 -idirafter/usr/include -idirafter/usr/lib/x86_64-linux-gnu/include/
+      ldflags: -L/usr/lib/x86_64-linux-gnu -Wl,--warn-unresolved-symbols
+      env:
+        CC: /app/x86_64-unknown-linux-gnu/bin/x86_64-unknown-linux-gnu-gcc
+        CXX: /app/x86_64-unknown-linux-gnu/bin/x86_64-unknown-linux-gnu-g++
+    config-opts:
+      - -DCMAKE_BUILD_TYPE=RelWithDebInfo
+      - -DWIVRN_BUILD_CLIENT=OFF
+      - -DWIVRN_BUILD_SERVER=OFF
+      - -DWIVRN_BUILD_SERVER_LIBRARY=ON
+      - -DWIVRN_BUILD_DASHBOARD=OFF
+      - -DWIVRN_BUILD_WIVRNCTL=OFF
+      - -DFETCHCONTENT_FULLY_DISCONNECTED=ON
+      - -DFETCHCONTENT_BASE_DIR=deps
+      - -DGIT_DESC=FRAMESHELL_DESC
+      - -DGIT_COMMIT=FRAMESHELL_COMMIT
+      - -Wno-dev
+    sources:
+      - type: git
+        url: FRAMESHELL_URL
+        commit: FRAMESHELL_COMMIT
+      - type: git
+        url: https://github.com/konsti219/frame-monado.git
+        commit: MONADO_COMMIT
+        dest: wivrn/deps/monado-src
+
+  - name: wivrn
+    buildsystem: cmake-ninja
+    subdir: wivrn
+    config-opts:
+      - -DCMAKE_BUILD_TYPE=RelWithDebInfo
+      - -DWIVRN_BUILD_CLIENT=OFF
+      - -DWIVRN_BUILD_SERVER=ON
+      - -DWIVRN_BUILD_SERVER_LIBRARY=OFF
+      - -DWIVRN_BUILD_DASHBOARD=ON
+      - -DWIVRN_OPTIMIZE_SHADERS=OFF
+      - -DWIVRN_USE_VAAPI=ON
+      - -DWIVRN_USE_X264=ON
+      - -DWIVRN_USE_NVENC=ON
+      - -DWIVRN_USE_VULKAN_ENCODE=ON
+      - -DWIVRN_USE_PIPEWIRE=ON
+      - -DWIVRN_USE_SYSTEM_BOOST=OFF
+      - -DWIVRN_FEATURE_SOLARXR=ON
+      - -DWIVRN_FEATURE_STEAMVR_LIGHTHOUSE=OFF
+      - -DFETCHCONTENT_FULLY_DISCONNECTED=ON
+      - -DFETCHCONTENT_BASE_DIR=deps
+      - -DGIT_DESC=FRAMESHELL_DESC
+      - -DGIT_COMMIT=FRAMESHELL_COMMIT
+      - -DFRAME_HOST_LIBRARY=/app/lib/libframe_host.a
+      - -Wno-dev
+    sources:
+      - type: git
+        url: FRAMESHELL_URL
+        commit: FRAMESHELL_COMMIT
+      - type: archive
+        url: BOOST_URL
+        dest: wivrn/deps/boost-src
+        sha256: BOOST_SHA256
+      - type: git
+        url: https://github.com/konsti219/frame-monado.git
+        commit: MONADO_COMMIT
+        dest: wivrn/deps/monado-src

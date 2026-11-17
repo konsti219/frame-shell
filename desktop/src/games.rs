@@ -45,31 +45,58 @@ pub struct RunningGame {
     pub pid: i32,
 }
 
+/// Flatpak puts this file in every sandbox (as the WiVRn server checks)
+fn is_flatpak() -> bool {
+    std::path::Path::new("/.flatpak-info").exists()
+}
+
+/// A host program: a Flatpak's own /proc and processes are the sandbox's
+fn host_command(program: &str) -> std::process::Command {
+    if is_flatpak() {
+        let mut command = std::process::Command::new("flatpak-spawn");
+        command.args(["--host", program]);
+        command
+    } else {
+        std::process::Command::new(program)
+    }
+}
+
+/// Every process with its arguments
+fn processes() -> anyhow::Result<Vec<(i32, Vec<String>)>> {
+    if is_flatpak() {
+        let output = host_command("pgrep").args(["-a", "-f", "SteamLaunch"]).output()?;
+        return Ok(String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter_map(|line| {
+                let mut words = line.split_whitespace();
+                let pid = words.next()?.parse().ok()?;
+                Some((pid, words.map(str::to_owned).collect()))
+            })
+            .collect());
+    }
+    let mut res = Vec::new();
+    for entry in std::fs::read_dir("/proc")?.flatten() {
+        let Ok(pid) = entry.file_name().to_string_lossy().parse::<i32>() else {
+            continue;
+        };
+        let Ok(cmdline) = std::fs::read(entry.path().join("cmdline")) else {
+            continue;
+        };
+        let args = cmdline
+            .split(|byte| *byte == 0x00)
+            .filter_map(|arg| std::str::from_utf8(arg).ok())
+            .map(str::to_owned)
+            .collect();
+        res.push((pid, args));
+    }
+    Ok(res)
+}
+
 pub fn list_running_games() -> anyhow::Result<Vec<RunningGame>> {
     let mut res = Vec::<RunningGame>::new();
 
-    let entries = std::fs::read_dir("/proc")?;
-    for entry in entries.into_iter().flatten() {
-        let path_cmdline = entry.path().join("cmdline");
-        let Ok(cmdline) = std::fs::read(path_cmdline) else {
-            continue;
-        };
-
-        let proc_file_name = entry.file_name();
-        let Some(pid) = proc_file_name.to_str() else {
-            continue;
-        };
-
-        let Ok(pid) = pid.parse::<i32>() else {
-            continue;
-        };
-
-        let args: Vec<&str> = cmdline
-            .split(|byte| *byte == 0x00)
-            .filter_map(|arg| std::str::from_utf8(arg).ok())
-            .collect();
-
-        if !args.contains(&"SteamLaunch") {
+    for (pid, args) in processes()? {
+        if !args.iter().any(|arg| arg == "SteamLaunch") {
             continue;
         }
 
@@ -105,7 +132,7 @@ pub fn stop(app_id: &str, force_kill: bool) -> anyhow::Result<()> {
             app_id, game.pid, force_kill
         );
 
-        std::process::Command::new("pkill")
+        host_command("pkill")
             .arg(if force_kill { "-9" } else { "-15" })
             .arg("-P")
             .arg(format!("{}", game.pid))

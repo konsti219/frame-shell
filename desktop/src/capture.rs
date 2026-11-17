@@ -5,6 +5,7 @@ use gstreamer::{self as gst, prelude::*};
 use gstreamer_app::AppSink;
 use std::{
     io,
+    os::fd::{AsRawFd, OwnedFd},
     path::PathBuf,
     rc::Rc,
     sync::{
@@ -245,10 +246,11 @@ fn capture(output: &Output, shared: &Shared) -> Result<()> {
                 continue;
             }
             shared.monitor(output, &monitors[index].name, MonitorStatus::Streaming);
-            let (monitor, node) = (&monitors[index], selected.node_id);
+            let (monitor, node, remote) =
+                (&monitors[index], selected.node_id, response.remote.clone());
             scope.spawn(move || {
                 let id = index as u32;
-                if let Err(error) = stream(id, node, monitor, output, shared) {
+                if let Err(error) = stream(id, node, &remote, monitor, output, shared) {
                     eprintln!("Desktop surface {id} ({}): {error:#}", monitor.name);
                     metrics::event(&monitor.name, &format!("{error:#}"));
                     let reason = MonitorStatus::Failed(format!("Stopped streaming: {error:#}"));
@@ -275,9 +277,16 @@ fn monitor_bitrate(settings: DesktopSettings, monitor: &Monitor) -> u32 {
 
 /// Captures and encodes one monitor at its own pixel size until stopped; a codec change rebuilds the pipeline on
 /// the same PipeWire node, a bitrate change is applied to the running encoder.
-fn stream(id: u32, node: u32, monitor: &Monitor, output: &Output, shared: &Shared) -> Result<()> {
+fn stream(
+    id: u32,
+    node: u32,
+    remote: &OwnedFd,
+    monitor: &Monitor,
+    output: &Output,
+    shared: &Shared,
+) -> Result<()> {
     while !output.stopped() {
-        stream_codec(id, node, monitor, output, shared, shared.settings())?;
+        stream_codec(id, node, remote, monitor, output, shared, shared.settings())?;
     }
     Ok(())
 }
@@ -286,6 +295,7 @@ fn stream(id: u32, node: u32, monitor: &Monitor, output: &Output, shared: &Share
 fn stream_codec(
     id: u32,
     node: u32,
+    remote: &OwnedFd,
     monitor: &Monitor,
     output: &Output,
     shared: &Shared,
@@ -313,8 +323,9 @@ fn stream_codec(
     // DMA-bufs when the encoder path takes them: a shared-memory cast has the compositor read every frame back
     // (tens of ms on Intel iGPUs). Load is shed by the leaky raw queue: a dropped encoded frame would corrupt the
     // stream until the next keyframe without the headset seeing a loss.
+    let fd = remote.as_raw_fd();
     let pipeline = gst::parse::launch(&format!(
-        "pipewiresrc name=source path={node} do-timestamp=true keepalive-time=100 ! queue max-size-buffers=2 leaky=downstream ! videorate name=capture_rate drop-only=true ! video/x-raw(memory:DMABuf),framerate=60/1;video/x-raw,framerate=60/1 ! {encoder} ! {parse} config-interval=-1 ! {caps},stream-format=byte-stream,alignment=au ! appsink name=encoded sync=false max-buffers=2 drop=false"
+        "pipewiresrc name=source fd={fd} path={node} do-timestamp=true keepalive-time=100 ! queue max-size-buffers=2 leaky=downstream ! videorate name=capture_rate drop-only=true ! video/x-raw(memory:DMABuf),framerate=60/1;video/x-raw,framerate=60/1 ! {encoder} ! {parse} config-interval=-1 ! {caps},stream-format=byte-stream,alignment=au ! appsink name=encoded sync=false max-buffers=2 drop=false"
     ))?
     .downcast::<gst::Pipeline>()
     .map_err(|_| anyhow::anyhow!("Invalid capture pipeline"))?;
@@ -420,7 +431,11 @@ fn stream_codec(
                 }
                 capture_enabled.store(visible, Ordering::Release);
                 playing = visible;
-                let state = if visible { "encoding" } else { "encoding stopped" };
+                let state = if visible {
+                    "encoding"
+                } else {
+                    "encoding stopped"
+                };
                 metrics::event(&monitor.name, state);
                 eprintln!(
                     "Desktop surface {id}: {}",
@@ -465,15 +480,11 @@ fn stream_codec(
                 output.video(id, &map);
                 metrics::emit(&monitor.name, "sent", buffer.offset(), bytes);
             }
-            if let Some(message) = pipeline
-                .bus()
-                .unwrap()
-                .pop_filtered(&[
-                    gst::MessageType::Error,
-                    gst::MessageType::Eos,
-                    gst::MessageType::Warning,
-                ])
-            {
+            if let Some(message) = pipeline.bus().unwrap().pop_filtered(&[
+                gst::MessageType::Error,
+                gst::MessageType::Eos,
+                gst::MessageType::Warning,
+            ]) {
                 if message.type_() != gst::MessageType::Warning {
                     bail!("Desktop capture stopped: {message:?}");
                 }
