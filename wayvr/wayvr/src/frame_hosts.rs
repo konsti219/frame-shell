@@ -44,6 +44,8 @@ pub struct Pc {
     pub available: bool,
     pub compatible: bool,
     pub autoconnect: bool,
+    /// Connected at least once, so it knows this headset
+    pub paired: bool,
     pub manual: bool,
     pub detail: String,
     pub background_pinned: bool,
@@ -296,6 +298,7 @@ pub unsafe fn update(views: *const frame_abi::frame_shell_pc, count: usize, sele
             available: view.available,
             compatible: view.compatible,
             autoconnect: view.autoconnect,
+            paired: view.paired,
             manual: view.manual,
             detail: text(view.detail),
             background_pinned: view.background_pinned,
@@ -309,7 +312,7 @@ pub fn json() -> serde_json::Value {
     let selected = background_source();
     pcs().iter().map(|pc| serde_json::json!({
         "cookie": pc.id, "name": pc.name, "hostname": pc.hostname, "version": pc.version,
-        "visible": pc.available, "compatible": pc.compatible, "autoconnect": pc.autoconnect, "manual": pc.manual,
+        "visible": pc.available, "compatible": pc.compatible, "autoconnect": pc.autoconnect, "paired": pc.paired, "manual": pc.manual,
         "source": pc.source, "state": pc.connection.as_str(), "detail": pc.detail,
         "presenting": pc.source.is_some() && pc.source == selected,
         "background_pinned": pc.background_pinned, "settings": pc.settings,

@@ -25,10 +25,10 @@
           <sprite src_builtin="@/dashboard/close.svg" width="24" height="24" />
           <label text="${disconnect_label}" size="16" />
         </Button>
-        <Button id="btn_auto" padding="8" align_items="center" tooltip_str="Connect to this PC on its own when it appears" tooltip_side="bottom">
+        <Button id="btn_auto" display="${show_auto}" padding="8" align_items="center" tooltip_str="Connect to this PC on its own when it appears" tooltip_side="bottom">
           <label text="${auto_label}" size="16" />
         </Button>
-        <Button id="btn_forget" padding="8" align_items="center" tooltip_str="Forget this PC (hold)" tooltip_side="bottom">
+        <Button id="btn_forget" display="${show_forget}" padding="8" align_items="center" tooltip_str="Forget this PC" tooltip_side="bottom">
           <label text="Forget" size="16" />
         </Button>
       </div>

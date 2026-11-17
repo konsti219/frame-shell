@@ -43,6 +43,8 @@ pub struct Host {
 	pub visible: bool,
 	pub compatible: bool,
 	pub autoconnect: bool,
+	/// Connected at least once: only then can it auto-connect or be forgotten
+	pub paired: bool,
 	/// Added by address rather than discovered: never shows as visible
 	pub manual: bool,
 	pub source: Option<u32>,
@@ -93,6 +95,7 @@ impl WivrnState {
 				visible: flag(server, "visible"),
 				compatible: flag(server, "compatible"),
 				autoconnect: flag(server, "autoconnect"),
+				paired: flag(server, "paired"),
 				manual: flag(server, "manual"),
 				source: server.get("source").and_then(Value::as_u64).map(|s| s as u32),
 				connection: text(server, "state"),
@@ -378,6 +381,8 @@ impl<T> TabWivrn<T> {
 				"Disconnect"
 			},
 		);
+		params.insert("show_auto", if host.paired { "flex" } else { "none" });
+		params.insert("show_forget", if host.paired && !active { "flex" } else { "none" });
 		params.insert(
 			"auto_label",
 			if host.autoconnect {

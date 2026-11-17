@@ -52,7 +52,8 @@ typedef struct frame_shell_pc {
     const char * settings;
     uint32_t source;
     frame_pc_connection connection;
-    bool available, compatible, autoconnect, manual, background_pinned;
+    // paired: connected at least once, so it knows this headset
+    bool available, compatible, autoconnect, manual, background_pinned, paired;
 } frame_shell_pc;
 
 typedef struct frame_runtime_client {

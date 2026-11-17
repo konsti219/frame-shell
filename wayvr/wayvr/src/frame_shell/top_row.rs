@@ -35,6 +35,8 @@ pub fn top_row_hosts() -> Vec<TopRowHost> {
     let background = crate::frame_hosts::background_source();
     crate::frame_hosts::pcs()
         .into_iter()
+        // A PC never connected to is offered on the PC page (to pair), not here
+        .filter(|pc| pc.paired || pc.source.is_some())
         .map(|pc| {
             let presenting = pc.source.is_some() && pc.source == background;
             let mut status = pc.status(presenting);
