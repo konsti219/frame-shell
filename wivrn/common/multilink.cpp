@@ -33,6 +33,10 @@ constexpr size_t max_message = 4 * 1024 * 1024;
 constexpr size_t memory_limit = 16 * 1024 * 1024;
 constexpr size_t max_paths = 32 * 32;
 constexpr size_t receive_window = 4096;
+// Each acknowledgement reports this many recent packets, so a lost or late one is covered by the next
+constexpr size_t ack_window = 1024;
+// A pause this long in arrivals from the peer means its packets, acknowledgements included, were held
+constexpr auto return_gap = std::chrono::milliseconds(8);
 constexpr uint64_t bulk_bit = uint64_t(1) << 63;
 constexpr uint64_t video_bit = uint64_t(1) << 62;
 constexpr uint64_t channel_bits = bulk_bit | video_bit;
@@ -154,14 +158,29 @@ struct multilink::implementation
 		clock::time_point next_send{};
 		clock::time_point next_control{};
 		double finish = 0;
-		double min_rtt = 1e9;
-		double latest_rtt_ms = 0;
-		uint64_t unknown_acks = 0;
 		double ack_age_max_ms = 0;
+		// Arrivals from the peer resumed after a pause at this time: acknowledgements for packets sent
+		// before it may still be held on the way back
+		clock::time_point resumed{};
+		// One-way delay to the peer, offset by the unknown clock difference, and its lowest value of the
+		// last 10 s, from the arrival times the peer reports
+		std::deque<std::pair<clock::time_point, int64_t>> delay_window;
+		double queue_delay_ms = 0;
+		double latest_queue_delay_ms = 0;
+		clock::time_point delay_sampled{};
+		// Delivered rate when the current run of delay cuts began; they do not go below it, so a
+		// lasting step in the base delay costs a tenth of the rate at most
+		uint64_t delay_floor_bps = 0;
+		// Estimate before the last congestion cut: growth slows near it
+		uint64_t congested_bps = 0;
+		double repair_credit = 0;
+		clock::time_point repair_refill = clock::now();
 		// Lowest RTT of the last 10 s, as a congestion baseline that follows lasting route changes
 		std::deque<std::pair<clock::time_point, double>> rtt_window;
 		// Grow quickly until the first congestion signal, like TCP slow start
 		bool slow_start = true;
+		// The last controller interval carried enough traffic to judge the estimate
+		bool loaded = false;
 		clock::time_point sample_start = clock::now();
 		uint64_t acknowledged = 0;
 		uint64_t lost = 0;
@@ -173,7 +192,10 @@ struct multilink::implementation
 		sequence_window received_video;
 		std::vector<fec_packet> fec_out;
 		clock::time_point fec_deadline{};
-		std::vector<uint64_t> acknowledgements;
+		// Acknowledgements still to send, and the newest acknowledged packet with its arrival time
+		uint8_t ack_repeats = 0;
+		uint64_t ack_sample = 0;
+		clock::time_point ack_sample_arrival{};
 	};
 	struct message
 	{
@@ -210,6 +232,8 @@ struct multilink::implementation
 		clock::time_point deadline{};
 		bool reliable = false;
 		bool video = false;
+		// An acknowledgement reported it missing while acknowledging a later packet on its path
+		bool missing = false;
 	};
 
 	mutable std::mutex mutex;
@@ -235,7 +259,19 @@ struct multilink::implementation
 	std::deque<std::pair<std::vector<uint8_t>, size_t>> received;
 	std::map<std::thread::id, size_t> receive_paths;
 	std::map<uint64_t, transmission> transmissions;
+	// Send times by packet number, for delay samples whose transmission an earlier acknowledgement removed
+	struct send_record
+	{
+		uint64_t nonce = 0;
+		size_t path_index = 0;
+		clock::time_point time{};
+	};
+	std::array<send_record, 4096> send_times{};
 	sequence_window replay, delivered;
+	// Data accepted from a validated path or rebuilt from parity: what acknowledgements report
+	sequence_window accepted;
+	// Reported while no path is usable
+	uint64_t last_capacity_bps = 0;
 	uint64_t counter = 0;
 	uint64_t message_id = 0;
 	uint64_t reliable_id = 0;
@@ -442,7 +478,7 @@ struct multilink::implementation
 
 	bool fec_active(const path & p) const
 	{
-		return options.fec_group_size and p.stats.loss > 0.005 and p.stats.loss < 0.1 and p.stats.rtt_ms < p.min_rtt + 5 and p.stats.sent_bps < p.stats.capacity_bps * 0.95;
+		return options.fec_group_size and p.stats.loss > 0.005 and p.stats.loss < 0.1 and p.queue_delay_ms < 5 and p.stats.sent_bps < p.stats.capacity_bps * 0.95;
 	}
 
 	ssize_t send_impaired_wire(const network_impairment::route & destination, std::span<const uint8_t> wire)
@@ -492,8 +528,10 @@ struct multilink::implementation
 		    EVP_EncryptFinal_ex(encrypt.get(), wire.data() + 12 + length, &final) != 1 or
 		    EVP_CIPHER_CTX_ctrl(encrypt.get(), EVP_CTRL_GCM_GET_TAG, 16, wire.data() + wire.size() - 16) != 1)
 			throw std::runtime_error("Multilink encryption failed");
+		// Before sending: a stall in the call can then only raise a delay sample, which the minimum ignores
+		const auto sent_time = clock::now();
 		const auto result = impairment
-		                          ? impairment->send(clock::now(), {index, p.socket_index, sockets[p.socket_index]->identity, fd, p.stats.local, p.peer}, wire,
+		                          ? impairment->send(sent_time, {index, p.socket_index, sockets[p.socket_index]->identity, fd, p.stats.local, p.peer}, wire,
 		                                             [this](const auto & destination, auto bytes) { return send_impaired_wire(destination, bytes); })
 		                          : send_network_packet(fd, p.stats.local, p.peer, wire);
 		if (result < 0)
@@ -508,9 +546,10 @@ struct multilink::implementation
 			aggregate_next_send = std::max(aggregate_next_send, clock::now() - 2ms) + std::chrono::nanoseconds(uint64_t(result * 8e9 / aggregate_limit));
 		if (type == kind::data or type == kind::video or type == kind::reliable or type == kind::bulk or type == kind::reliable_video)
 		{
+			send_times[nonce_counter % send_times.size()] = {nonce_counter, index, sent_time};
 			if (transmissions.size() < 8192)
 			{
-				transmission sent{index, clock::now(), wire.size()};
+				transmission sent{index, sent_time, wire.size()};
 				if (type == kind::reliable or type == kind::bulk or type == kind::reliable_video)
 				{
 					sent.reliable = true;
@@ -694,6 +733,8 @@ struct multilink::implementation
 				continue;
 			auto & p = paths[index];
 			const auto now = clock::now();
+			if (now - p.seen > return_gap)
+				p.resumed = now;
 			p.seen = now;
 			p.stats.received_bytes += length;
 			if (type == kind::ping or type == kind::pong)
@@ -709,11 +750,9 @@ struct multilink::implementation
 				else if (auto probe = p.probes.find(id); probe != p.probes.end() and now >= probe->second)
 				{
 					const double sample = std::chrono::duration<double, std::milli>(now - probe->second).count();
-					p.latest_rtt_ms = sample;
 					p.probes.erase(probe);
 					p.stats.jitter_ms = p.validated ? 0.8 * p.stats.jitter_ms + 0.2 * std::abs(sample - p.stats.rtt_ms) : 0;
 					p.stats.rtt_ms = p.validated ? 0.8 * p.stats.rtt_ms + 0.2 * sample : sample;
-					p.min_rtt = std::min(p.min_rtt, sample);
 					while (not p.rtt_window.empty() and p.rtt_window.back().second >= sample)
 						p.rtt_window.pop_back();
 					p.rtt_window.emplace_back(now, sample);
@@ -741,25 +780,50 @@ struct multilink::implementation
 			}
 			if (type == kind::ack)
 			{
-				while (data.size() >= 8)
+				if (data.size() != 24 + ack_window / 8)
+					continue;
+				const uint64_t highest = read(data, 8);
+				const uint64_t sample = read(data, 8);
+				const auto arrival = int64_t(read(data, 8));
+				if (highest > counter)
+					continue;
+				if (const auto & record = send_times[sample % send_times.size()]; sample and record.nonce == sample and record.time >= paths[record.path_index].created)
+					add_delay_sample(paths[record.path_index], arrival - nanoseconds(record.time), now);
+				const uint64_t lowest = highest - std::min<uint64_t>(highest, ack_window - 1);
+				for (auto it = transmissions.lower_bound(lowest); it != transmissions.end() and it->first <= highest;)
 				{
-					const auto ack = read(data, 8);
-					if (auto it = transmissions.find(ack); it != transmissions.end())
+					const uint64_t bit = highest - it->first;
+					if (not((data[bit / 8] >> (bit % 8)) & 1))
 					{
-						auto & sent_path = paths[it->second.path_index];
-						sent_path.acknowledged += it->second.bytes;
-						if (impairment)
-							sent_path.ack_age_max_ms = std::max(sent_path.ack_age_max_ms, std::chrono::duration<double, std::milli>(now - it->second.time).count());
-						sent_path.latest_acked_send = std::max(sent_path.latest_acked_send, it->second.time);
-						group_acked += it->second.bytes;
-						if (it->second.reliable)
-							if (auto message = reliable.find(it->second.message); message != reliable.end() and it->second.fragment < message->second.acknowledged_fragments.size())
-								message->second.acknowledged_fragments[it->second.fragment] = true;
-						transmissions.erase(it);
+						++it;
+						continue;
 					}
-					else if (impairment)
-						++p.unknown_acks;
+					auto & sent_path = paths[it->second.path_index];
+					// Reordered after it was reported missing
+					if (it->second.missing)
+					{
+						sent_path.lost -= sent_path.lost > 0;
+						group_lost -= group_lost > 0;
+					}
+					sent_path.acknowledged += it->second.bytes;
+					if (impairment)
+						sent_path.ack_age_max_ms = std::max(sent_path.ack_age_max_ms, std::chrono::duration<double, std::milli>(now - it->second.time).count());
+					sent_path.latest_acked_send = std::max(sent_path.latest_acked_send, it->second.time);
+					group_acked += it->second.bytes;
+					if (it->second.reliable)
+						if (auto message = reliable.find(it->second.message); message != reliable.end() and it->second.fragment < message->second.acknowledged_fragments.size())
+							message->second.acknowledged_fragments[it->second.fragment] = true;
+					it = transmissions.erase(it);
 				}
+				// What is left in the reported range had not arrived; allow 1 ms of reordering. Counted
+				// lost now, in the controller interval that caused it.
+				for (auto it = transmissions.lower_bound(lowest); it != transmissions.end() and it->first <= highest; ++it)
+					if (auto & sent_path = paths[it->second.path_index]; not it->second.missing and it->second.time + 1ms < sent_path.latest_acked_send)
+					{
+						it->second.missing = true;
+						++sent_path.lost;
+						++group_lost;
+					}
 			}
 			else if (type == kind::check_delivery)
 			{
@@ -834,7 +898,10 @@ struct multilink::implementation
 			}
 			else if (type == kind::data or type == kind::video or type == kind::reliable or type == kind::bulk or type == kind::reliable_video)
 			{
-				p.acknowledgements.push_back(nonce_counter);
+				accepted.insert(nonce_counter);
+				p.ack_repeats = 3;
+				p.ack_sample = nonce_counter;
+				p.ack_sample_arrival = now;
 				if (type == kind::video or type == kind::reliable_video)
 				{
 					if (data.size() < 8)
@@ -862,6 +929,30 @@ struct multilink::implementation
 	{
 		// Jitter can rank paths, but cannot prove that a fresh packet will be late.
 		return (p.rtt_window.empty() ? p.stats.rtt_ms : p.rtt_window.front().second) / 2;
+	}
+
+	// Queueing towards the peer, unlike the round trip, does not include a held return path.
+	static void add_delay_sample(path & p, int64_t delay_ns, clock::time_point now)
+	{
+		while (not p.delay_window.empty() and p.delay_window.back().second >= delay_ns)
+			p.delay_window.pop_back();
+		p.delay_window.emplace_back(now, delay_ns);
+		while (p.delay_window.front().first < now - 10s)
+			p.delay_window.pop_front();
+		p.latest_queue_delay_ms = (delay_ns - p.delay_window.front().second) / 1e6;
+		p.queue_delay_ms = p.delay_sampled == clock::time_point{} ? p.latest_queue_delay_ms : 0.9 * p.queue_delay_ms + 0.1 * p.latest_queue_delay_ms;
+		p.delay_sampled = now;
+	}
+
+	// Acknowledgements for packets sent since this time would have arrived by now: a path kept
+	// receiving from the peer without a pause, and each acknowledgement covers every path
+	clock::time_point hearing_since(clock::time_point now) const
+	{
+		auto result = clock::time_point::max();
+		for (const auto & p: paths)
+			if (now - p.seen < return_gap)
+				result = std::min(result, p.resumed);
+		return result;
 	}
 
 	// Paths that may carry video: shards sent over a much slower path complete their frame after
@@ -1036,78 +1127,94 @@ struct multilink::implementation
 				p.previous_sent = p.stats.sent_bytes;
 				p.previous_received = p.stats.received_bytes;
 				p.stats.loss = p.sent ? std::min(1.0, double(p.lost) / p.sent) : 0;
-				const double rtt_floor = p.rtt_window.empty() ? p.min_rtt : p.rtt_window.front().second;
 				// A path without traffic gives no evidence; keep its estimate for when it is used again.
-				const bool loaded = p.sent >= 20;
+				const bool loaded = p.loaded = p.sent >= 20;
 				const auto capacity_before = p.stats.capacity_bps;
 				const char * action = "idle";
+				const double queue_delay_ms = now - p.delay_sampled < 200ms ? p.queue_delay_ms : 0;
+				// Loss shows the path is used to its limit: its estimate is no longer only a lower bound
 				if (loaded and p.stats.loss > options.loss_threshold)
+					p.slow_start = false;
+				bool queueing = false;
+				// Loss without queueing comes from the radio, not from sending too much; repairs cover it.
+				if (loaded and p.stats.loss > options.loss_threshold and (queue_delay_ms > 2 or p.stats.loss > 0.1))
 				{
 					action = "loss";
+					p.congested_bps = p.stats.capacity_bps;
 					p.stats.capacity_bps = std::max<uint64_t>(1'000'000, p.stats.capacity_bps * 0.8);
 					p.slow_start = false;
 				}
-				// Rising delay backs off too, but not below what the path delivered: Wi-Fi jitter
+				// A growing queue backs off too, but not below what the path delivered: Wi-Fi jitter
 				// alone must not erase the estimate.
-				else if (loaded and p.stats.rtt_ms > rtt_floor + 5)
+				else if (loaded and queue_delay_ms > 5 and p.latest_queue_delay_ms > 5)
 				{
-					// A fresh healthy probe stops repeated cuts from old RTT samples.
-					const bool recovered = now - p.confirmed <= 200ms and p.latest_rtt_ms <= rtt_floor + 5;
-					action = recovered ? "rtt_hold" : "rtt";
-					if (not recovered)
-						p.stats.capacity_bps = std::min<uint64_t>(p.stats.capacity_bps, std::max({1'000'000.0, p.stats.capacity_bps * 0.8, observed * 0.9}));
+					action = "delay";
+					queueing = true;
+					p.congested_bps = p.stats.capacity_bps;
+					if (not p.delay_floor_bps)
+						p.delay_floor_bps = observed * 0.9;
+					p.stats.capacity_bps = std::min<uint64_t>(p.stats.capacity_bps, std::max({1'000'000.0, p.stats.capacity_bps * 0.8, double(p.delay_floor_bps)}));
 					p.slow_start = false;
 				}
 				else if (observed > p.stats.capacity_bps * 0.7 * (fec_active(p) ? 0.8 : 1.0))
 				{
 					action = "grow";
-					p.stats.capacity_bps = std::min<uint64_t>(1'000'000'000, p.stats.capacity_bps * (p.slow_start ? 1.5 : 1.15));
+					const double growth = p.slow_start ? 1.5 : p.stats.capacity_bps < p.congested_bps * 0.9 ? 1.15 : 1.03;
+					p.stats.capacity_bps = std::min<uint64_t>(1'000'000'000, p.stats.capacity_bps * growth);
 				}
+				if (not queueing)
+					p.delay_floor_bps = 0;
 				if (impairment)
 					impairment->controller_sample(now, i, active(p, now), capacity_before, p.stats.capacity_bps,
-					                              p.sent, p.lost, p.acknowledged, p.unknown_acks, observed,
-					                              p.stats.rtt_ms, p.latest_rtt_ms, std::chrono::duration<double, std::milli>(now - p.confirmed).count(),
-					                              rtt_floor, p.ack_age_max_ms, action);
-				p.unknown_acks = 0;
+					                              p.sent, p.lost, p.acknowledged, observed,
+					                              p.stats.rtt_ms, queue_delay_ms, p.latest_queue_delay_ms, p.ack_age_max_ms, action);
 				p.ack_age_max_ms = 0;
 				p.acknowledged = p.lost = p.sent = 0;
 				p.sample_start = now;
 			}
-			if (now - last_ack >= 2ms and not p.acknowledgements.empty())
+			if (now - last_ack >= 2ms and p.ack_repeats)
 			{
-				while (not p.acknowledgements.empty())
-				{
-					std::vector<uint8_t> bytes;
-					const auto count = std::min<size_t>(p.acknowledgements.size(), fragment_size / 8);
-					for (size_t j = 0; j < count; ++j)
-						append(bytes, p.acknowledgements[j], 8);
-					transmit(i, kind::ack, 0, 0, 0, bytes);
-					p.acknowledgements.erase(p.acknowledgements.begin(), p.acknowledgements.begin() + count);
-				}
+				// The newest packet number and which of the ones before it arrived, from any path
+				std::vector<uint8_t> bytes;
+				append(bytes, accepted.highest, 8);
+				append(bytes, p.ack_sample, 8);
+				append(bytes, nanoseconds(p.ack_sample_arrival), 8);
+				bytes.resize(bytes.size() + ack_window / 8);
+				for (size_t bit = 0; bit < ack_window; ++bit)
+					if (accepted.seen[bit])
+						bytes[24 + bit / 8] |= 1 << (bit % 8);
+				transmit(i, kind::ack, 0, 0, 0, bytes);
+				--p.ack_repeats;
 			}
 		}
 		if (now - last_ack >= 2ms)
 			last_ack = now;
-		// A packet is lost once a later packet on the same path was acknowledged (allowing 1 ms of
-		// reordering), or after the timeout when no later packet arrived.
+		// A packet is lost once an acknowledgement reported it missing, or after a timeout while the
+		// peer's packets kept arriving. While they are held, so are its acknowledgements: the packet
+		// most likely arrived and is neither repaired nor counted lost.
 		std::vector<uint64_t> repairs;
+		const auto heard = hearing_since(now);
 		for (auto & [nonce, sent]: transmissions)
 		{
 			const auto & path = paths[sent.path_index];
-			const bool overtaken = sent.time + 1ms < path.latest_acked_send;
-			if (not overtaken and now - sent.time < std::chrono::duration<double, std::milli>(std::max(20.0, 2 * path.stats.rtt_ms + 10)))
-				continue;
-			if (not sent.payload.empty() and now < sent.deadline)
+			const bool timed_out = sent.time >= heard and now - sent.time >= std::chrono::duration<double, std::milli>(std::max(20.0, 2 * path.stats.rtt_ms + 10));
+			if ((sent.missing or timed_out) and not sent.payload.empty() and now < sent.deadline)
 				repairs.push_back(nonce);
 		}
 		std::erase_if(transmissions, [&](const auto & entry) {
 			const auto & sent = entry.second;
+			auto & path = paths[sent.path_index];
 			// Batched acknowledgements can arrive after a media repair deadline.
-			if (now - sent.time < std::chrono::duration<double, std::milli>(std::max(50.0, 2 * paths[sent.path_index].stats.rtt_ms + 10)))
-				return false;
-			++paths[sent.path_index].lost;
-			++group_lost;
-			return true;
+			const bool expired = now - sent.time >= std::chrono::duration<double, std::milli>(std::max(50.0, 2 * path.stats.rtt_ms + 10));
+			if (sent.missing)
+				return expired;
+			if (sent.time >= heard and expired)
+			{
+				++path.lost;
+				++group_lost;
+				return true;
+			}
+			return now - sent.time >= 1s;
 		});
 		std::erase_if(assemblies, [&](const auto & entry) {
 			if (now - entry.second.created < (entry.first.first ? 2s : 50ms))
@@ -1134,6 +1241,7 @@ struct multilink::implementation
 			const auto fragment = read(data, 2), count = read(data, 2);
 			read(data, 8);
 			++paths[item.path].stats.recovered_fragments;
+			accepted.insert(recovered->sequence);
 			accept_fragment(item.path, kind::video, id, fragment, count, data, now);
 			if (fec_received.size() < 8192)
 			{
@@ -1150,22 +1258,31 @@ struct multilink::implementation
 				continue;
 			// Copy: transmit() records the repair while the original keeps its payload.
 			const transmission repair = entry->second;
-			// Prefer another path; the original path is the fallback.
+			// Prefer another path; the original path is the fallback, unless nothing sent on it since
+			// was acknowledged and another path can take over its traffic.
+			const bool failing = paths[repair.path_index].latest_acked_send < repair.time;
 			const auto & allowed = repair.video ? video_members : candidates;
 			std::vector<size_t> order;
 			for (size_t i: allowed)
 				if (i != repair.path_index and std::ranges::contains(candidates, i))
 					order.push_back(i);
-			if (std::ranges::contains(candidates, repair.path_index))
+			if (std::ranges::contains(candidates, repair.path_index) and not(failing and not order.empty()))
 				order.push_back(repair.path_index);
 			for (size_t i: order)
 			{
 				auto & path = paths[i];
-				if (aggregate_next_send > now or path.next_send > now or now + std::chrono::duration<double, std::milli>(earliest_arrival_delay_ms(path)) >= repair.deadline)
+				// Repairs go before new data but may use only a fifth of the path's rate, except those
+				// carrying a failing path's traffic
+				const bool credited = not failing or i == repair.path_index;
+				path.repair_credit = std::min(64.0 * 1024, path.repair_credit + std::chrono::duration<double>(now - path.repair_refill).count() * path.stats.capacity_bps / 8 * 0.2);
+				path.repair_refill = now;
+				if (aggregate_next_send > now or path.next_send > now or (credited and path.repair_credit < repair.bytes) or now + std::chrono::duration<double, std::milli>(earliest_arrival_delay_ms(path)) >= repair.deadline)
 					continue;
 				if (not transmit(i, repair.video ? kind::video : kind::data, repair.message, repair.fragment, repair.count, repair.payload, repair.deadline))
 					continue;
 				transmissions.at(nonce).payload.clear();
+				if (credited)
+					path.repair_credit -= repair.bytes;
 				++path.stats.repairs_sent;
 				path.next_send = std::max(path.next_send, now - 2ms) + std::chrono::nanoseconds(uint64_t(repair.bytes * 8e9 / path.stats.capacity_bps));
 				path.finish += double(repair.bytes) * 8 / path.stats.capacity_bps;
@@ -1191,7 +1308,11 @@ struct multilink::implementation
 				throw std::runtime_error("Multilink reliable delivery timed out");
 			if (((m.bulk or m.reliable_video) and peer_expected[0] <= m.control_dependency) or (m.id >= peer_expected[channel_index(m.id)] and m.id - peer_expected[channel_index(m.id)] >= 1024))
 				continue;
-			const auto retry_delay = candidates.empty() ? 60ms : std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::duration<double, std::milli>(std::max(10.0, 2 * paths[candidates.front()].stats.rtt_ms + 5)));
+			auto retry_delay = candidates.empty() ? 60ms : std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::duration<double, std::milli>(std::max(10.0, 2 * paths[candidates.front()].stats.rtt_ms + 5)));
+			// Nothing from the peer since the send: acknowledgements held on the way back are no reason
+			// to send everything again soon
+			if (std::ranges::none_of(paths, [&](const path & p) { return p.seen > m.sent; }))
+				retry_delay = std::max<std::chrono::milliseconds>(retry_delay, 100ms);
 			if (m.cursor == 0 and now - m.sent < retry_delay)
 				continue;
 			for (size_t batch = 0; batch < 8; ++batch)
@@ -1469,11 +1590,28 @@ uint64_t multilink::capacity_bps() const
 		return 0;
 	std::lock_guard lock(impl->mutex);
 	uint64_t result = 0;
+	bool any = false, growing = false;
 	for (size_t i: impl->usable(clock::now()))
-		if (std::ranges::contains(impl->video_members, i))
-			result += impl->paths[i].stats.capacity_bps * (impl->fec_active(impl->paths[i]) ? 0.8 : 1.0);
+		if (const auto & p = impl->paths[i]; std::ranges::contains(impl->video_members, i))
+		{
+			any = true;
+			// A path still growing from its initial guess gives only a lower bound while it carries
+			// traffic, and no evidence while it does not
+			if (p.slow_start)
+				growing = growing or p.loaded;
+			else
+				result += p.stats.capacity_bps * (impl->fec_active(p) ? 0.8 : 1.0);
+		}
+	if (not any)
+		return impl->last_capacity_bps;
 	const auto limit = impl->options.aggregate_limit_bps ? impl->options.aggregate_limit_bps : impl->coupled_capacity_bps;
-	return limit ? std::min(result, limit) : result;
+	// A path still growing from its initial guess gives only a lower bound
+	if (growing)
+		result = limit;
+	else if (limit)
+		result = std::min(result, limit);
+	impl->last_capacity_bps = result;
+	return result;
 }
 size_t multilink::send_raw(serialization_packet && packet)
 {

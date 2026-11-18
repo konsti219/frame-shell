@@ -151,7 +151,6 @@ try
 		}
 		require(wait_for([&] { return source.statistics().front().sent_bytes >= before + 6000; }), "Dropped wire bypassed transport sent-byte accounting");
 		require(client.receive_raw().empty(), "All-loss window delivered a data packet");
-		require(wait_for([&] { return source.statistics().front().loss > 0; }), "Artificial loss bypassed normal ACK-loss accounting");
 		require(wait_for([&] { return test_clock::now() >= start + 90ms; }), "Waiting for profile recovery failed");
 		const std::vector<uint8_t> recovered_payload(200, 0x72);
 		serialization_packet packet;
@@ -161,6 +160,8 @@ try
 			auto incoming = client.receive_raw();
 			return not incoming.empty() and incoming.deserialize<std::vector<uint8_t>>() == recovered_payload;
 		}), "Transport failed to recover after an all-loss burst");
+		// The acknowledgement for the recovery reports the burst missing
+		require(wait_for([&] { return source.statistics().front().loss > 0; }), "Artificial loss bypassed normal ACK-loss accounting");
 	}
 	unsetenv("WIVRN_TEST_NETWORK_PROFILE");
 	unsetenv("WIVRN_TEST_NETWORK_LOG");

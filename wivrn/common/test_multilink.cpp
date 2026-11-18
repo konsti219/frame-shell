@@ -166,15 +166,26 @@ int main(int argc, char ** argv)
 		return total;
 	};
 	const auto repairs_before = repairs_over_second();
+	// An acknowledgement reports the loss once a later packet on that path arrives, so small
+	// markers follow each attempt.
+	const std::vector<uint8_t> marker(16, 0x4d);
 	// Path choice depends on timing, so resend until a copy crosses the lossy relay.
 	for (int attempt = 0; attempt < 10 and first.drop_large; ++attempt)
 	{
 		send(client, repaired, false);
+		for (int i = 0; i < 4; ++i)
+		{
+			std::this_thread::sleep_for(2ms);
+			send(client, marker, false);
+		}
 		check(wait_for([&] {
 			auto packet = server.receive_raw();
 			if (packet.empty())
 				return false;
-			check(packet.deserialize<std::vector<uint8_t>>() == repaired);
+			const auto bytes = packet.deserialize<std::vector<uint8_t>>();
+			if (bytes == marker)
+				return false;
+			check(bytes == repaired);
 			return true;
 		}));
 	}
@@ -189,6 +200,9 @@ int main(int argc, char ** argv)
 		return not packet.empty() and packet.deserialize<std::vector<uint8_t>>() == repaired;
 	}));
 	check(first.large_to_client == 0 and second.large_to_client == 1);
+	std::this_thread::sleep_for(50ms);
+	for (auto packet = server.receive_raw(); not packet.empty(); packet = server.receive_raw())
+		check(packet.deserialize<std::vector<uint8_t>>() == marker);
 
 	std::vector<uint8_t> payload(700, 0x35);
 	for (int i = 0; i < 100; ++i)

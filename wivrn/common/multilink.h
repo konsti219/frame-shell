@@ -89,6 +89,9 @@ public:
 	int get_fd() const;
 	std::vector<network_endpoint> endpoints() const;
 	std::vector<link_statistics> statistics() const;
+	// Capacity of the paths carrying video, or the configured limit while a loaded one still grows
+	// from its initial guess, which is only a lower bound; 0 for no estimate. The last value while
+	// no path is usable.
 	uint64_t capacity_bps() const;
 	multilink_diagnostics diagnostics() const;
 	void set_options(multilink_options);

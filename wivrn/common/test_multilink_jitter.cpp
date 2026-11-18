@@ -143,7 +143,9 @@ static void sustained_rtt_inflation_still_reduces_capacity()
 	}));
 	std::this_thread::sleep_for(250ms);
 	const auto baseline = server.statistics().front();
-	const auto capacity_before = baseline.capacity_bps;
+	// Data before the step gives the one-way delay its baseline
+	check(send_markers(server, client, baseline.rtt_ms).received == 200);
+	const auto capacity_before = server.statistics().front().capacity_bps;
 	link.delay_ms = 40;
 	check(wait_for([&] { return server.statistics().front().rtt_ms > baseline.rtt_ms + 30; }, 900ms));
 	const auto result = send_markers(server, client, baseline.rtt_ms);

@@ -5,11 +5,10 @@
 
 namespace wivrn
 {
+// A capacity of 0 is no estimate, which limits nothing
 inline uint32_t adapted_video_bitrate(uint32_t desired, uint32_t current, uint64_t capacity)
 {
-	if (not capacity)
-		return current;
-	const uint32_t target = std::min<uint64_t>(desired, std::max<uint64_t>(1'000'000, capacity * 0.85));
+	const uint32_t target = capacity ? std::min<uint64_t>(desired, std::max<uint64_t>(1'000'000, capacity * 0.85)) : desired;
 	if (target < current * 0.9)
 		return target;
 	if (target > current * 1.1 or (target == desired and target > current))

@@ -236,8 +236,8 @@ public:
 	size_t queued_bytes() const { return queue_bytes; }
 	size_t charged_queue_bytes() const { return queue_cost; }
 	void controller_sample(time_point now, size_t path, bool active, uint64_t before, uint64_t after,
-	                       uint64_t sent, uint64_t lost, uint64_t acknowledged, uint64_t unknown_acks,
-	                       double observed, double rtt, double latest_rtt, double rtt_age_ms, double floor,
+	                       uint64_t sent, uint64_t lost, uint64_t acknowledged, double observed,
+	                       double rtt, double queue_delay, double latest_queue_delay,
 	                       double ack_age_max_ms, const char * action)
 	{
 		ensure_log();
@@ -246,9 +246,9 @@ public:
 		log << "{\"event\":\"controller\",\"now_ns\":" << ns(now) << ",\"path\":" << path
 		    << ",\"active\":" << active << ",\"capacity_before\":" << before << ",\"capacity_after\":" << after
 		    << ",\"sent\":" << sent << ",\"lost\":" << lost << ",\"acknowledged_bytes\":" << acknowledged
-		    << ",\"unknown_acks\":" << unknown_acks << ",\"observed_bps\":" << observed
-		    << ",\"rtt_ms\":" << rtt << ",\"latest_rtt_ms\":" << latest_rtt << ",\"rtt_age_ms\":" << rtt_age_ms
-		    << ",\"rtt_floor_ms\":" << floor << ",\"ack_age_max_ms\":" << ack_age_max_ms
+		    << ",\"observed_bps\":" << observed << ",\"rtt_ms\":" << rtt
+		    << ",\"queue_delay_ms\":" << queue_delay << ",\"latest_queue_delay_ms\":" << latest_queue_delay
+		    << ",\"ack_age_max_ms\":" << ack_age_max_ms
 		    << ",\"action\":\"" << action << "\"}\n";
 		log.flush();
 	}
