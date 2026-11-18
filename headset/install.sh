@@ -37,12 +37,14 @@ integrate() {
     systemctl --user daemon-reload
     systemctl --user enable --quiet frame-shell.service
 
-    # The session entry SDDM and steamos-manager start Monado from; /etc survives SteamOS updates
+    # The session entry SDDM and steamos-manager start Monado from; SteamOS updates keep only the listed /etc paths
     if ! cmp -s "$prefix/session/monado.desktop" /etc/frame-monado/wayland-sessions/monado.desktop ||
-        ! cmp -s "$prefix/session/zz-frame-monado-sddm.conf" /etc/sddm.conf.d/zz-frame-monado.conf; then
+        ! cmp -s "$prefix/session/zz-frame-monado-sddm.conf" /etc/sddm.conf.d/zz-frame-monado.conf ||
+        ! cmp -s "$prefix/session/frame-monado-keep.conf" /etc/atomic-update.conf.d/frame-monado.conf; then
         echo "Installing the Monado session entry in /etc (sudo):"
         sudo install -Dm644 "$prefix/session/monado.desktop" /etc/frame-monado/wayland-sessions/monado.desktop
         sudo install -Dm644 "$prefix/session/zz-frame-monado-sddm.conf" /etc/sddm.conf.d/zz-frame-monado.conf
+        sudo install -Dm644 "$prefix/session/frame-monado-keep.conf" /etc/atomic-update.conf.d/frame-monado.conf
     fi
     if "$manager_changed"; then systemctl --user restart steamos-manager.service; fi
     local session
@@ -65,9 +67,10 @@ unintegrate() {
     if [ "$(steamosctl get-default-desktop-session)" = monado.desktop ]; then
         steamosctl set-default-desktop-session "$(cat "$prefix/previous-desktop-session" 2>/dev/null || echo plasma.desktop)"
     fi
-    if [ -e /etc/frame-monado ] || [ -e /etc/sddm.conf.d/zz-frame-monado.conf ]; then
+    if [ -e /etc/frame-monado ] || [ -e /etc/sddm.conf.d/zz-frame-monado.conf ] ||
+        [ -e /etc/atomic-update.conf.d/frame-monado.conf ]; then
         echo "Removing the Monado session entry from /etc (sudo):"
-        sudo rm -rf /etc/frame-monado /etc/sddm.conf.d/zz-frame-monado.conf
+        sudo rm -rf /etc/frame-monado /etc/sddm.conf.d/zz-frame-monado.conf /etc/atomic-update.conf.d/frame-monado.conf
     fi
 }
 
