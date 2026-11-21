@@ -600,6 +600,16 @@ void decoder::setup_capture_queue()
 	v4l2_format fmt{};
 	fmt.type = capture_type;
 	ioctl_or_throw(fd.get_fd(), VIDIOC_G_FMT, &fmt, "VIDIOC_G_FMT(CAPTURE)");
+	// The SteamOS 0.5.10 kernel defaults 10-bit streams to UBWC Q10C: ask for the linear format instead
+	if (vk_format_for_capture(fmt.fmt.pix_mp.pixelformat) == vk::Format::eUndefined)
+	{
+		uint32_t compressed = fmt.fmt.pix_mp.pixelformat;
+		fmt.fmt.pix_mp.pixelformat = compressed == v4l2_fourcc('Q', '1', '0', 'C') ? V4L2_PIX_FMT_P010 : V4L2_PIX_FMT_NV12;
+		ioctl_or_throw(fd.get_fd(), VIDIOC_S_FMT, &fmt, "VIDIOC_S_FMT(CAPTURE)");
+		spdlog::info("V4L2 iris CAPTURE default {:.4}, requested {}",
+		             reinterpret_cast<const char *>(&compressed),
+		             capture_format_name(fmt.fmt.pix_mp.pixelformat));
+	}
 
 	capture_width = fmt.fmt.pix_mp.width;
 	capture_height = fmt.fmt.pix_mp.height;
