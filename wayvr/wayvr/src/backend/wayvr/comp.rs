@@ -6,10 +6,12 @@ use smithay::desktop::{
     PopupKeyboardGrab, PopupKind, PopupManager, PopupPointerGrab, PopupUngrabStrategy,
     find_popup_root_surface, get_popup_toplevel_coords,
 };
+use smithay::input::pointer::PointerHandle;
 use smithay::input::pointer::{CursorImageStatus, Focus};
 use smithay::input::{Seat, SeatHandler, SeatState};
 use smithay::output::Output;
 use smithay::reexports::rustix::fs::{OFlags, fcntl_setfl};
+use smithay::reexports::wayland_protocols::wp::presentation_time::server::wp_presentation_feedback;
 use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1;
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
 use smithay::reexports::wayland_protocols_misc::server_decoration::server::org_kde_kwin_server_decoration;
@@ -19,7 +21,7 @@ use smithay::reexports::wayland_server::protocol::{
     wl_buffer, wl_callback, wl_data_source, wl_output, wl_seat,
 };
 use smithay::reexports::wayland_server::{self, DisplayHandle};
-use smithay::utils::{Logical, Rectangle, Serial, Size};
+use smithay::utils::{Logical, Point, Rectangle, Serial, Size};
 use smithay::wayland::buffer::BufferHandler;
 use smithay::wayland::compositor::{self, BufferAssignment, SurfaceAttributes, send_surface_state};
 use smithay::wayland::dmabuf::{
@@ -27,6 +29,10 @@ use smithay::wayland::dmabuf::{
 };
 use smithay::wayland::fractional_scale::with_fractional_scale;
 use smithay::wayland::output::OutputHandler;
+use smithay::wayland::pointer_constraints::{PointerConstraintsHandler, PointerConstraintsState};
+use smithay::wayland::presentation::{
+    PresentationFeedbackCachedState, PresentationFeedbackCallback, PresentationState, Refresh,
+};
 use smithay::wayland::relative_pointer::RelativePointerManagerState;
 use smithay::wayland::selection::data_device::{
     ClientDndGrabHandler, DataDeviceHandler, DataDeviceState, ServerDndGrabHandler,
@@ -49,14 +55,16 @@ use smithay::wayland::viewporter::ViewporterState;
 use smithay::{
     delegate_compositor, delegate_data_control, delegate_data_device, delegate_dmabuf,
     delegate_ext_data_control, delegate_kde_decoration, delegate_output,
-    delegate_primary_selection, delegate_relative_pointer, delegate_seat, delegate_shm,
-    delegate_single_pixel_buffer, delegate_viewporter, delegate_xdg_decoration, delegate_xdg_shell,
+    delegate_pointer_constraints, delegate_presentation, delegate_primary_selection,
+    delegate_relative_pointer, delegate_seat, delegate_shm, delegate_single_pixel_buffer,
+    delegate_viewporter, delegate_xdg_decoration, delegate_xdg_shell,
 };
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::Write;
 use std::os::fd::OwnedFd;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use wayland_server::Client;
 use wayland_server::backend::{ClientData, ClientId, DisconnectReason};
 use wayland_server::protocol::wl_surface::WlSurface;
@@ -90,10 +98,14 @@ pub struct Application {
     pub popup_manager: PopupManager,
     #[allow(dead_code)]
     pub viewporter: ViewporterState,
+    pub single_pixel_buffer: smithay::wayland::single_pixel_buffer::SinglePixelBufferState,
+    pub presentation: PresentationState,
+    pub pointer_constraints: PointerConstraintsState,
     pub display_handle: DisplayHandle,
     pub redraw_requests: HashSet<ObjectId>,
     pub(super) no_server_decorations: HashSet<ObjectId>,
     pub pending_frame_callbacks: HashMap<ObjectId, Vec<wl_callback::WlCallback>>,
+    pub pending_presentation: HashMap<ObjectId, Vec<PresentationFeedbackCallback>>,
     pub cursor_image: CursorImageStatus,
     /// pointer that last drove the wvr_server mouse. used for DND
     pub vr_pointer: usize,
@@ -166,6 +178,24 @@ impl Application {
         let t = time::get_millis() as u32;
         for cb in callbacks {
             cb.done(t);
+        }
+        // Presented together with the frame callbacks: when WayVR has drawn the surface
+        if let Some(feedback) = self.pending_presentation.remove(surface_id) {
+            let mut now = libc::timespec {
+                tv_sec: 0,
+                tv_nsec: 0,
+            };
+            unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut now) };
+            let now = Duration::new(now.tv_sec as u64, now.tv_nsec as u32);
+            for f in feedback {
+                f.presented(
+                    &self.output,
+                    now,
+                    Refresh::Unknown,
+                    0,
+                    wp_presentation_feedback::Kind::empty(),
+                );
+            }
         }
     }
 
@@ -355,6 +385,23 @@ impl compositor::CompositorHandler for Application {
             }
         });
 
+        let feedback = smithay::wayland::compositor::with_states(surface, |states| {
+            std::mem::take(
+                &mut states
+                    .cached_state
+                    .get::<PresentationFeedbackCachedState>()
+                    .current()
+                    .callbacks,
+            )
+        });
+        if !feedback.is_empty() {
+            let pending = self.pending_presentation.entry(surface.id()).or_default();
+            for old in pending.drain(..) {
+                old.discarded();
+            }
+            pending.extend(feedback);
+        }
+
         // validate wp_viewport against currently attached backing buffer
         smithay::wayland::compositor::with_states(surface, |states| {
             if let Some(buf) = SurfaceBufWithImage::get_from_surface(states) {
@@ -390,6 +437,18 @@ impl SeatHandler for Application {
 
     fn cursor_image(&mut self, _seat: &Seat<Self>, image: CursorImageStatus) {
         self.cursor_image = image;
+    }
+}
+
+// Nested KWin requires the global; constraints are never activated
+impl PointerConstraintsHandler for Application {
+    fn new_constraint(&mut self, _surface: &WlSurface, _pointer: &PointerHandle<Self>) {}
+    fn cursor_position_hint(
+        &mut self,
+        _surface: &WlSurface,
+        _pointer: &PointerHandle<Self>,
+        _location: Point<f64, Logical>,
+    ) {
     }
 }
 
@@ -777,6 +836,8 @@ delegate_ext_data_control!(Application);
 delegate_xdg_decoration!(Application);
 delegate_kde_decoration!(Application);
 delegate_single_pixel_buffer!(Application);
+delegate_presentation!(Application);
+delegate_pointer_constraints!(Application);
 delegate_relative_pointer!(Application);
 
 const fn wl_transform_to_frame_transform(

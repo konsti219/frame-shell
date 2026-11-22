@@ -29,6 +29,8 @@ use smithay::{
     wayland::{
         compositor::{self, SurfaceData, with_states},
         dmabuf::{DmabufFeedbackBuilder, DmabufState},
+        pointer_constraints::PointerConstraintsState,
+        presentation::PresentationState,
         relative_pointer::RelativePointerManagerState,
         selection::{
             data_device::DataDeviceState, ext_data_control as selection_ext,
@@ -42,6 +44,7 @@ use smithay::{
             },
         },
         shm::ShmState,
+        single_pixel_buffer::SinglePixelBufferState,
         viewporter::ViewporterState,
     },
 };
@@ -214,6 +217,10 @@ impl WvrServerState {
             KdeDecorationState::new::<Application>(&dh, kde_decoration::Mode::Server);
         let relative_pointer_state = RelativePointerManagerState::new::<Application>(&dh);
         let viewporter = ViewporterState::new::<Application>(&dh);
+        // Nested KWin 6.6 (the headset's Desktop app) exits without it
+        let single_pixel_buffer = SinglePixelBufferState::new::<Application>(&dh);
+        let presentation = PresentationState::new::<Application>(&dh, libc::CLOCK_MONOTONIC as u32);
+        let pointer_constraints = PointerConstraintsState::new::<Application>(&dh);
 
         let dummy_milli_hz = 60000; /* refresh rate in millihertz */
 
@@ -297,9 +304,13 @@ impl WvrServerState {
             dmabuf_state,
             popup_manager: PopupManager::default(),
             viewporter,
+            single_pixel_buffer,
+            presentation,
+            pointer_constraints,
             redraw_requests: HashSet::new(),
             no_server_decorations: HashSet::new(),
             pending_frame_callbacks: HashMap::new(),
+            pending_presentation: HashMap::new(),
             cursor_image: CursorImageStatus::default_named(),
             vr_pointer: 0,
             pointer_button_owner: None,
