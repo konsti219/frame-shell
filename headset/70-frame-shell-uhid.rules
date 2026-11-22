@@ -1,0 +1,3 @@
+# Frame shell gamepad mode: lets the input group (the headset user is in it, as for /dev/uinput) create the
+# virtual DualSense on /dev/uhid
+KERNEL=="uhid", SUBSYSTEM=="misc", GROUP="input", MODE="0660"

@@ -182,7 +182,8 @@ bundle:
     install -m755 -t "$bundle/lib" "$stage/"*.so*
     cp -a "$stage/xrizer" "$bundle/lib/"
     install -m644 -t "$bundle" "$stage/"*.pte
-    install -m644 -t "$bundle/share" "{{root}}/headset/frame-shell.desktop" "{{root}}/headset/frame-shell.service"
+    install -m644 -t "$bundle/share" "{{root}}/headset/frame-shell.desktop" "{{root}}/headset/frame-shell.service" \
+        "{{root}}/headset/70-frame-shell-uhid.rules" "{{root}}/headset/frame-shell-keep.conf"
     install -m644 "{{root}}/wayvr/dash-frontend/assets/dashboard/frame_shell_logo.png" "$bundle/share/frame-shell.png"
     # The client's assets, which it finds next to its binary (bin/../share/wivrn)
     cp -a "{{headset_build}}/client/client/share/wivrn" "$bundle/share/"
