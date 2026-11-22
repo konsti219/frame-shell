@@ -25,6 +25,10 @@ const DEVICE_NAME: &str = "DualSense Wireless Controller";
 const STANDARD_GRAVITY: f32 = 9.806_65;
 /// Stick clicks drop out for a moment when the stick tilts while pressed; shorter gaps don't end the hold
 const HOLD_GRACE: Duration = Duration::from_millis(150);
+/// Steam gives a controller that appears while a game has focus the desktop layout until focus changes, so after
+/// switching on, keyboard focus is taken away once Steam has the device and given back shortly after
+const FOCUS_BOUNCE_AFTER: Duration = Duration::from_millis(1000);
+const FOCUS_BOUNCE_GAP: Duration = Duration::from_millis(200);
 const LEFT: usize = 0;
 const RIGHT: usize = 1;
 
@@ -156,6 +160,8 @@ pub(super) struct GamepadMode {
     hold_handled: bool,
     /// Short buzz on both controllers when the mode switches
     pending_buzz: bool,
+    /// When to take keyboard focus away (`false`) or give it back (`true`)
+    focus_bounce: Option<(Instant, bool)>,
     /// The stick clicks that switched the mode on stay out of the game until released
     hide_stick_clicks: bool,
     last_velocity: Option<(Vec3, i64)>,
@@ -175,6 +181,7 @@ impl GamepadMode {
             hold_seen: None,
             hold_handled: false,
             pending_buzz: false,
+            focus_bounce: None,
             hide_stick_clicks: false,
             last_velocity: None,
             linear_accel: Vec3::ZERO,
@@ -237,6 +244,15 @@ impl GamepadMode {
             self.hide_stick_clicks = false;
         }
 
+        if let Some((due, restore)) = self.focus_bounce
+            && now >= due
+        {
+            if let Some(server) = app.wvr_server.as_mut() {
+                server.bounce_keyboard_focus(restore);
+            }
+            self.focus_bounce = (!restore).then(|| (now + FOCUS_BOUNCE_GAP, true));
+        }
+
         if self.device.is_some() {
             let state = self.read_state(xr, app, clicks)?;
             if let Some(device) = &mut self.device
@@ -250,6 +266,12 @@ impl GamepadMode {
 
     fn toggle(&mut self, app: &mut AppState) {
         if self.device.take().is_some() {
+            // Give focus back if a bounce is half done
+            if matches!(self.focus_bounce.take(), Some((_, true)))
+                && let Some(server) = app.wvr_server.as_mut()
+            {
+                server.bounce_keyboard_focus(true);
+            }
             log::info!("Gamepad mode off");
             self.show(
                 app,
@@ -262,6 +284,7 @@ impl GamepadMode {
             Ok(device) => {
                 log::info!("Gamepad mode on: virtual DualSense created");
                 self.device = Some(device);
+                self.focus_bounce = Some((Instant::now() + FOCUS_BOUNCE_AFTER, false));
                 self.hide_stick_clicks = true;
                 self.last_velocity = None;
                 self.linear_accel = Vec3::ZERO;
