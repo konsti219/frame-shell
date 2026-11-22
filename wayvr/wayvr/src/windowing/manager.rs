@@ -400,7 +400,7 @@ where
             OverlayTask::CleanupOverlays(category) => {
                 let mut ids_to_remove = vec![];
                 for (oid, o) in &self.overlays {
-                    if o.config.category == category {
+                    if o.config.category != category {
                         continue;
                     }
                     if o.config.active_state.is_some() {
@@ -928,6 +928,13 @@ impl<T> OverlayWindowManager<T> {
             OverlaySelector::Name(name) => self.lookup(name)?,
             _ => return None,
         };
+
+        // An overlay removed while edit mode wraps it would otherwise leak its backend and the edit panel
+        if let Some(o) = self.overlays.get_mut(id)
+            && let Err(e) = self.wrappers.unwrap_edit_mode(&mut o.config, app)
+        {
+            log::error!("Could not leave edit mode on a removed overlay: {e:?}");
+        }
 
         let ret_val = self.overlays.remove(id);
         let internal = ret_val.as_ref().is_some_and(|o| {

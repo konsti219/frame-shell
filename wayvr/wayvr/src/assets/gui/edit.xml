@@ -10,7 +10,7 @@
   </template>
 
   <template name="TopButtonDanger">
-    <Button macro="button_style" tooltip="${tooltip}" _release="${release}" border_color="danger(rgb-mult-0.5)" color="danger" hover_color="danger(rgb-add-0.2)" hover_border_color="danger">
+    <Button macro="button_style" tooltip="${tooltip}" _long_release="${release}" border_color="danger(rgb-mult-0.5)" color="danger" hover_color="danger(rgb-add-0.2)" hover_border_color="danger">
       <sprite width="48" height="48" src="${src}" />
     </Button>
   </template>

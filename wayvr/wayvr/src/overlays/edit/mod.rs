@@ -41,7 +41,7 @@ use crate::{
     windowing::{
         OverlayID, OverlaySelector,
         backend::{DummyBackend, OverlayBackend, OverlayEventData, RenderResources, ShouldRender},
-        window::OverlayWindowConfig,
+        window::{OverlayCategory, OverlayWindowConfig},
     },
 };
 
@@ -489,10 +489,22 @@ fn make_edit_panel(app: &mut AppState) -> anyhow::Result<EditModeWrapPanel> {
                             return Ok(EventResult::Pass);
                         }
 
+                        let id = *state.id.borrow();
                         app.tasks.enqueue(TaskType::Overlay(OverlayTask::Modify(
-                            OverlaySelector::Id(*state.id.borrow()),
-                            Box::new(move |_app, owc| {
-                                owc.active_state = None;
+                            OverlaySelector::Id(id),
+                            Box::new(move |app, owc| {
+                                // Cutouts and mirrors are global (in every set), so removing them from
+                                // the current set can't work: delete them instead
+                                if matches!(
+                                    owc.category,
+                                    OverlayCategory::Passthru | OverlayCategory::Mirror
+                                ) {
+                                    app.tasks.enqueue(TaskType::Overlay(OverlayTask::Drop(
+                                        OverlaySelector::Id(id),
+                                    )));
+                                } else {
+                                    owc.active_state = None;
+                                }
                             }),
                         )));
                         Ok(EventResult::Consumed)
