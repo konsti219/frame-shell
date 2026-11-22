@@ -10,6 +10,7 @@ use xkbcommon::xkb;
 #[cfg(feature = "wayland")]
 pub mod wayland;
 
+pub mod ds5;
 pub mod provider;
 #[cfg(feature = "x11")]
 mod x11;

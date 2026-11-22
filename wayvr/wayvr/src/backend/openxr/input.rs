@@ -23,7 +23,11 @@ use crate::{
     state::{AppSession, AppState},
 };
 
-use super::{XrState, helpers::posef_to_transform};
+use super::{
+    XrState,
+    gamepad::{FRAME_PROFILE, GamepadActions, GamepadMode},
+    helpers::posef_to_transform,
+};
 
 static CLICK_TIMES: [Duration; 3] = [
     Duration::ZERO,
@@ -37,6 +41,7 @@ pub(super) struct OpenXrInputSource {
     profiles: Vec<OpenXrInputProfile>,
     pointers: [OpenXrPointer; 2],
     handsfree_pointer: OpenXrPointer,
+    gamepad: GamepadMode,
 }
 
 pub(super) struct OpenXrPointer {
@@ -290,6 +295,8 @@ impl OpenXrInputSource {
         let (physical_inputs, physical_input_map) =
             create_physical_inputs(&action_set, &xr.instance, &profiles)?;
 
+        let gamepad_actions = GamepadActions::new(&action_set, &xr.instance)?;
+
         let mut hands: [&mut OpenXrHandSource; 3] =
             [&mut left_source, &mut right_source, &mut fallback_source];
         suggest_bindings(
@@ -298,6 +305,7 @@ impl OpenXrInputSource {
             &profiles,
             &physical_inputs,
             &physical_input_map,
+            &gamepad_actions,
         );
 
         xr.session.attach_action_sets(&[&action_set])?;
@@ -311,6 +319,7 @@ impl OpenXrInputSource {
                 OpenXrPointer::new(xr, right_source)?,
             ],
             handsfree_pointer: OpenXrPointer::new(xr, fallback_source)?,
+            gamepad: GamepadMode::new(gamepad_actions),
         })
     }
 
@@ -427,6 +436,10 @@ impl OpenXrInputSource {
         }
         let physical_inputs = &self.physical_inputs;
 
+        if let Err(error) = self.gamepad.update(xr, app) {
+            log::warn!("Gamepad mode: {error:#}");
+        }
+
         app.input_state.eye_gaze = if xr.extra_exts.ext_eye_gaze_interaction {
             self.handsfree_pointer.locate_tracked_pose(xr)?
         } else {
@@ -470,6 +483,13 @@ impl OpenXrInputSource {
                     physical_inputs,
                 )?;
                 any_tracked |= pointer.tracked;
+                if self.gamepad.active() {
+                    GamepadMode::mask_pointer(&mut pointer.now);
+                    // No line and no hovering (which would move the mouse over the game) unless a grip is held
+                    if !pointer.now.grab && pointer.interaction.grabbed.is_none() {
+                        pointer.tracked = false;
+                    }
+                }
             }
         } else {
             app.session.config.handsfree_pointer = app.session.config.handsfree_alt_tab.into();
@@ -500,6 +520,24 @@ impl OpenXrInputSource {
         }
 
         app.session.config.handsfree_pointer = old_handsfree;
+
+        if let Some(rumble) = self.gamepad.rumble(app) {
+            for (hand, intensity) in [(0, rumble.left), (1, rumble.right)] {
+                let action = &self.pointers[hand].source.haptics;
+                if intensity > 0.0 {
+                    let _ = action.apply_feedback(
+                        &xr.session,
+                        xr::Path::NULL,
+                        &xr::HapticVibration::new()
+                            .amplitude(intensity)
+                            .frequency(xr::FREQUENCY_UNSPECIFIED)
+                            .duration(xr::Duration::from_nanos(100_000_000)),
+                    );
+                } else {
+                    let _ = action.stop_feedback(&xr.session, xr::Path::NULL);
+                }
+            }
+        }
 
         Ok(())
     }
@@ -1105,6 +1143,7 @@ fn suggest_bindings(
     profiles: &[OpenXrInputProfile],
     physical_inputs: &[PhysicalInput],
     physical_input_map: &PhysicalInputMap,
+    gamepad: &GamepadActions,
 ) {
     for (profile_index, profile) in profiles.iter().enumerate() {
         log::debug!("Loading profile {}", profile.profile);
@@ -1240,6 +1279,16 @@ fn suggest_bindings(
                     bindings.push(xr::Binding::new(action, input.path));
                 }
             }
+        }
+
+        // Gamepad mode's actions share the Frame profile's suggestion (a later one would replace it)
+        if profile.profile == FRAME_PROFILE {
+            let gamepad_bindings = gamepad.bindings(instance);
+            log::debug!(
+                "Gamepad mode: {} bindings for the Frame controller",
+                gamepad_bindings.len()
+            );
+            bindings.extend(gamepad_bindings);
         }
 
         let profile_name = profile
