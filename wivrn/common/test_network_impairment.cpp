@@ -32,7 +32,8 @@ static auto make_profile(const std::filesystem::path & folder, std::string_view 
 {
 	const auto file = folder / name;
 	std::ofstream out(file);
-	out << start << '\n' << rows;
+	out << start << '\n'
+	    << rows;
 	out.close();
 	require(bool(out), "Writing test profile failed");
 	return file;
@@ -66,9 +67,10 @@ try
 		link.pump(start + 24ms, transmit);
 		require(receive() < 0, "Timing gate: packet escaped before 25ms");
 		require(wait_for([&] {
-			link.pump(test_clock::now(), transmit);
-			return link.queued_bytes() == 0;
-		}), "Delayed packet never released");
+			        link.pump(test_clock::now(), transmit);
+			        return link.queued_bytes() == 0;
+		        }),
+		        "Delayed packet never released");
 		std::array<uint8_t, 4> received{};
 		require(recv(receiver, received.data(), received.size(), MSG_DONTWAIT) == 4 and received[0] == 1, "Queue did not own the original ciphertext");
 		require(test_clock::now() - start >= 25ms, "Timing gate: no real delay measured");
@@ -125,8 +127,14 @@ try
 		const auto file = make_profile(folder, "invalid.csv", base.time_since_epoch().count(), row);
 		setenv("WIVRN_TEST_NETWORK_PROFILE", file.c_str(), 1);
 		bool rejected = false;
-		try { auto link = network_impairment::from_environment(); }
-		catch (const std::exception &) { rejected = true; }
+		try
+		{
+			auto link = network_impairment::from_environment();
+		}
+		catch (const std::exception &)
+		{
+			rejected = true;
+		}
 		require(rejected, "Malformed requested profile was accepted");
 	}
 	{
@@ -157,9 +165,10 @@ try
 		packet.serialize(recovered_payload);
 		source.send_reliable_raw(std::move(packet));
 		require(wait_for([&] {
-			auto incoming = client.receive_raw();
-			return not incoming.empty() and incoming.deserialize<std::vector<uint8_t>>() == recovered_payload;
-		}), "Transport failed to recover after an all-loss burst");
+			        auto incoming = client.receive_raw();
+			        return not incoming.empty() and incoming.deserialize<std::vector<uint8_t>>() == recovered_payload;
+		        }),
+		        "Transport failed to recover after an all-loss burst");
 		// The acknowledgement for the recovery reports the burst missing
 		require(wait_for([&] { return source.statistics().front().loss > 0; }), "Artificial loss bypassed normal ACK-loss accounting");
 	}

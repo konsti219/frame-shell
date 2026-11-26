@@ -68,7 +68,7 @@ static marker_observation send_markers(multilink & server, multilink & client, d
 			received[id] = true;
 			++result.received;
 			result.max_latency_ms = std::max(result.max_latency_ms,
-			        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - sent_at[id]).count());
+			                                 std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - sent_at[id]).count());
 		}
 		const auto stats = server.statistics();
 		if (not stats.empty())
@@ -124,7 +124,8 @@ static void stale_rtt_recovery_keeps_capacity_and_delivery()
 
 	const auto result = send_markers(server, client, baseline.rtt_ms);
 	std::cout << "Stale-RTT recovery: delivered " << result.received << "/200, max " << result.max_latency_ms
-	          << " ms, min capacity " << result.min_capacity_bps / 1e6 << " Mbit/s\n" << std::flush;
+	          << " ms, min capacity " << result.min_capacity_bps / 1e6 << " Mbit/s\n"
+	          << std::flush;
 	check(result.received == 200);
 	check(result.max_latency_ms < 50);
 	check(result.saw_stale_high_rtt);
@@ -152,7 +153,8 @@ static void sustained_rtt_inflation_still_reduces_capacity()
 	std::this_thread::sleep_for(200ms); // allow the last delayed ACKs into a controller sample
 	const auto after = server.statistics().front();
 	std::cout << "Sustained-RTT control: delivered " << result.received << "/200, capacity "
-	          << capacity_before / 1e6 << " -> " << after.capacity_bps / 1e6 << " Mbit/s\n" << std::flush;
+	          << capacity_before / 1e6 << " -> " << after.capacity_bps / 1e6 << " Mbit/s\n"
+	          << std::flush;
 	check(result.received == 200);
 	check(result.max_latency_ms < 100);
 	check(after.capacity_bps <= capacity_before * 90 / 100);

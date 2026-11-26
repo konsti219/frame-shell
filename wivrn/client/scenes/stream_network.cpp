@@ -40,9 +40,9 @@
 #include <netinet/in.h>
 #include <random>
 #include <spdlog/spdlog.h>
-#include <utility>
 #include <system_error>
 #include <uni_algo/case.h>
+#include <utility>
 
 #ifndef __ANDROID__
 // The interface of the local address a connected socket uses, empty if unknown

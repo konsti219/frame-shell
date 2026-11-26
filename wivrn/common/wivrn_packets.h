@@ -33,10 +33,10 @@
 #include <vector>
 #include <openxr/openxr.h>
 
-#include "wivrn_foveation.h"
 #include "network.h"
 #include "packed_quaternion.h"
 #include "smp.h"
+#include "wivrn_foveation.h"
 #include "wivrn_serialization_types.h"
 
 namespace wivrn

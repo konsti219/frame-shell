@@ -363,10 +363,7 @@ void video_queue_dropped(const video_queue_drop & drop, uint32_t stream, uint32_
 			break;
 	}
 	const auto ns = [](auto time) { return std::chrono::duration_cast<std::chrono::nanoseconds>(time.time_since_epoch()).count(); };
-	TRACE_EVENT_INSTANT("wivrn_network", perfetto::DynamicString(name), g_feedback_track, static_cast<uint64_t>(ns(drop.dropped_at)),
-	                    "frame", frame, "stream", stream, "generation", generation, "shard", shard,
-	                    "enqueued_ns", ns(drop.enqueued_at), "deadline_ns", ns(drop.deadline), "target_deadline_ns", ns(drop.target_deadline),
-	                    "fragment_cursor", drop.fragment_cursor, "queued_bytes", drop.queued_bytes);
+	TRACE_EVENT_INSTANT("wivrn_network", perfetto::DynamicString(name), g_feedback_track, static_cast<uint64_t>(ns(drop.dropped_at)), "frame", frame, "stream", stream, "generation", generation, "shard", shard, "enqueued_ns", ns(drop.enqueued_at), "deadline_ns", ns(drop.deadline), "target_deadline_ns", ns(drop.target_deadline), "fragment_cursor", drop.fragment_cursor, "queued_bytes", drop.queued_bytes);
 }
 
 void gpu_slice(gpu_track, const char * slice_name, int64_t begin_ns, int64_t end_ns, uint64_t frame, uint8_t stream)
