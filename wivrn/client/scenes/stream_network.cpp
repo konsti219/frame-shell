@@ -549,7 +549,7 @@ void scenes::stream::poll_shell()
 		}
 		if (request)
 		{
-			// A new mode starts from every link; "dongle" pins once the dongle is seen
+			// A new mode starts from every link; "preferred" pins once the preferred link is seen
 			shell_link_mode = *request;
 			shell_link_pinned.clear();
 			shell_link_lost = {};
@@ -557,18 +557,18 @@ void scenes::stream::poll_shell()
 			network_session->set_multilink_enabled(shell_link_mode != "fastest");
 		}
 		const auto paths = network_session->links();
-		const auto is_dongle = [](const link_statistics & link) {
-			return wivrn::interface_kind(link.local.interface) == wivrn::interface_type::dongle;
-		};
-		// Dongle first: stream over the dongle while it works, and over every link while it does not
-		if (shell_link_mode == "dongle")
+		const auto & preferred_interface = application::get_config().preferred_interface;
+		// Preferred first: stream over the preferred link while it works, and over every link while it does not
+		if (shell_link_mode == "preferred" and not preferred_interface.empty())
 		{
 			if (shell_link_pinned.empty())
 			{
-				const auto dongle = std::ranges::find_if(paths, [&](const auto & link) { return is_dongle(link) and link.active and link.rtt_ms > 0; });
-				if (now >= shell_link_retry and dongle != paths.end() and network_session->set_single_interface(dongle->local.interface))
+				const auto preferred = std::ranges::find_if(paths, [&](const auto & link) {
+					return link.local.interface == preferred_interface and link.active and link.rtt_ms > 0;
+				});
+				if (now >= shell_link_retry and preferred != paths.end() and network_session->set_single_interface(preferred->local.interface))
 				{
-					shell_link_pinned = dongle->local.interface;
+					shell_link_pinned = preferred->local.interface;
 					spdlog::info("{}: streaming over {} only", apps.server(), shell_link_pinned);
 				}
 			}

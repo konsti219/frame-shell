@@ -732,8 +732,8 @@ const UNSTEADY_LOSS_PERCENT: f64 = 1.0;
 /// Link modes: the client's name, and what the mode does
 const LINK_MODES: [(&str, &str); 3] = [
 	(
-		"dongle",
-		"Streams over the dongle while it is connected, and over every link when it is not.",
+		"preferred",
+		"Streams over the preferred link while it works, and over every link when it does not or none is set.",
 	),
 	(
 		"all",
@@ -770,7 +770,7 @@ fn links_view(multilink: &Value) -> Option<Links> {
 		.and_then(Value::as_array)
 		.map_or(&[][..], Vec::as_slice);
 	let number = |link: &Value, key: &str| link.get(key).and_then(Value::as_f64).unwrap_or(0.0);
-	let mode = multilink.get("mode").and_then(Value::as_str).unwrap_or("dongle");
+	let mode = multilink.get("mode").and_then(Value::as_str).unwrap_or("preferred");
 	let (mode, help) = LINK_MODES
 		.iter()
 		.find(|(name, _)| *name == mode)
@@ -838,6 +838,6 @@ mod link_tests {
 		assert_eq!(links.rows[1].state, "standby");
 		assert_eq!(links.more, "and 2 more");
 		let default = links_view(&serde_json::json!({"links": []})).unwrap();
-		assert_eq!(default.mode, "dongle");
+		assert_eq!(default.mode, "preferred");
 	}
 }

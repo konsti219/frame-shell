@@ -100,8 +100,10 @@ public:
 	bool runtime_defoveation = true;
 	uint8_t bit_depth = 10;
 	bool multilink_enabled = true;
-	// Which links the stream uses: "dongle" (the dongle while it works, else all links), "all" or "fastest"
-	std::string link_mode = "dongle";
+	// Which links the stream uses: "preferred" (the preferred link while it works, else all links), "all" or "fastest"
+	std::string link_mode = "preferred";
+	// Interface name of the preferred link; empty means none
+	std::string preferred_interface;
 
 	bool passthrough_enabled = false;
 	// XR_META_boundary_visibility, the boundary is always shown outside passthrough

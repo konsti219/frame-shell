@@ -1752,11 +1752,11 @@ void scenes::lobby::handle_shell_command(const std::string & command)
 			scene->setting_changed(setting.substr(0, setting.find(' ')));
 		return;
 	}
-	// "linkmode <dongle|all|fastest>": which links the stream uses (kept for later connections)
+	// "linkmode <preferred|all|fastest>": which links the stream uses (kept for later connections)
 	if (command.starts_with("linkmode "))
 	{
 		const std::string mode = command.substr(9);
-		if (mode != "dongle" and mode != "all" and mode != "fastest")
+		if (mode != "preferred" and mode != "all" and mode != "fastest")
 			return;
 		config.link_mode = mode;
 		config.multilink_enabled = mode != "fastest";

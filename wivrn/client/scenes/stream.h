@@ -277,7 +277,7 @@ public:
 	bool resolution_locked();
 	// Sends a changed stream setting ("setting" command key) to the PC
 	void setting_changed(std::string_view key);
-	// Which links the stream uses ("dongle", "all" or "fastest"); applied on the network thread
+	// Which links the stream uses ("preferred", "all" or "fastest"); applied on the network thread
 	void set_link_mode(std::string_view mode);
 #endif
 

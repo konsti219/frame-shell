@@ -127,9 +127,12 @@ an additional UDP path. For USB to participate in multi-link streaming, it must
 provide an IP network interface.
 
 The client's `multilink_enabled` setting turns multi-link on or off for new
-connections. `link_mode` selects the links used while streaming: `dongle` uses
-the dongle while it works and every link otherwise, `all` uses every link and
-`fastest` keeps only the best measured path.
+connections. `link_mode` selects the links used while streaming: `preferred`
+uses the preferred link while it works and every link otherwise, `all` uses
+every link and `fastest` keeps only the best measured path. The client's
+`preferred_interface` setting names the preferred link's interface, for example
+`wlan1`. When it is empty there is no preferred link, and `preferred` behaves
+like `all`.
 
 ### `multilink-fec`
 

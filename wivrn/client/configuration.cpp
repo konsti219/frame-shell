@@ -347,6 +347,7 @@ const std::vector<config_field<configuration>> & configuration::config_fields()
 	        scalar("eye_expressions_divisor", &configuration::eye_expressions_divisor),
 	        scalar("multilink_enabled", &configuration::multilink_enabled),
 	        scalar("link_mode", &configuration::link_mode),
+	        scalar("preferred_interface", &configuration::preferred_interface),
 	        scalar("runtime_defoveation", &configuration::runtime_defoveation),
 	        scalar("enable_stream_gui", &configuration::enable_stream_gui),
 	        scalar("app_list_view", &configuration::app_list_view),
