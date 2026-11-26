@@ -19,7 +19,8 @@ Unofficial and experimental.
 
 ## Install
 
-Headset: run the following commands (either over SSH or directly in the headset). This will ask for sudo during one step.
+Headset: only the newest SteamOS beta is supported (switch in Settings → System → Steam OS update channel).
+Run the following commands (either over SSH or directly in the headset). This will ask for sudo during one step.
 
 ```sh
 curl -fL https://github.com/konsti219/frame-shell/releases/latest/download/frame-shell.tar.zst | tar --zstd -x

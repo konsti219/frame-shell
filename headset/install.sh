@@ -7,6 +7,8 @@
 set -euo pipefail
 
 prefix="$HOME/.local/share/frame-shell"
+# The SteamOS version this release is built and tested for (the newest beta)
+steamos_target=0.5.11
 units="$HOME/.local/share/systemd/user"
 marker="$XDG_RUNTIME_DIR/monado-stopped-on-purpose"
 # frame-monado's units are in session/systemd, the shell's in share
@@ -82,6 +84,11 @@ install_bundle() {
     }
     [ -d /opt/steamvr/drivers/cv ] || { echo "SteamVR's Frame driver is missing: is this a Steam Frame?" >&2; exit 1; }
     [ "$bundle" != "$prefix" ] || { echo "Run the installer from a new bundle, not the installed copy" >&2; exit 1; }
+    local steamos
+    steamos=$(. /etc/os-release && echo "${VERSION_ID:-unknown}")
+    if [ "$steamos" != "$steamos_target" ]; then
+        echo "Warning: this release targets SteamOS $steamos_target (beta), this headset runs $steamos." >&2
+    fi
     # Libraries this SteamOS lacks (the bundle uses SteamOS's own where it can)
     local binary report
     for binary in "$bundle/bin/frame-shell-client" "$bundle/bin/wayvr" "$bundle/lib/libwayvr.so" "$bundle/monado/bin/monado-service"; do
