@@ -50,6 +50,8 @@ if(ANDROID)
     set(DYNAMIC_LOADER ON)
     FetchContent_MakeAvailable(openxr_loader)
     target_link_libraries(wivrn openxr_loader)
+    # Protocol headers are also consumed by common code and its tests.
+    target_link_libraries(wivrn-common PUBLIC OpenXR::headers)
 
     # libcurl
     set(BUILD_CURL_EXE OFF)
@@ -107,6 +109,8 @@ else()
         FetchContent_MakeAvailable(openxr_loader)
         target_link_libraries(wivrn openxr_loader)
     endif()
+    # Protocol headers are also consumed by common code and its tests.
+    target_link_libraries(wivrn-common PUBLIC OpenXR::headers)
 
     target_link_libraries(wivrn Fontconfig::Fontconfig CURL::libcurl)
 

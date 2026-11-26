@@ -24,9 +24,11 @@
 #include "imgui.h"
 #include "imgui_internal.h"
 #include "lobby.h"
+#include "network_interface.h"
 #include "render/ui_theme.h"
 #include "render/ui_widgets.h"
 #include "scenes/stream.h" // IWYU pragma: keep
+#include "server_list.h"
 #include "utils/async.h"
 #include "utils/i18n.h"
 #include "utils/mapped_file.h"
@@ -386,7 +388,8 @@ void scenes::lobby::gui_server_list()
 
 	std::multimap<std::string, std::string> sorted_cookies;
 	for (auto && [cookie, data]: config.servers)
-		sorted_cookies.emplace(data.service.name, cookie);
+		if (not grouped_server_ids.contains(cookie))
+			sorted_cookies.emplace(data.service.name, cookie);
 
 	// open below at this scope so OpenPopup and begin_modal hash to the same id
 	bool open_add_edit = false;
@@ -417,7 +420,31 @@ void scenes::lobby::gui_server_list()
 			const bool incompatible = data.visible and data.service.txt.contains("protocol") and not data.compatible;
 			const float gap = ImGui::GetStyle().ItemSpacing.x;
 			const float bh = ImGui::GetFrameHeight() * ui::metrics::control_height;
-			const std::string sub = fmt::format("{} : {}", data.service.hostname, data.service.port);
+			const auto links = data.visible ? wivrn::connected_server_links(data.service) : std::vector<wivrn::server_list_link>{};
+			std::set<std::string> addresses;
+			std::string sub;
+			for (const auto & link: links)
+			{
+				auto address = link.endpoint.address;
+				if (link.endpoint.scope)
+					address += "%" + link.interface;
+				if (data.service.port != wivrn::default_port)
+					address = fmt::format("{}:{}", address.contains(':') ? "[" + address + "]" : address, data.service.port);
+				if (addresses.insert(address).second)
+				{
+					if (not sub.empty())
+						sub += " | ";
+					sub += address;
+				}
+			}
+			if (sub.empty())
+				sub = fmt::format("{} : {}", data.service.hostname, data.service.port);
+			if (not links.empty())
+			{
+				sub += "\n" + _("Links:");
+				for (const auto & link: links)
+					sub += "\n" + wivrn::interface_display_name(link.interface) + ": " + fmt::format(_F("~{:.1f} ms RTT"), link.latency_ms);
+			}
 
 			// trailing controls [Auto chip] [Connect] [menu], measured up front to exclude from the row click area
 			const char * c_icon = reachable ? ICON_FA_PLAY : (incompatible ? ICON_FA_TRIANGLE_EXCLAMATION : ICON_FA_MAGNIFYING_GLASS);
@@ -428,17 +455,7 @@ void scenes::lobby::gui_server_list()
 			const ImVec2 chip_sz = ui::chip_size(chip_label);
 			float trailing = bh + gap + cw + (data.autoconnect ? gap + chip_sz.x : 0) + ui::metrics::list_row_pad;
 
-			const auto server_icon = [](const wivrn_discover::service & service) {
-				if (not service.addresses.empty())
-				{
-					const auto & interface = service.addresses.front().interface;
-					if (interface.starts_with("usb"))
-						return ICON_FA_USB;
-					if (interface.starts_with("w"))
-						return ICON_FA_TOWER_BROADCAST;
-				}
-				return ICON_FA_SERVER;
-			}(data.service);
+			const char * server_icon = ICON_FA_SERVER;
 
 			const auto row = ui::begin_list_row("##row", server_icon, 0, name, sub, false, trailing);
 			float x = row.max.x;
@@ -503,6 +520,7 @@ void scenes::lobby::gui_server_list()
 			}
 
 			ui::end_list_row();
+
 			ImGui::PopID();
 		}
 

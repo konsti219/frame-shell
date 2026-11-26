@@ -33,6 +33,7 @@
 #include "protocol_version.h"
 #include "render/animation.h"
 #include "render/scene_components.h"
+#include "server_list.h"
 #include "stream.h"
 #include "utils/files.h"
 #include "utils/glm_cast.h"
@@ -217,7 +218,7 @@ static std::string ip_address_to_string(const sockaddr_in6 & addr)
 	return ip_address_to_string(addr.sin6_addr);
 }
 
-std::unique_ptr<wivrn_session> scenes::lobby::connect_to_session(wivrn_discover::service service, bool manual_connection)
+std::unique_ptr<wivrn_session> scenes::lobby::connect_to_session(wivrn_discover::service service, bool manual_connection, bool multilink_enabled)
 {
 	if (!manual_connection)
 	{
@@ -242,6 +243,7 @@ std::unique_ptr<wivrn_session> scenes::lobby::connect_to_session(wivrn_discover:
 	// Only the automatically discovered servers already have their IP addresses available
 	if (manual_connection)
 	{
+		service.addresses.clear();
 		addrinfo hint{
 		        .ai_flags = AI_ADDRCONFIG,
 		        .ai_family = AF_UNSPEC,
@@ -276,6 +278,9 @@ std::unique_ptr<wivrn_session> scenes::lobby::connect_to_session(wivrn_discover:
 		freeaddrinfo(addresses);
 	}
 
+	if (not multilink_enabled)
+		wivrn::prefer_low_latency(service.addresses);
+
 	std::string error;
 	for (const auto & entry: service.addresses)
 	{
@@ -291,8 +296,8 @@ std::unique_ptr<wivrn_session> scenes::lobby::connect_to_session(wivrn_discover:
 		{
 			spdlog::info("Connection to {}", address_string);
 
-			return std::visit([this, &service](auto & address) {
-				return std::make_unique<wivrn_session>(address, service.tcp_only, keypair, [&](int fd) {
+			return std::visit([this, &service, multilink_enabled](auto & address) {
+				return std::make_unique<wivrn_session>(address, service.tcp_only, multilink_enabled, keypair, [&](int fd) {
 					auto request = pin_request.lock();
 					request->pin_requested = true;
 					request->pin_cancelled = false;
@@ -445,12 +450,13 @@ void scenes::lobby::connect(const configuration::server_data & data)
 	async_error.reset();
 
 	async_session = utils::async<std::unique_ptr<wivrn_session>, std::string>(
-	        [this](auto token, wivrn_discover::service service, bool manual) {
+	        [this](auto token, wivrn_discover::service service, bool manual, bool multilink_enabled) {
 		        token.set_progress(_("Waiting for connection"));
-		        return connect_to_session(service, manual);
+		        return connect_to_session(service, manual, multilink_enabled);
 	        },
 	        data.service,
-	        data.manual || !data.visible);
+	        data.manual || !data.visible,
+	        bool(application::get_config().multilink_enabled));
 }
 
 std::optional<glm::vec3> scenes::lobby::check_recenter_gesture(
@@ -1546,7 +1552,7 @@ scene::meta & scenes::lobby::get_meta_scene()
 #ifndef __ANDROID__
 static bool is_lobby_command(std::string_view command)
 {
-	for (std::string_view prefix: {"connect ", "disconnect", "present ", "pin ", "pin_cancel", "autoconnect ", "forget ", "setting ", "pin_vr ", "auto_vr"})
+	for (std::string_view prefix: {"connect ", "disconnect", "present ", "pin ", "pin_cancel", "autoconnect ", "forget ", "setting ", "linkmode ", "pin_vr ", "auto_vr"})
 		if (command.starts_with(prefix))
 			return true;
 	return false;
@@ -1744,6 +1750,21 @@ void scenes::lobby::handle_shell_command(const std::string & command)
 			return;
 		if (frame_shell::apply_setting(config, config.stream(cookie), setting) and scene)
 			scene->setting_changed(setting.substr(0, setting.find(' ')));
+		return;
+	}
+	// "linkmode <dongle|all|fastest>": which links the stream uses (kept for later connections)
+	if (command.starts_with("linkmode "))
+	{
+		const std::string mode = command.substr(9);
+		if (mode != "dongle" and mode != "all" and mode != "fastest")
+			return;
+		config.link_mode = mode;
+		config.multilink_enabled = mode != "fastest";
+		config.save();
+		if (next_scene)
+			next_scene->set_link_mode(mode);
+		for (auto & pc: standby)
+			pc.scene->set_link_mode(mode);
 		return;
 	}
 	auto argument = [&](size_t index) -> std::string {

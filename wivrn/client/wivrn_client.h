@@ -20,6 +20,8 @@
 #pragma once
 
 #include "crypto.h"
+#include "multilink.h"
+#include "network_poll.h"
 #include "wivrn_packets.h"
 #include "wivrn_sockets.h"
 #include <chrono>
@@ -40,12 +42,14 @@ class wivrn_session
 {
 public:
 	using control_socket_t = typed_socket<TCP, to_headset::packets, from_headset::packets>;
-	using stream_socket_t = typed_socket<UDP, to_headset::packets, from_headset::packets>;
+	using stream_socket_t = typed_socket<multilink, to_headset::packets, from_headset::packets>;
 
 private:
 	control_socket_t control;
 	stream_socket_t stream;
+	bool multilink_enabled_;
 
+	std::string server_id_;
 	std::atomic<uint64_t> bytes_sent_ = 0;
 	std::atomic<uint64_t> bytes_received_ = 0;
 
@@ -55,15 +59,18 @@ private:
 public:
 	std::variant<in_addr, in6_addr> address;
 
-	wivrn_session(sockaddr_in6 address, bool tcp_only, crypto::key & headset_keypair, std::function<std::string(int fd)> pin_enter);
-	wivrn_session(sockaddr_in address, bool tcp_only, crypto::key & headset_keypair, std::function<std::string(int fd)> pin_enter);
+	wivrn_session(sockaddr_in6 address, bool tcp_only, bool multilink_enabled, crypto::key & headset_keypair, std::function<std::string(int fd)> pin_enter);
+	wivrn_session(sockaddr_in address, bool tcp_only, bool multilink_enabled, crypto::key & headset_keypair, std::function<std::string(int fd)> pin_enter);
 	wivrn_session(const wivrn_session &) = delete;
 	wivrn_session & operator=(const wivrn_session &) = delete;
 
 	template <typename T>
 	void send_control(T && packet)
 	{
-		bytes_sent_ += control.send(std::forward<T>(packet));
+		if (stream)
+			bytes_sent_ += stream.send_reliable(std::forward<T>(packet));
+		else
+			bytes_sent_ += control.send(std::forward<T>(packet));
 	}
 
 	template <typename T>
@@ -76,18 +83,26 @@ public:
 	}
 
 	template <typename T>
+	void send_stream_reply(T && packet)
+	{
+		if (stream)
+			bytes_sent_ += stream.send_reply(std::forward<T>(packet));
+		else
+			bytes_sent_ += control.send(std::forward<T>(packet));
+	}
+
+	template <typename T>
 	int poll(T && visitor, std::chrono::milliseconds timeout)
 	{
 		pollfd fds[2] = {};
 		fds[0].events = POLLIN;
 		fds[0].fd = stream.get_fd();
 		fds[1].events = POLLIN;
-		fds[1].fd = control.get_fd();
+		fds[1].fd = stream ? -1 : control.get_fd();
 
-		while (auto packet = stream.receive_pending(&bytes_received_))
-			std::visit(std::forward<T>(visitor), std::move(*packet));
-		while (auto packet = control.receive_pending(&bytes_received_))
-			std::visit(std::forward<T>(visitor), std::move(*packet));
+		timeout = dispatch_pending_packets([&] { return stream.receive_pending(&bytes_received_); }, std::forward<T>(visitor), timeout);
+		if (not stream)
+			timeout = dispatch_pending_packets([&] { return control.receive_pending(&bytes_received_); }, std::forward<T>(visitor), timeout);
 
 		int r = ::poll(fds, std::size(fds), timeout.count());
 		if (r < 0)
@@ -128,7 +143,7 @@ public:
 	void shutdown()
 	{
 		::shutdown(control.get_fd(), SHUT_RDWR);
-		::shutdown(stream.get_fd(), SHUT_RDWR);
+		stream.shutdown();
 	}
 
 	int control_fd()
@@ -136,6 +151,36 @@ public:
 		return control.get_fd();
 	}
 
+	const std::string & server_id() const
+	{
+		return server_id_;
+	}
+	std::vector<link_statistics> links() const
+	{
+		return stream.statistics();
+	}
+	bool multilink_enabled() const
+	{
+		return multilink_enabled_ and bool(stream);
+	}
+	bool set_multilink_enabled(bool enabled)
+	{
+		if (not stream.set_multilink_enabled(enabled))
+			return false;
+		multilink_enabled_ = enabled;
+		return true;
+	}
+	bool set_single_interface(std::string_view interface)
+	{
+		if (not stream.set_single_interface(interface))
+			return false;
+		multilink_enabled_ = false;
+		return true;
+	}
+	multilink_diagnostics network_diagnostics() const
+	{
+		return stream.diagnostics();
+	}
 
 	uint64_t bytes_received() const
 	{

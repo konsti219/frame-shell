@@ -257,6 +257,54 @@ public:
 	{
 		return this->send_many_raw(packets);
 	}
+
+	template <details::not_lvalue_reference T>
+	size_t send_reliable(T && data)
+	{
+		thread_local serialization_packet p;
+		serialize(p, data);
+		return this->send_reliable_raw(std::move(p));
+	}
+
+	size_t send_reliable(std::span<serialization_packet> packets)
+	{
+		size_t bytes = 0;
+		for (auto & packet: packets)
+			bytes += this->send_reliable_raw(std::move(packet));
+		return bytes;
+	}
+
+	template <details::not_lvalue_reference T>
+	size_t send_video(T && data, std::chrono::steady_clock::time_point deadline, bool protect = false)
+	{
+		thread_local serialization_packet p;
+		serialize(p, data);
+		return this->send_video_raw(std::move(p), deadline, protect);
+	}
+
+	template <details::not_lvalue_reference T>
+	size_t send_bulk(T && data)
+	{
+		thread_local serialization_packet p;
+		serialize(p, data);
+		return this->send_bulk_raw(std::move(p));
+	}
+
+	template <details::not_lvalue_reference T>
+	size_t send_protected_video(T && data, std::chrono::steady_clock::time_point deadline)
+	{
+		thread_local serialization_packet p;
+		serialize(p, data);
+		return this->send_video_raw(std::move(p), deadline, true);
+	}
+
+	template <details::not_lvalue_reference T>
+	size_t send_reply(T && data)
+	{
+		thread_local serialization_packet p;
+		serialize(p, data);
+		return this->send_reply_raw(std::move(p));
+	}
 };
 
 } // namespace wivrn

@@ -218,11 +218,11 @@ public:
 		return connection->has_stream();
 	}
 	template <typename T>
-	void send_stream(T && packet)
+	void send_stream(T && packet, std::chrono::steady_clock::time_point deadline = {}, bool protect = false)
 	{
 		try
 		{
-			connection->send_stream(std::forward<T>(packet));
+			connection->send_stream(std::forward<T>(packet), deadline, protect);
 		}
 		catch (std::exception & e)
 		{

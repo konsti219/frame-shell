@@ -353,10 +353,10 @@ void video_encoder::SendData(std::span<uint8_t> data, bool end_of_frame, bool co
 	{
 		try
 		{
-			if (frame_control)
-				cnx->send_control(std::move(shard));
-			else
-				cnx->send_stream(std::move(shard));
+			const auto deadline = clock and frame_info.view_info.display_time > 0
+			                              ? std::chrono::steady_clock::time_point(std::chrono::nanoseconds(clock.from_headset(frame_info.view_info.display_time)))
+			                              : std::chrono::steady_clock::now() + std::chrono::milliseconds(25);
+			cnx->send_stream(std::move(shard), deadline, frame_control);
 		}
 		catch (const std::system_error &)
 		{

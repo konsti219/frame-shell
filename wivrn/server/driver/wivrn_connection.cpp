@@ -22,11 +22,13 @@
 #include "protocol_version.h"
 #include "secrets.h"
 #include "smp.h"
+#include "utils/wivrn_trace.h"
 #include "wivrn_ipc.h"
 #include "wivrn_packets.h"
 #include <algorithm>
 #include <arpa/inet.h>
 #include <chrono>
+#include <cstdlib>
 #include <poll.h>
 #include <regex>
 #include <sys/socket.h>
@@ -58,7 +60,7 @@ wivrn::incorrect_pin::incorrect_pin() :
 
 wivrn::wivrn_connection::wivrn_connection(std::stop_token stop_token, encryption_state state, std::string pin, TCP && tcp) :
         control(std::move(tcp)),
-        stream(-1),
+        stream(),
         pin(pin),
         state(state)
 {
@@ -84,14 +86,11 @@ void wivrn::wivrn_connection::init(std::stop_token stop_token, std::function<voi
 		throw std::system_error(errno, std::system_category(), "Cannot get client address");
 	}
 
-	if (configuration().tcp_only)
+	const auto multilink_key = multilink::random_key();
+	const configuration config;
+	if (config.tcp_only)
 	{
 		port = -1;
-	}
-	else
-	{
-		stream = decltype(stream)();
-		stream.bind(server_address);
 	}
 
 	auto receive = [&](std::optional<std::chrono::seconds> timeout = std::nullopt, bool allow_stream_socket = false) {
@@ -135,11 +134,8 @@ void wivrn::wivrn_connection::init(std::stop_token stop_token, std::function<voi
 
 			if (allow_stream_socket and (fds[0].revents & POLLIN))
 			{
-				auto [raw_packet, peer_addr] = stream.receive_from_raw();
-
-				// Ignore packets sent from the wrong address
-				if (memcmp(&peer_addr.sin6_addr, &client_address.sin6_addr, sizeof(peer_addr.sin6_addr)) == 0)
-					return std::make_pair(raw_packet.deserialize<from_headset::packets>(), (int)htons(peer_addr.sin6_port));
+				if (auto packet = stream.receive())
+					return std::make_pair(std::move(*packet), 0);
 			}
 
 			if (fds[1].revents & POLLIN)
@@ -240,7 +236,6 @@ void wivrn::wivrn_connection::init(std::stop_token stop_token, std::function<voi
 
 			secrets s{server_key, headset_key, is_public_key_known ? "000000" : pin};
 			control.set_aes_key_and_ivs(s.control_key, s.control_iv_from_headset, s.control_iv_to_headset);
-			stream.set_aes_key_and_ivs(s.stream_key, s.stream_iv_header_from_headset, s.stream_iv_header_to_headset);
 			break;
 	}
 
@@ -248,7 +243,33 @@ void wivrn::wivrn_connection::init(std::stop_token stop_token, std::function<voi
 	if (not std::holds_alternative<from_headset::crypto_handshake>(receive().first))
 		throw std::runtime_error("No handshake received from client");
 
-	control.send(to_headset::handshake{.stream_port = port});
+	if (port > 0)
+	{
+		auto primary = describe_endpoint(reinterpret_cast<const sockaddr *>(&server_address));
+		auto local = local_endpoints(port, primary.address.starts_with("127.") or primary.address == "::1");
+		stream = decltype(stream)(true, multilink_key, std::move(local));
+		stream.set_options({.fec_group_size = uint8_t(config.multilink_fec ? 4 : 0), .aggregate_limit_bps = config.multilink_rate_limit, .shared_bottleneck = config.multilink_shared_bottleneck});
+		// The runtime initializes tracing after establishing this connection.
+		if (std::getenv("WIVRN_TRACING"))
+			stream.set_video_queue_drop_observer([](const video_queue_drop & drop) {
+				if (not trace::is_enabled())
+					return;
+				std::array<uint8_t, 1 + 2 * sizeof(uint32_t) + 2 * sizeof(uint64_t) + sizeof(uint16_t)> header;
+				if (drop.packet.size() < header.size())
+					return;
+				std::copy_n(drop.packet.begin(), header.size(), header.begin());
+				deserialization_packet packet({}, header);
+				packet.deserialize<uint8_t>();
+				const auto stream = packet.deserialize<uint32_t>();
+				const auto generation = packet.deserialize<uint32_t>();
+				const auto frame = packet.deserialize<uint64_t>();
+				packet.deserialize<uint64_t>();
+				const auto shard = packet.deserialize<uint16_t>();
+				trace::video_queue_dropped(drop, stream, generation, frame, shard);
+			});
+	}
+
+	control.send(to_headset::handshake{.stream_port = port, .multilink_key = multilink_key, .endpoints = stream.endpoints(), .server_id = server_cookie()});
 
 	auto [stream_handshake, client_port] = receive(10s, true);
 
@@ -258,21 +279,12 @@ void wivrn::wivrn_connection::init(std::stop_token stop_token, std::function<voi
 		throw std::runtime_error("No handshake received from client");
 	}
 
-	if (client_port >= 0)
-	{
-		client_address.sin6_port = htons(client_port);
-		stream.connect(client_address);
-		stream.set_send_buffer_size(1024 * 1024 * 5);
-	}
-	else
-	{
-		// No stream socket
-		stream = decltype(stream)(-1);
-	}
+	if (client_port < 0)
+		stream = decltype(stream)();
 
-	control.send(to_headset::handshake{.stream_port = port});
+	control.send(to_headset::handshake{.stream_port = port, .multilink_key = multilink_key, .endpoints = stream.endpoints(), .server_id = server_cookie()});
 
-	info_packet = std::get<from_headset::headset_info_packet>(receive(10s).first);
+	info_packet = std::get<from_headset::headset_info_packet>(receive(10s, bool(stream)).first);
 
 	last_received = std::chrono::steady_clock::now();
 	active = true;
@@ -299,7 +311,7 @@ void wivrn::wivrn_connection::shutdown()
 {
 	active = false;
 	if (stream)
-		::shutdown(stream.get_fd(), SHUT_RDWR);
+		stream.shutdown();
 	if (control)
 		::shutdown(control.get_fd(), SHUT_RDWR);
 }

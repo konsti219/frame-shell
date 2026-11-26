@@ -53,6 +53,7 @@ class stream;
 class lobby : public scene_impl<lobby>
 {
 	std::optional<wivrn_discover> discover;
+	std::set<std::string> grouped_server_ids;
 
 	std::string add_server_window_prettyname;
 	std::string add_server_window_hostname;
@@ -65,6 +66,7 @@ class lobby : public scene_impl<lobby>
 	std::optional<std::string> async_error;
 	std::shared_ptr<stream> next_scene;
 	std::string server_name;
+	std::string connecting_cookie;
 	bool autoconnect_enabled = true;
 
 	// Last known uinput forwarding state of the connected server, kept after disconnection so the
@@ -268,7 +270,7 @@ class lobby : public scene_impl<lobby>
 	// When to allow autoconnecting again after a failed connection or a dropped stream
 	std::chrono::steady_clock::time_point shell_autoconnect_retry{};
 #endif
-	std::unique_ptr<wivrn_session> connect_to_session(wivrn_discover::service service, bool manual_connection);
+	std::unique_ptr<wivrn_session> connect_to_session(wivrn_discover::service service, bool manual_connection, bool multilink_enabled);
 
 	std::optional<glm::vec3> check_recenter_gesture(xr::spaces space, const xr::hand_tracker::joint_array & joints, const std::pair<glm::vec3, glm::quat> & head_pose);
 	std::optional<glm::vec3> check_recenter_action(XrTime predicted_display_time, glm::vec3 head_position);
@@ -285,7 +287,7 @@ class lobby : public scene_impl<lobby>
 	};
 	std::vector<standby_pc> standby;
 	std::string active_cookie;
-	std::string connecting_cookie;
+
 	std::string connecting_name;
 	// A failed connection to a PC that would have stood by: cookie, message
 	std::map<std::string, std::string> connection_errors;

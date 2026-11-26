@@ -1146,11 +1146,18 @@ struct refresh_rate_adjuster
 void wivrn_session::run_net(std::stop_token stop)
 {
 	resume_session();
+	auto last_report = std::chrono::steady_clock::now();
 	while (not stop.stop_requested())
 	{
 		try
 		{
 			connection->poll(*this, 20);
+			const auto now = std::chrono::steady_clock::now();
+			if (now - last_report >= std::chrono::seconds(1))
+			{
+				send_stream(connection->network_statistics());
+				last_report = now;
+			}
 
 			if (uinput_handler)
 			{

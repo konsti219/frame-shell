@@ -104,11 +104,54 @@ An application to start when connection with the headset is established, can be 
 ```
 Launch No Man's Sky in VR mode on Steam when connection with headset is established.
 
+## Multiple network links
+
+With `tcp-only` disabled, WiVRn automatically tests paths over the available IP interfaces.
+After pairing, the client and server exchange endpoints and validate paths in
+both directions. Usable paths share one streaming session. IPv4 and IPv6
+addresses between the same client and server interfaces are alternatives for
+one link.
+
+Video traffic is distributed using per-path capacity estimates and frame
+deadlines. Tracking and audio take priority over queued video. Control messages
+are delivered reliably and in order over surviving paths. Missing video packets
+can be repaired over another path when time remains before their deadline.
+
+Links can share a radio or another bottleneck, so adding interfaces does not
+guarantee additional capacity. Build both client and server from the same
+revision. Interfaces must be exposed to the application by the operating
+system. `tcp-only` retains a single TCP connection; ADB TCP forwarding is not
+an additional UDP path. For USB to participate in multi-link streaming, it must
+provide an IP network interface.
+
+The client's `multilink_enabled` setting turns multi-link on or off for new
+connections. `link_mode` selects the links used while streaming: `dongle` uses
+the dongle while it works and every link otherwise, `all` uses every link and
+`fastest` keeps only the best measured path.
+
+### `multilink-fec`
+
+Default value: `false`. On a link with 0.5% to 10% loss and spare capacity, adds
+one XOR parity packet to each group of four video packets, so a single lost
+packet in a group is rebuilt without a resend.
+
+### `multilink-shared-bottleneck`
+
+Default value: `false`. Set to `true` when the links share a radio or another
+bottleneck. The combined send rate is then lowered to what the links deliver
+together when they start losing packets.
+
+### `multilink-rate-limit`
+
+Default value: `0`. Limits the combined send rate over all links, in bits per
+second. `0` removes the limit. The value must not exceed `1000000000`.
+
 ## `tcp-only`
 Default value: `false`
 
 Only use TCP for communications with the client, this may have increased latency.
 If `false` or unset, WiVRn will use both TCP and UDP.
+Setting this to `true` disables [multi-link streaming](#multiple-network-links).
 
 ### Example
 ```json
