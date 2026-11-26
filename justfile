@@ -231,7 +231,7 @@ flatpak:
 pin-monado:
     git -C "{{monado}}" rev-parse HEAD >"{{root}}/monado-rev"
 
-# Build the release bundle from clean checkouts of HEAD and monado-rev into out/release/frame-shell.tar.zst (one name, for the latest release link)
+# Build the headset bundle and PC Flatpak from clean checkouts of HEAD and monado-rev into out/release (fixed names, for the latest release links)
 release:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -250,7 +250,10 @@ release:
     just --justfile "$FRAME_MONADO/justfile" build
     just --justfile "$out/src/frame-shell/justfile" build-headset bundle
     tar -C "$out/src/frame-shell/out/headset/bundle" --zstd -cf "$out/frame-shell.tar.zst" frame-shell
+    just --justfile "$out/src/frame-shell/justfile" flatpak
+    cp "$out/src/frame-shell/out/flatpak/frame-shell.flatpak" "$out/"
     echo "$out/frame-shell.tar.zst: $(cat "$out/src/frame-shell/out/headset/bundle/frame-shell/VERSION")"
+    echo "$out/frame-shell.flatpak"
 
 # Serve the development PC server instead of the installed one until stopped
 run:
