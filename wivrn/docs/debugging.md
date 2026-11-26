@@ -372,6 +372,8 @@ The log is located at `$XDG_STATE_HOME/xrizer/xrizer.txt`, or `$HOME/.local/stat
 |----------|-------------|
 | `WIVRN_DUMP_VIDEO` | Path to dump video frames (e.g., `/tmp/video-dump`) |
 | `WIVRN_MULTILINK_INTERFACES` | Comma separated interface names that multi-link may use (e.g., `wlp9s0`); unset uses every interface |
+| `WIVRN_TEST_NETWORK_PROFILE` | Host-only test hook: absolute path of a CSV file whose first line is an absolute PC monotonic start time in nanoseconds, followed by rows of `offset_ms,duration_ms,delay_ms,jitter_ms,loss_per_mille,rate_bps`. It delays and drops encrypted multi-link UDP datagrams, including probes and acknowledgments; SSH and control TCP are unaffected. A zero rate adds no bandwidth ceiling. Disabled when unset |
+| `WIVRN_TEST_NETWORK_LOG` | Directory for the impairment hook's log |
 | `WIVRN_LOGLEVEL` | Log level for the native client |
 | `WIVRN_AUTOCONNECT` | Auto-connect to the first discovered server |
 | `WIVRN_TRACING` | Enable WiVRn Perfetto tracing: `system` / `inprocess`. Requires `WIVRN_USE_PERFETTO=ON` at build time. See [docs/profiling.md](profiling.md). |

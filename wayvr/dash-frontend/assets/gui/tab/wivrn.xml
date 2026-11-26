@@ -42,6 +42,28 @@
   </template>
 
   <template name="StreamSettings">
+    <rectangle macro="group_box" id="links_card">
+      <label text="Network links" weight="bold" size="20" />
+      <div gap="8" flex_wrap="wrap">
+        <Button id="link_mode_dongle" sticky="1" padding="8"><label text="Dongle first" size="16" /></Button>
+        <Button id="link_mode_all" sticky="1" padding="8"><label text="All links together" size="16" /></Button>
+        <Button id="link_mode_fastest" sticky="1" padding="8"><label text="Fastest link only" size="16" /></Button>
+      </div>
+      <label id="link_mode_help" size="14" color="on_background_variant" wrap="1" width="100%" />
+      <div id="link_1" width="100%" flex_direction="column" gap="2">
+        <div width="100%" align_items="center" gap="12"><label id="link_1_name" width="0" flex_grow="1" weight="bold" wrap="1" /><label id="link_1_state" size="14" /></div>
+        <label id="link_1_metrics" size="14" color="on_background_variant" wrap="1" width="100%" />
+      </div>
+      <div id="link_2" width="100%" flex_direction="column" gap="2">
+        <div width="100%" align_items="center" gap="12"><label id="link_2_name" width="0" flex_grow="1" weight="bold" wrap="1" /><label id="link_2_state" size="14" /></div>
+        <label id="link_2_metrics" size="14" color="on_background_variant" wrap="1" width="100%" />
+      </div>
+      <div id="link_3" width="100%" flex_direction="column" gap="2">
+        <div width="100%" align_items="center" gap="12"><label id="link_3_name" width="0" flex_grow="1" weight="bold" wrap="1" /><label id="link_3_state" size="14" /></div>
+        <label id="link_3_metrics" size="14" color="on_background_variant" wrap="1" width="100%" />
+      </div>
+      <label id="link_more" size="14" color="on_background_variant" />
+    </rectangle>
     <GroupBox>
       <label text="Stream settings for this PC" weight="bold" size="20" />
       <label text="Bitrate (Mbit/s)" size="16" />
