@@ -117,7 +117,9 @@ deadlines. Tracking and audio take priority over queued video. Control messages
 are delivered reliably and in order over surviving paths. Missing video packets
 can be repaired over another path when time remains before their deadline.
 
-Links can share a radio or another bottleneck, so adding interfaces does not
+The encoder bitrate decreases when the estimated capacity cannot sustain the
+requested rate and rises back toward it as capacity recovers. The requested
+bitrate remains the target. Links can share a radio or another bottleneck, so adding interfaces does not
 guarantee additional capacity. Build both client and server from the same
 revision. Interfaces must be exposed to the application by the operating
 system. `tcp-only` retains a single TCP connection; ADB TCP forwarding is not

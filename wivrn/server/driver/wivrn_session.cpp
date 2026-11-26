@@ -1147,15 +1147,24 @@ void wivrn_session::run_net(std::stop_token stop)
 {
 	resume_session();
 	auto last_report = std::chrono::steady_clock::now();
+	auto last_adaptation = last_report;
 	while (not stop.stop_requested())
 	{
 		try
 		{
 			connection->poll(*this, 20);
 			const auto now = std::chrono::steady_clock::now();
+			// As often as the transport updates its estimate, so the rate follows it back up quickly
+			if (now - last_adaptation >= std::chrono::milliseconds(200))
+			{
+				compositor.adapt_bitrate(connection->capacity_bps());
+				last_adaptation = now;
+			}
 			if (now - last_report >= std::chrono::seconds(1))
 			{
-				send_stream(connection->network_statistics());
+				auto report = connection->network_statistics();
+				report.effective_bitrate = compositor.video_bitrate();
+				send_stream(std::move(report));
 				last_report = now;
 			}
 
