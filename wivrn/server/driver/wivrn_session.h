@@ -39,6 +39,7 @@
 #include "wivrn_packets.h"
 #include "audio_link.h"
 #include "eye_osc.h"
+#include "frame_log.h"
 #include "desktop_link.h"
 #include "wivrn_uinput.h"
 #include "xrt/xrt_results.h"
@@ -114,6 +115,7 @@ class wivrn_session : public xrt_system_devices
 	bool gamepad_connected = false; // network thread only
 
 	clock_offset_estimator offset_est;
+	frame_log frames;
 	std::atomic<XrDuration> tracking_latency; // production to reception time
 
 	std::unique_ptr<audio_device> audio_handle;
@@ -148,6 +150,10 @@ public:
 	void quit_if_no_client();
 
 	clock_offset get_offset();
+	frame_log & get_frame_log()
+	{
+		return frames;
+	}
 	bool connected();
 	const from_headset::headset_info_packet & get_info() const
 	{

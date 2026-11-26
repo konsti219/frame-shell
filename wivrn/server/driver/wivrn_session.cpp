@@ -876,6 +876,7 @@ void wivrn_session::operator()(from_headset::feedback && feedback)
 	if (not o)
 		return;
 	compositor.on_feedback(feedback, o);
+	frames.feedback(feedback);
 
 	if (feedback.received_first_packet)
 		trace::instant_feedback("receive_begin", o.from_headset(feedback.received_first_packet), feedback.frame_index, feedback.stream_index);
@@ -1164,6 +1165,8 @@ void wivrn_session::run_net(std::stop_token stop)
 			{
 				auto report = connection->network_statistics();
 				report.effective_bitrate = compositor.video_bitrate();
+				if (auto offset = get_offset())
+					frames.network(offset.to_headset(os_monotonic_get_ns()), report);
 				send_stream(std::move(report));
 				last_report = now;
 			}

@@ -349,6 +349,7 @@ void video_encoder::SendData(std::span<uint8_t> data, bool end_of_frame, bool co
 	for (auto span: (std::vector<std::span<uint8_t>> &)metadata)
 		bytes.insert(bytes.end(), span.begin(), span.end());
 	bytes.insert(bytes.end(), frame_data.begin(), frame_data.end());
+	cnx->get_frame_log().sent(stream_idx, frame_index, frame_info.timing_info, bytes.size());
 	for (auto & shard: recovery.frame(stream_idx, generation, frame_index, bytes, frame_control ? 0 : fec_percent))
 	{
 		try

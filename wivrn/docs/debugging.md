@@ -305,6 +305,27 @@ late and duplicate completion records. Traffic totals count transport UDP payloa
 in both directions, including warmup and control traffic, and exclude lower-layer
 headers. The benchmark does not measure encoding, decoding or headset presentation.
 
+### Streaming on real hardware
+
+To measure the real stream, set `WIVRN_FRAME_LOG` to a file path for the server.
+The server appends one JSON line for each VR or desktop frame it sends, each
+feedback packet from the headset and, once a second, the bitrate and the data
+sent over each link. Times are on the headset clock. Use a new file for each run, then:
+
+```bash
+python3 tools/frame_log_summary.py wifi-1.jsonl dongle-1.jsonl multi-1.jsonl
+```
+
+For each run it reports, for the two eye streams:
+- lost frames: sent but never displayed, and how many of those never arrived complete
+- repeated displays and freezes, where a gap between two new frames on the display exceeds 50 ms
+- latency from encode start to the predicted display time, and transfer time from send start to the last packet, at p50, p95 and p99
+- the mean bitrate, the seconds each link carried video and how often the set of links in use changed
+
+Frames sent in the last second of a log are not counted, as their feedback may
+still be in flight. Feedback travels over UDP, so a displayed frame whose display
+feedback was lost counts as lost, and widens one display gap by a frame period.
+
 ## USB Tunneling
 
 For debugging network issues or testing with a wired connection, you can tunnel WiVRn over USB.
@@ -374,6 +395,7 @@ The log is located at `$XDG_STATE_HOME/xrizer/xrizer.txt`, or `$HOME/.local/stat
 | `WIVRN_MULTILINK_INTERFACES` | Comma separated interface names that multi-link may use (e.g., `wlp9s0`); unset uses every interface |
 | `WIVRN_TEST_NETWORK_PROFILE` | Host-only test hook: absolute path of a CSV file whose first line is an absolute PC monotonic start time in nanoseconds, followed by rows of `offset_ms,duration_ms,delay_ms,jitter_ms,loss_per_mille,rate_bps`. It delays and drops encrypted multi-link UDP datagrams, including probes and acknowledgments; SSH and control TCP are unaffected. A zero rate adds no bandwidth ceiling. Disabled when unset |
 | `WIVRN_TEST_NETWORK_LOG` | Directory for the impairment hook's log |
+| `WIVRN_FRAME_LOG` | Server: file to append per-frame records to, for [streaming tests on real hardware](#streaming-on-real-hardware) |
 | `WIVRN_LOGLEVEL` | Log level for the native client |
 | `WIVRN_AUTOCONNECT` | Auto-connect to the first discovered server |
 | `WIVRN_TRACING` | Enable WiVRn Perfetto tracing: `system` / `inprocess`. Requires `WIVRN_USE_PERFETTO=ON` at build time. See [docs/profiling.md](profiling.md). |
