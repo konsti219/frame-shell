@@ -20,7 +20,7 @@ def percentile(values, fraction):
     return ordered[min(len(ordered) - 1, math.ceil(len(ordered) * fraction) - 1)]
 
 
-def summarize(rows):
+def summarize(rows, skip_ns=0):
     sent = {}
     frames = {}
     network = []
@@ -49,18 +49,27 @@ def summarize(rows):
     if not sent:
         raise RuntimeError("No VR frames sent in the log")
 
-    shown = {key: frame for key, frame in frames.items() if frame["displayed"] is not None}
-    if not shown:
+    displayed = [frame["displayed"] for frame in frames.values() if frame["displayed"] is not None]
+    if not displayed:
         raise RuntimeError("No VR frame was displayed")
-    first = min(frame["displayed"] for frame in shown.values())
+    first = min(displayed) + skip_ns
+    shown = {
+        key: frame
+        for key, frame in frames.items()
+        if frame["displayed"] is not None and frame["displayed"] >= first
+    }
+    if not shown:
+        raise RuntimeError("No VR frame was displayed after the skipped start")
+    last = max(frame["displayed"] for frame in shown.values())
+    network = [row for row in network if first <= row["time"] <= last]
     last_send = max(row["send_end"] for row in sent.values())
     counted = [
         key
         for key, row in sent.items()
         if first <= row["encode_begin"] and row["send_end"] <= last_send - TAIL_NS
     ]
-    lost = [key for key in counted if key not in shown]
-    incomplete = [key for key in lost if not frames.get(key, {}).get("complete")]
+    not_shown = [key for key in counted if key not in shown]
+    incomplete = [key for key in not_shown if not frames.get(key, {}).get("complete")]
 
     freezes = {}
     longest = {}
@@ -76,7 +85,7 @@ def summarize(rows):
         for key, frame in shown.items()
         if key in sent and frame["received_last_packet"]
     ]
-    duration_s = (max(frame["displayed"] for frame in shown.values()) - first) / 1e9
+    duration_s = (last - first) / 1e9
 
     link_seconds = {}
     link_sets = []
@@ -90,9 +99,12 @@ def summarize(rows):
     return {
         "duration_s": round(duration_s, 1),
         "frames_sent": len(counted),
-        "frames_lost": len(lost),
-        "lost_percent": round(100 * len(lost) / len(counted), 3) if counted else None,
-        "lost_incomplete": len(incomplete),
+        "frames_not_shown": len(not_shown),
+        "never_complete": len(incomplete),
+        "never_complete_percent": round(100 * len(incomplete) / len(counted), 3)
+        if counted
+        else None,
+        "complete_not_shown": len(not_shown) - len(incomplete),
         "frames_resent": sum(frame["resent"] for key, frame in shown.items() if key in sent),
         "repeated_displays": sum(
             frame["times_displayed"] - 1 for (stream, _), frame in shown.items() if stream == 0
@@ -157,7 +169,12 @@ def self_test():
             }
         )
     result = summarize(rows)
-    expected = {"frames_lost": 1, "freezes_over_50ms": 1, "repeated_displays": 1}
+    expected = {
+        "frames_not_shown": 1,
+        "never_complete": 1,
+        "freezes_over_50ms": 1,
+        "repeated_displays": 1,
+    }
     if any(result[key] != value for key, value in expected.items()):
         raise RuntimeError(f"Self-test failed: {result}")
     if result["latency_ms"]["p50"] != 20.0:
@@ -170,18 +187,25 @@ def main():
         "logs", type=pathlib.Path, nargs="+", help="one WIVRN_FRAME_LOG file per run"
     )
     parser.add_argument("--json", action="store_true", help="print one JSON object per run")
+    parser.add_argument(
+        "--skip-s",
+        type=float,
+        default=0,
+        help="leave out the first seconds after the first display",
+    )
     args = parser.parse_args()
     self_test()
     for log in args.logs:
         rows = [json.loads(line) for line in log.read_text().splitlines() if line.startswith("{")]
-        result = {"run": log.stem, **summarize(rows)}
+        result = {"run": log.stem, **summarize(rows, int(args.skip_s * 1e9))}
         if args.json:
             print(json.dumps(result), flush=True)
             continue
         latency, transfer = result["latency_ms"], result["transfer_ms"] or {}
         print(
-            f"{result['run']}: {result['duration_s']} s, {result['frames_lost']}/{result['frames_sent']} lost "
-            f"({result['lost_percent']}%, {result['lost_incomplete']} incomplete), {result['repeated_displays']} repeated, "
+            f"{result['run']}: {result['duration_s']} s, {result['frames_sent']} sent, "
+            f"{result['never_complete']} never complete ({result['never_complete_percent']}%), "
+            f"{result['complete_not_shown']} complete but not shown, {result['repeated_displays']} repeated, "
             f"{result['freezes_over_50ms']} freezes > 50 ms ({result['freezes_per_minute']}/min, longest {result['longest_gap_ms']} ms), "
             f"latency p50/p95/p99 {latency['p50']}/{latency['p95']}/{latency['p99']} ms, "
             f"transfer p50/p95/p99 {transfer.get('p50')}/{transfer.get('p95')}/{transfer.get('p99')} ms, "

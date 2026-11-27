@@ -313,18 +313,19 @@ feedback packet from the headset and, once a second, the bitrate and the data
 sent over each link. Times are on the headset clock. Use a new file for each run, then:
 
 ```bash
-python3 tools/frame_log_summary.py wifi-1.jsonl dongle-1.jsonl multi-1.jsonl
+python3 tools/frame_log_summary.py --skip-s 30 wifi-1.jsonl dongle-1.jsonl multi-1.jsonl
 ```
 
-For each run it reports, for the two eye streams:
-- lost frames: sent but never displayed, and how many of those never arrived complete
+`--skip-s` leaves out the stream's start. For each run it reports, for the two eye streams:
+- frames sent but never displayed, split into frames that never arrived complete and frames that
+  arrived complete but were replaced by a newer frame before their display slot
 - repeated displays and freezes, where a gap between two new frames on the display exceeds 50 ms
 - latency from encode start to the predicted display time, and transfer time from send start to the last packet, at p50, p95 and p99
 - the mean bitrate, the seconds each link carried video and how often the set of links in use changed
 
 Frames sent in the last second of a log are not counted, as their feedback may
 still be in flight. Feedback travels over UDP, so a displayed frame whose display
-feedback was lost counts as lost, and widens one display gap by a frame period.
+feedback was lost counts as not shown, and widens one display gap by a frame period.
 
 ## USB Tunneling
 
