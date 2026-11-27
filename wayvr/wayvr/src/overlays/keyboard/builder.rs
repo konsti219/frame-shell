@@ -71,6 +71,10 @@ pub(super) fn create_keyboard_panel(
         "not_wayland".into(),
         bool_to_rc_str(!app.feats.desktop_backend.is_wayland()),
     );
+    params.extra_vars.insert(
+        "not_embedded".into(),
+        bool_to_rc_str(!crate::frame_shell::EMBEDDED.load(std::sync::atomic::Ordering::Relaxed)),
+    );
 
     let mut panel = GuiPanel::new_from_template(app, "gui/keyboard.xml", state, params)?;
 

@@ -8,22 +8,48 @@ pub(crate) extern "C" fn desktop_surface(info: *const DesktopSurface) {
     };
     let key = surface_key(info.source, info.surface);
     if info.removed {
-        if let Some((frame, _)) = surfaces().remove(&key).and_then(|surface| surface.frame) {
-            release_frame(frame.id);
+        if let Some(surface) = surfaces().remove(&key) {
+            if let Some((frame, _)) = surface.frame {
+                release_frame(frame.id);
+            }
+            if surface.virtual_panel {
+                RETIRED_VIRTUALS
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .push(surface.name);
+                mark_virtual_layout_dirty();
+            }
         }
         return;
     }
-    // Overlay names carry their saved layout, so name them after the PC and its monitor
     let text = frame_abi::c_string::<64>;
-    let name: Arc<str> = format!("{} {}", text(&info.source_name), text(&info.name))
+    let connector = text(&info.name);
+    if wayvr_ipc::frame::is_virtual_surface(info.surface) {
+        let name = virtual_overlay_name(info.source, info.surface, &connector);
+        log::info!("Virtual panel {name}: {}x{}", info.width, info.height);
+        surfaces().entry(key).or_insert(Surface {
+            visible: None,
+            name,
+            connector,
+            registered: true,
+            virtual_panel: true,
+            frame: None,
+            spawned: 0,
+        });
+        mark_virtual_layout_dirty();
+        return;
+    }
+    // Overlay names carry their saved layout, so name them after the PC and its monitor
+    let name: Arc<str> = format!("{} {}", text(&info.source_name), connector)
         .trim()
         .into();
     log::info!("Desktop {name}: {}x{}", info.width, info.height);
     surfaces().entry(key).or_insert(Surface {
         visible: None,
         name,
-        connector: text(&info.name),
+        connector,
         registered: false,
+        virtual_panel: false,
         frame: None,
         spawned: 0,
     });
@@ -93,6 +119,103 @@ pub fn poll_desktop_visibility<T: Default>(
     }
 }
 
+static COMMITTED_PLACEMENTS: Mutex<BTreeMap<u32, BTreeMap<u32, CommittedPlacement>>> =
+    Mutex::new(BTreeMap::new());
+
+pub fn clear_virtual_layout(source: u32) {
+    COMMITTED_PLACEMENTS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .remove(&source);
+}
+
+/// Solves and pushes 2D compositor panel coordinates when virtual panel 3D poses settle (~350 ms debounce).
+pub fn poll_virtual_layout<T: Default>(
+    overlays: &crate::windowing::manager::OverlayWindowManager<T>,
+) {
+    if !EMBEDDED.load(Ordering::Relaxed) || !virtual_auto_sync() {
+        return;
+    }
+    let dirty_at = VIRTUAL_LAYOUT_DIRTY_MS.load(Ordering::Relaxed);
+    if dirty_at == 0 || (START.elapsed().as_millis() as u64) < dirty_at + 350 {
+        return;
+    }
+
+    let mut waiting_for_spawn = false;
+    for (source, _) in crate::frame_host::sources() {
+        let Some(vstate) = crate::frame_host::virtual_state(source) else {
+            continue;
+        };
+        if !vstate.capabilities.supported || vstate.panels.is_empty() {
+            clear_virtual_layout(source);
+            continue;
+        }
+        let cookie = crate::frame_hosts::for_source(source).map(|pc| pc.id);
+        let physical: Vec<PhysicalAnchor> = vstate
+            .physical_monitors
+            .iter()
+            .map(|m| {
+                let overlay_name = cookie.as_deref().map(|id| format!("{id} {}", m.name));
+                let transform = overlay_name
+                    .as_deref()
+                    .and_then(|name| overlays.overlay_transform(name));
+                PhysicalAnchor {
+                    key: m.name.clone(),
+                    logical_pos: m.logical_pos,
+                    logical_size: m.logical_size,
+                    overlay_transform: transform,
+                }
+            })
+            .collect();
+        let mut virtuals = Vec::with_capacity(vstate.panels.len());
+        for panel in &vstate.panels {
+            let name = virtual_overlay_name(source, panel.surface, &panel.output_name);
+            let Some(transform) = overlays.overlay_transform(&name) else {
+                waiting_for_spawn = true;
+                continue;
+            };
+            virtuals.push(VirtualPanelPose {
+                surface: panel.surface,
+                logical_size: panel.logical_size,
+                overlay_transform: transform,
+            });
+        }
+        if virtuals.is_empty() {
+            continue;
+        }
+        let prev = COMMITTED_PLACEMENTS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&source)
+            .cloned()
+            .unwrap_or_default();
+        let solution = solve_layout(&physical, &virtuals, None, &prev);
+        COMMITTED_PLACEMENTS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(source, solution.committed);
+        let changed = solution.targets.iter().any(|target| {
+            vstate
+                .panels
+                .iter()
+                .find(|p| p.surface == target.surface)
+                .is_some_and(|p| p.logical_pos != [target.x, target.y])
+        });
+        if changed {
+            crate::frame_host::send(
+                source,
+                &wayvr_ipc::frame::ShellMessage::SyncPanelLayout {
+                    placements: solution.targets,
+                },
+            );
+        }
+    }
+
+    if !waiting_for_spawn {
+        VIRTUAL_LAYOUT_DIRTY_MS.store(0, Ordering::Relaxed);
+    }
+}
+
 pub fn poll_surfaces(app: &mut AppState) {
     if !EMBEDDED.load(Ordering::Relaxed) {
         return;
@@ -117,6 +240,21 @@ pub fn poll_surfaces(app: &mut AppState) {
         }
         app.tasks
             .enqueue(TaskType::Overlay(OverlayTask::SaveLayout));
+    }
+    let retired_virtuals = std::mem::take(
+        &mut *RETIRED_VIRTUALS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+    );
+    for name in retired_virtuals {
+        app.session
+            .config
+            .attribs
+            .retain(|(key, _)| key.as_ref() != name.as_ref());
+        app.tasks
+            .enqueue(TaskType::Overlay(OverlayTask::DropImmediate(
+                OverlaySelector::Name(name),
+            )));
     }
     #[cfg(feature = "feat-monado-metrics")]
     {
@@ -397,6 +535,14 @@ pub(crate) struct DesktopOverlay {
 fn screen_state(name: &str) -> [String; 3] {
     use crate::frame_hosts::Connection;
     use wayvr_ipc::frame::MonitorStatus;
+    if let Some((source, _, _)) = parse_virtual_overlay_name(name) {
+        let line = |status: &str| [status.to_owned(), String::new(), String::new()];
+        return if crate::frame_host::is_connected(source) {
+            line("Waiting for virtual panel…")
+        } else {
+            line("Disconnected")
+        };
+    }
     let Some(pc) = crate::frame_hosts::owner(name) else {
         return ["Unknown PC".into(), String::new(), String::new()];
     };
@@ -446,13 +592,27 @@ impl DesktopOverlay {
         let [width, height] = self.meta.map_or([1920, 1080], |meta| meta.extent);
         let panel_w = 1280u32;
         let panel_h = (u64::from(panel_w) * u64::from(height) / u64::from(width.max(1))) as u32;
+        let title = if let Some((source, id, connector)) = parse_virtual_overlay_name(&self.name) {
+            crate::frame_host::virtual_state(source)
+                .and_then(|state| {
+                    state
+                        .panels
+                        .into_iter()
+                        .find(|panel| panel.surface == id)
+                        .map(|panel| panel.title)
+                })
+                .filter(|title| !title.is_empty())
+                .unwrap_or_else(|| connector.to_owned())
+        } else {
+            crate::frame_hosts::screen_title(&self.name)
+        };
         let mut panel = GuiPanel::new_from_template(
             app,
             "gui/frame-screen-offline.xml",
             (),
             NewGuiPanelParams {
                 extra_vars: [
-                    ("name".into(), crate::frame_hosts::screen_title(&self.name).into()),
+                    ("name".into(), title.into()),
                     ("status".into(), state[0].clone().into()),
                     ("detail".into(), state[1].clone().into()),
                     ("hint".into(), state[2].clone().into()),
@@ -629,7 +789,7 @@ impl OverlayBackend for DesktopOverlay {
     fn on_pointer(&mut self, app: &mut AppState, hit: &PointerHit, pressed: bool) {
         if self.offline.is_some() {
             // Only ever connects: another screen of the same PC may already be streaming
-            if pressed {
+            if pressed && !is_virtual_overlay_name(&self.name) {
                 connect_screen_host(app, &self.name);
             }
             return;

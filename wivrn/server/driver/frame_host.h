@@ -2,6 +2,7 @@
 #pragma once
 #include "frame_abi.h"
 #include "util/u_logging.h"
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <span>
@@ -18,6 +19,7 @@ public:
 	struct callbacks
 	{
 		std::function<void(const frame_host_surface &)> surface;
+		std::function<void(uint32_t, std::array<float, 4>)> surface_region;
 		std::function<void(uint32_t)> surface_removed;
 		std::function<void(uint32_t, std::span<const uint8_t>)> video;
 		std::function<void(std::span<const uint8_t>)> message;
@@ -52,6 +54,13 @@ public:
 		        .user = this,
 		        .surface = [](void * user, const frame_host_surface * surface) {
 			        guarded([&] { static_cast<frame_host_session *>(user)->handlers.surface(*surface); });
+		        },
+		        .surface_region = [](void * user, uint32_t id, const float region[4]) {
+			        guarded([&] {
+				        auto & fn = static_cast<frame_host_session *>(user)->handlers.surface_region;
+				        if (fn && region)
+					        fn(id, {region[0], region[1], region[2], region[3]});
+			        });
 		        },
 		        .surface_removed = [](void * user, uint32_t id) {
 			        guarded([&] { static_cast<frame_host_session *>(user)->handlers.surface_removed(id); });

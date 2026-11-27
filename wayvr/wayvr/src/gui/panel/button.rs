@@ -213,6 +213,125 @@ fn short_duration(btn: &ComponentButton, app: &AppState) -> bool {
     btn.get_time_since_last_pressed().as_secs_f32() < app.session.config.long_press_duration
 }
 
+fn truncate_label(text: &str, max_chars: usize) -> String {
+    let mut out = String::new();
+    for (idx, ch) in text.chars().enumerate() {
+        if idx + 1 >= max_chars {
+            out.push('…');
+            return out;
+        }
+        out.push(ch);
+    }
+    out
+}
+
+fn virtual_menu_cell(
+    title: String,
+    tooltip: Option<String>,
+    press: String,
+    close_on_press: bool,
+) -> wgui::windowing::context_menu::Cell {
+    let mut attribs = vec![AttribPair {
+        attrib: "_press".into(),
+        value: press.into(),
+    }];
+    if close_on_press {
+        attribs.push(AttribPair {
+            attrib: "_press2".into(),
+            value: "::ContextMenuClose".into(),
+        });
+    }
+    wgui::windowing::context_menu::Cell::Button(wgui::windowing::context_menu::Button {
+        title: Translation::from_raw_text_string(title),
+        tooltip: tooltip.map(Translation::from_raw_text_string),
+        action_name: None,
+        sprite_src_builtin: None,
+        attribs,
+    })
+}
+
+fn build_virtual_panel_cells(source: u32) -> Result<Vec<wgui::windowing::context_menu::Cell>, String> {
+    let Some(vstate) = crate::frame_host::virtual_state(source) else {
+        return Err("Virtual panel state is not available yet".into());
+    };
+    if !vstate.capabilities.supported {
+        return Err(vstate
+            .capabilities
+            .reason
+            .unwrap_or_else(|| "Virtual panels require Hyprland".into()));
+    }
+    crate::frame_shell::virtual_refresh(source);
+
+    let mut cells = Vec::new();
+    let max_panels = vstate.capabilities.max_panels as usize;
+    let active = vstate.panels.len();
+    if active >= max_panels {
+        cells.push(virtual_menu_cell(
+            format!("Panel limit reached ({active}/{max_panels})"),
+            None,
+            "::ContextMenuClose".into(),
+            false,
+        ));
+    } else {
+        for (label, w, h) in [
+            ("Blank 1920×1080", 1920, 1080),
+            ("Blank 2560×1440", 2560, 1440),
+            ("Blank 1280×1440 (Portrait)", 1280, 1440),
+        ] {
+            cells.push(virtual_menu_cell(
+                label.into(),
+                None,
+                format!("::FrameShellVirtualCreate {source} blank {w} {h}"),
+                true,
+            ));
+        }
+
+        if let Some(targets) = crate::frame_host::virtual_targets(source) {
+            if !targets.windows.is_empty() {
+                cells.push(wgui::windowing::context_menu::Cell::Separator);
+                for win in targets.windows.into_iter().take(10) {
+                    let raw = if !win.title.is_empty() {
+                        win.title.clone()
+                    } else {
+                        win.app_id.clone()
+                    };
+                    let label = format!("Window: {} [{}]", truncate_label(&raw, 36), win.monitor);
+                    cells.push(virtual_menu_cell(
+                        label,
+                        Some(raw),
+                        format!("::FrameShellVirtualCreate {source} window {}", win.address),
+                        true,
+                    ));
+                }
+            }
+            if !targets.workspaces.is_empty() {
+                cells.push(wgui::windowing::context_menu::Cell::Separator);
+                for ws in targets.workspaces.into_iter().take(8) {
+                    let label = format!(
+                        "Workspace {} ({} win) [{}]",
+                        ws.name, ws.windows, ws.monitor
+                    );
+                    cells.push(virtual_menu_cell(
+                        label,
+                        None,
+                        format!("::FrameShellVirtualCreate {source} workspace {}", ws.id),
+                        true,
+                    ));
+                }
+            }
+        }
+    }
+
+    cells.push(wgui::windowing::context_menu::Cell::Separator);
+    cells.push(virtual_menu_cell(
+        "Refresh targets".into(),
+        None,
+        format!("::FrameShellVirtualMenu {source}"),
+        false,
+    ));
+    Ok(cells)
+}
+
 pub(super) fn setup_custom_button<S: 'static>(
     layout: &mut Layout,
     parser_state: &ParserState,
@@ -797,6 +916,127 @@ pub(super) fn setup_custom_button<S: 'static>(
                             return Ok(EventResult::Pass);
                         }
                         crate::frame_shell::send_command(&line);
+                        Ok(EventResult::Consumed)
+                    })
+                }
+                "::FrameShellVirtualMenu" => {
+                    let chosen_source = args.next().and_then(|s| s.parse::<u32>().ok());
+                    let context_menu = context_menu.clone();
+                    let on_custom_attribs = on_custom_attribs.clone();
+                    Box::new(move |_common, data, app, _| {
+                        if !test_button(data) || !test_duration(&button, app) {
+                            return Ok(EventResult::Pass);
+                        }
+                        let pos = data
+                            .metadata
+                            .get_mouse_pos_absolute()
+                            .map_or(wgui::windowing::context_menu::Position::Unspecified, Into::into);
+                        let source = match chosen_source {
+                            Some(src) => Some(src),
+                            None => {
+                                let sources = crate::frame_shell::virtual_supported_sources();
+                                if sources.is_empty() {
+                                    Toast::new(
+                                        ToastTopic::System,
+                                        Some(Translation::from_raw_text("Virtual panels")),
+                                        Translation::from_raw_text(
+                                            "No connected PC supports virtual panels (requires Hyprland)",
+                                        ),
+                                    )
+                                    .with_timeout(2.5)
+                                    .submit(app);
+                                    context_menu.borrow().close();
+                                    return Ok(EventResult::Consumed);
+                                }
+                                if sources.len() == 1 {
+                                    Some(sources[0].0)
+                                } else {
+                                    let cells = sources
+                                        .into_iter()
+                                        .map(|(src, pc_name, max_panels, count)| {
+                                            virtual_menu_cell(
+                                                format!("{pc_name} ({count}/{max_panels})"),
+                                                None,
+                                                format!("::FrameShellVirtualMenu {src}"),
+                                                false,
+                                            )
+                                        })
+                                        .collect();
+                                    context_menu.borrow_mut().open(OpenParams {
+                                        on_custom_attribs: Some(on_custom_attribs.clone()),
+                                        blueprint: Blueprint::Cells(cells),
+                                        position: pos,
+                                    });
+                                    return Ok(EventResult::Consumed);
+                                }
+                            }
+                        };
+                        if let Some(source) = source {
+                            match build_virtual_panel_cells(source) {
+                                Ok(cells) => {
+                                    context_menu.borrow_mut().open(OpenParams {
+                                        on_custom_attribs: Some(on_custom_attribs.clone()),
+                                        blueprint: Blueprint::Cells(cells),
+                                        position: pos,
+                                    });
+                                }
+                                Err(msg) => {
+                                    Toast::new(
+                                        ToastTopic::System,
+                                        Some(Translation::from_raw_text("Virtual panels")),
+                                        Translation::from_raw_text_string(msg),
+                                    )
+                                    .with_timeout(2.5)
+                                    .submit(app);
+                                    context_menu.borrow().close();
+                                }
+                            }
+                        }
+                        Ok(EventResult::Consumed)
+                    })
+                }
+                "::FrameShellVirtualCreate" => {
+                    let source = args.next().and_then(|s| s.parse::<u32>().ok());
+                    let kind = args.next().unwrap_or_default().to_owned();
+                    let arg1 = args.next().unwrap_or_default().to_owned();
+                    let arg2 = args.next().unwrap_or_default().to_owned();
+                    Box::new(move |_common, data, app, _| {
+                        if !test_button(data) || !test_duration(&button, app) {
+                            return Ok(EventResult::Pass);
+                        }
+                        if let Some(source) = source {
+                            match kind.as_str() {
+                                "blank" => {
+                                    if let (Ok(w), Ok(h)) =
+                                        (arg1.parse::<u32>(), arg2.parse::<u32>())
+                                    {
+                                        crate::frame_shell::virtual_create_blank(source, w, h);
+                                    }
+                                }
+                                "window" => {
+                                    crate::frame_shell::virtual_create_window(source, &arg1);
+                                }
+                                "workspace" => {
+                                    if let Ok(id) = arg1.parse::<i32>() {
+                                        crate::frame_shell::virtual_create_workspace(source, id);
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        Ok(EventResult::Consumed)
+                    })
+                }
+                "::FrameShellVirtualClose" => {
+                    let source = args.next().and_then(|s| s.parse::<u32>().ok());
+                    let surface = args.next().and_then(|s| s.parse::<u32>().ok());
+                    Box::new(move |_common, data, app, _| {
+                        if !test_button(data) || !test_duration(&button, app) {
+                            return Ok(EventResult::Pass);
+                        }
+                        if let (Some(source), Some(surface)) = (source, surface) {
+                            crate::frame_shell::virtual_close(source, surface);
+                        }
                         Ok(EventResult::Consumed)
                     })
                 }

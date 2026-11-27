@@ -10,7 +10,7 @@ use std::{
 use wayvr_ipc::{
     frame::{
         CaptureStatus, DesktopSettings, HostMessage, Notification, RuntimeClient, SessionFrame,
-        ShellMessage,
+        ShellMessage, VirtualState, VirtualTargets,
     },
     packet_client::PacketClient,
 };
@@ -34,6 +34,8 @@ struct Pc {
     sent_background: Option<bool>,
     sent_settings: Option<DesktopSettings>,
     capture: Option<CaptureStatus>,
+    virtual_state: Option<VirtualState>,
+    virtual_targets: Option<VirtualTargets>,
 }
 
 struct State {
@@ -108,6 +110,8 @@ pub fn connected(source: u32, _background: bool) {
             sent_background: None,
             sent_settings: None,
             capture: None,
+            virtual_state: None,
+            virtual_targets: None,
         },
     );
     drop(state);
@@ -192,6 +196,26 @@ pub fn receive(source: u32, data: &[u8]) {
         }
         HostMessage::IpcClose(id) => state.ipc.push_back(IpcEvent::Close(source, id)),
         HostMessage::Capture(capture) => pc.capture = Some(capture),
+        HostMessage::VirtualState(virtual_state) => {
+            if pc.virtual_state.as_ref() != Some(&virtual_state) {
+                if pc
+                    .virtual_state
+                    .as_ref()
+                    .map(|old| &old.panels)
+                    != Some(&virtual_state.panels)
+                {
+                    crate::frame_shell::mark_virtual_layout_dirty();
+                }
+                pc.virtual_state = Some(virtual_state);
+                crate::frame_shell::bump_lobby_state();
+            }
+        }
+        HostMessage::VirtualTargets(targets) => {
+            if pc.virtual_targets.as_ref() != Some(&targets) {
+                pc.virtual_targets = Some(targets);
+                crate::frame_shell::bump_lobby_state();
+            }
+        }
     }
     drop(guard);
     sync_presentation();
@@ -273,6 +297,20 @@ pub fn resync_desktop_settings() {
 /// Where a connected PC's monitor capture stands, unknown until it says
 pub fn capture(source: u32) -> Option<CaptureStatus> {
     state().pcs.get(&source).and_then(|pc| pc.capture.clone())
+}
+
+pub fn virtual_state(source: u32) -> Option<VirtualState> {
+    state()
+        .pcs
+        .get(&source)
+        .and_then(|pc| pc.virtual_state.clone())
+}
+
+pub fn virtual_targets(source: u32) -> Option<VirtualTargets> {
+    state()
+        .pcs
+        .get(&source)
+        .and_then(|pc| pc.virtual_targets.clone())
 }
 
 /// Steam app ids of a PC's running games

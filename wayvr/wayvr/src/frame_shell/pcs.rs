@@ -34,6 +34,13 @@ pub(crate) fn pc_stream(source: u32) -> serde_json::Value {
     stream["running"] = crate::frame_host::clients(source).into_iter().map(|client| serde_json::json!({
         "id": client.id, "name": client.name, "overlay": client.overlay, "active": client.primary, "visible": client.visible
     })).collect();
+    stream["virtual_auto_sync"] = virtual_auto_sync().into();
+    if let Some(vs) = crate::frame_host::virtual_state(source) {
+        stream["virtual_state"] = serde_json::to_value(vs).unwrap_or(serde_json::Value::Null);
+    }
+    if let Some(vt) = crate::frame_host::virtual_targets(source) {
+        stream["virtual_targets"] = serde_json::to_value(vt).unwrap_or(serde_json::Value::Null);
+    }
     stream
 }
 
@@ -134,8 +141,58 @@ pub fn connect_host(app: &mut AppState, key: &str, connect: bool) {
     }
 }
 
-/// Queues a command line for the WiVRn client; PIN pad keys are collected here into one `pin` command.
+/// Queues a command line for the WiVRn client; PIN pad and virtual panel keys are handled directly.
 pub fn send_command(command: &str) {
+    if let Some(rest) = command.strip_prefix("virtual_") {
+        let mut parts = rest.splitn(4, ' ');
+        match parts.next() {
+            Some("auto_sync") => {
+                if let Some(flag) = parts.next() {
+                    set_virtual_auto_sync(flag == "1" || flag == "true");
+                }
+            }
+            Some("refresh") => {
+                if let Some(source) = parts.next().and_then(|s| s.parse::<u32>().ok()) {
+                    virtual_refresh(source);
+                }
+            }
+            Some("create_blank") => {
+                if let (Some(source), Some(w), Some(h)) = (
+                    parts.next().and_then(|s| s.parse::<u32>().ok()),
+                    parts.next().and_then(|s| s.parse::<u32>().ok()),
+                    parts.next().and_then(|s| s.parse::<u32>().ok()),
+                ) {
+                    virtual_create_blank(source, w, h);
+                }
+            }
+            Some("create_window") => {
+                if let (Some(source), Some(addr)) = (
+                    parts.next().and_then(|s| s.parse::<u32>().ok()),
+                    parts.next(),
+                ) {
+                    virtual_create_window(source, addr);
+                }
+            }
+            Some("create_workspace") => {
+                if let (Some(source), Some(id)) = (
+                    parts.next().and_then(|s| s.parse::<u32>().ok()),
+                    parts.next().and_then(|s| s.parse::<i32>().ok()),
+                ) {
+                    virtual_create_workspace(source, id);
+                }
+            }
+            Some("close") => {
+                if let (Some(source), Some(surface)) = (
+                    parts.next().and_then(|s| s.parse::<u32>().ok()),
+                    parts.next().and_then(|s| s.parse::<u32>().ok()),
+                ) {
+                    virtual_close(source, surface);
+                }
+            }
+            _ => {}
+        }
+        return;
+    }
     let translated;
     let command = if let Some((verb, rest)) = command.split_once(' ') {
         if matches!(
@@ -216,4 +273,70 @@ pub fn remote_game_running(host: &str, app_id: &str) -> bool {
 /// A PC's current connection, by its ID
 pub(crate) fn source_for_host(host: &str) -> Option<u32> {
     crate::frame_hosts::resolve(host)?.source
+}
+
+pub fn virtual_supported_sources() -> Vec<(u32, String, u32, usize)> {
+    crate::frame_hosts::pcs()
+        .into_iter()
+        .filter_map(|pc| {
+            let source = pc.source?;
+            let state = crate::frame_host::virtual_state(source)?;
+            state
+                .capabilities
+                .supported
+                .then_some((source, pc.name, state.capabilities.max_panels, state.panels.len()))
+        })
+        .collect()
+}
+
+pub fn virtual_refresh(source: u32) {
+    crate::frame_host::send(source, &wayvr_ipc::frame::ShellMessage::RefreshVirtualTargets);
+}
+
+pub fn virtual_create_blank(source: u32, width: u32, height: u32) {
+    crate::frame_host::send(
+        source,
+        &wayvr_ipc::frame::ShellMessage::CreateVirtualPanel {
+            source: wayvr_ipc::frame::VirtualTargetKind::Blank { width, height },
+            size: [width, height],
+        },
+    );
+}
+
+pub fn virtual_create_window(source: u32, address: &str) {
+    let (title, app_id) = crate::frame_host::virtual_targets(source)
+        .and_then(|t| t.windows.into_iter().find(|w| w.address == address))
+        .map_or_else(|| (String::new(), String::new()), |w| (w.title, w.app_id));
+    crate::frame_host::send(
+        source,
+        &wayvr_ipc::frame::ShellMessage::CreateVirtualPanel {
+            source: wayvr_ipc::frame::VirtualTargetKind::Window {
+                address: address.to_owned(),
+                title,
+                app_id,
+            },
+            size: [1920, 1080],
+        },
+    );
+}
+
+pub fn virtual_create_workspace(source: u32, id: i32) {
+    let name = crate::frame_host::virtual_targets(source)
+        .and_then(|t| t.workspaces.into_iter().find(|w| w.id == id))
+        .map(|w| w.name)
+        .unwrap_or_default();
+    crate::frame_host::send(
+        source,
+        &wayvr_ipc::frame::ShellMessage::CreateVirtualPanel {
+            source: wayvr_ipc::frame::VirtualTargetKind::Workspace { id, name },
+            size: [1920, 1080],
+        },
+    );
+}
+
+pub fn virtual_close(source: u32, surface: u32) {
+    crate::frame_host::send(
+        source,
+        &wayvr_ipc::frame::ShellMessage::CloseVirtualPanel { surface },
+    );
 }

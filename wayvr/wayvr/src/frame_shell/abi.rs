@@ -103,6 +103,7 @@ pub(crate) extern "C" fn connected(source: u32, connected: bool, vr: bool) {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .retain(|event| event.source != source);
     let mut released = Vec::new();
+    let mut retired_virtuals = Vec::new();
     surfaces().retain(|&key, surface| {
         if (key >> 32) as u32 != source {
             return true;
@@ -110,12 +111,22 @@ pub(crate) extern "C" fn connected(source: u32, connected: bool, vr: bool) {
         if let Some((frame, _)) = surface.frame.take() {
             released.push(frame.id);
         }
+        if surface.virtual_panel {
+            retired_virtuals.push(surface.name.clone());
+        }
         false
     });
+    if !retired_virtuals.is_empty() {
+        RETIRED_VIRTUALS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .extend(retired_virtuals);
+    }
     for id in released {
         release_frame(id);
     }
     crate::frame_host::disconnected(source);
+    clear_virtual_layout(source);
     CONNECTED.store(crate::frame_host::vr_source().is_some(), Ordering::Relaxed);
     let mut state = LOBBY_STATE
         .lock()

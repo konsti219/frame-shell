@@ -465,6 +465,16 @@ fn rebuild_groups(
         params.insert("status", host.status.as_str());
         params.insert("cookie", host.cookie.as_str());
         params.insert("connected_skip", if connected { "0" } else { "1" });
+        params.insert_rc(
+            "source",
+            host.source
+                .map_or_else(String::new, |s| s.to_string())
+                .into(),
+        );
+        params.insert(
+            "virtual_skip",
+            if host.virtual_supported { "0" } else { "1" },
+        );
         let (action, label) = if connected {
             (
                 format!("::FrameShell disconnect {}", host.cookie),
@@ -510,6 +520,51 @@ fn rebuild_groups(
                 crate::frame_hosts::screen_title(&meta.name).into(),
             );
             parser_state.instantiate_template(doc_params, "Screen", layout, group, params)?;
+            let button =
+                parser_state.fetch_component_as::<ComponentButton>(&format!("overlay_{i}"))?;
+            button.set_sticky_state_immediate(&mut layout.common(), meta.visible);
+            me.overlay_buttons.insert(meta.id, button);
+        }
+
+        // Its virtual panels
+        let virtual_state = host.source.and_then(crate::frame_host::virtual_state);
+        for (i, meta) in me.last_metas.iter().enumerate() {
+            if !matches!(meta.category, OverlayCategory::Screen) {
+                continue;
+            }
+            let Some((src, surface, connector)) =
+                crate::frame_shell::parse_virtual_overlay_name(&meta.name)
+            else {
+                continue;
+            };
+            if host.source != Some(src) {
+                continue;
+            }
+            let mut params = TemplateParams::new();
+            params.insert(
+                "keep_visible_display",
+                if meta.keep_visible_when_hidden {
+                    "flex"
+                } else {
+                    "none"
+                },
+            );
+            let badge = connector
+                .strip_prefix("FRAME-")
+                .map_or_else(|| screen_label(connector), str::to_owned);
+            let title = virtual_state
+                .as_ref()
+                .and_then(|vs| vs.panels.iter().find(|p| p.surface == surface))
+                .map(|p| p.title.as_str())
+                .filter(|t| !t.is_empty())
+                .unwrap_or(connector);
+            params.insert_rc("display", badge.into());
+            params.insert_rc("idx", i.to_string().into());
+            params.insert("name", meta.name.as_ref());
+            params.insert_rc("source", src.to_string().into());
+            params.insert_rc("surface", surface.to_string().into());
+            params.insert("title", title);
+            parser_state.instantiate_template(doc_params, "VirtualScreen", layout, group, params)?;
             let button =
                 parser_state.fetch_component_as::<ComponentButton>(&format!("overlay_{i}"))?;
             button.set_sticky_state_immediate(&mut layout.common(), meta.visible);

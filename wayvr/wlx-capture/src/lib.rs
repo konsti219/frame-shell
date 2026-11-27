@@ -3,6 +3,13 @@
 
 pub use drm_fourcc::{DrmFormat, DrmFourcc, DrmModifier};
 use frame::WlxFrame;
+pub use libc;
+#[cfg(feature = "wayland")]
+pub use smithay_client_toolkit::reexports::protocols_wlr as wayland_protocols_wlr;
+#[cfg(feature = "wayland")]
+pub use wayland_client;
+#[cfg(feature = "wayland")]
+pub use wayland_protocols;
 
 pub mod frame;
 

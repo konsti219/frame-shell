@@ -103,6 +103,10 @@ public:
 			                .removed = false,
 			                .codec = surface.codec == 1 ? video_codec::h265 : video_codec::h264,
 			        }); },
+		                                                    .surface_region = [this](uint32_t id, std::array<float, 4> region) {
+			        std::scoped_lock lock(mutex);
+			        if (auto it = regions.find(id); it != regions.end())
+				        it->second = region; },
 		                                                    .surface_removed = [this](uint32_t id) {
 			        {
 				        std::scoped_lock lock(mutex);

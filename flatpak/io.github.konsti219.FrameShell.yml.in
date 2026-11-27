@@ -32,6 +32,7 @@ finish-args:
   - --filesystem=/run/media:ro
   - --filesystem=~/.var/app/com.valvesoftware.Steam:ro
   - --filesystem=xdg-run/pipewire-0
+  - --filesystem=xdg-run/hypr
   - --filesystem=xdg-config/openxr:create
   - --filesystem=xdg-config/openvr:create
   # The GPU time layer's manifest, written while a headset is connected

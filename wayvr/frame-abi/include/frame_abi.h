@@ -122,6 +122,8 @@ typedef struct frame_host_callbacks
 	void * user;
 	// Announced before a monitor's first frame and again when its size or codec changes
 	void (*surface)(void * user, const frame_host_surface * surface);
+	// Updates where a streamed surface lies in the whole desktop (x, y, w, h as fractions) without re-announcing it
+	void (*surface_region)(void * user, uint32_t id, const float region[4]);
 	void (*surface_removed)(void * user, uint32_t id);
 	// One encoded access unit
 	void (*video)(void * user, uint32_t surface, const uint8_t * data, size_t size);

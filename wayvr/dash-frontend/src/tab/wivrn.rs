@@ -56,6 +56,9 @@ pub struct Host {
 	pub stream: Value,
 	/// Its stream settings
 	pub settings: Value,
+	pub virtual_state: Value,
+	pub virtual_targets: Value,
+	pub virtual_auto_sync: bool,
 }
 
 /// The WiVRn client's lobby and stream state, parsed
@@ -88,23 +91,35 @@ impl WivrnState {
 			.and_then(Value::as_array)
 			.into_iter()
 			.flatten()
-			.map(|server| Host {
-				cookie: text(server, "cookie").into(),
-				name: text(server, "name").into(),
-				hostname: text(server, "hostname"),
-				visible: flag(server, "visible"),
-				compatible: flag(server, "compatible"),
-				autoconnect: flag(server, "autoconnect"),
-				paired: flag(server, "paired"),
-				manual: flag(server, "manual"),
-				source: server.get("source").and_then(Value::as_u64).map(|s| s as u32),
-				connection: text(server, "state"),
-				detail: text(server, "detail"),
-				status: text(server, "status"),
-				presenting: flag(server, "presenting"),
-				version: text(server, "version"),
-				stream: server.get("stream").cloned().unwrap_or(Value::Null),
-				settings: server.get("settings").cloned().unwrap_or(Value::Null),
+			.map(|server| {
+				let stream_val = server.get("stream").cloned().unwrap_or(Value::Null);
+				let virtual_state = stream_val.get("virtual_state").cloned().unwrap_or(Value::Null);
+				let virtual_targets = stream_val.get("virtual_targets").cloned().unwrap_or(Value::Null);
+				let virtual_auto_sync = stream_val
+					.get("virtual_auto_sync")
+					.and_then(Value::as_bool)
+					.unwrap_or(true);
+				Host {
+					cookie: text(server, "cookie").into(),
+					name: text(server, "name").into(),
+					hostname: text(server, "hostname"),
+					visible: flag(server, "visible"),
+					compatible: flag(server, "compatible"),
+					autoconnect: flag(server, "autoconnect"),
+					paired: flag(server, "paired"),
+					manual: flag(server, "manual"),
+					source: server.get("source").and_then(Value::as_u64).map(|s| s as u32),
+					connection: text(server, "state"),
+					detail: text(server, "detail"),
+					status: text(server, "status"),
+					presenting: flag(server, "presenting"),
+					version: text(server, "version"),
+					stream: stream_val,
+					settings: server.get("settings").cloned().unwrap_or(Value::Null),
+					virtual_state,
+					virtual_targets,
+					virtual_auto_sync,
+				}
 			})
 			.collect();
 		Self {
@@ -145,6 +160,7 @@ pub struct TabWivrn<T> {
 
 	id_hosts: WidgetID,
 	id_content: WidgetID,
+	id_virtual_panels: WidgetID,
 	id_settings: WidgetID,
 	/// Template instances (their components) of the current host bar and page
 	cells: Vec<ParserData>,
@@ -285,6 +301,7 @@ impl<T> TabWivrn<T> {
 		Ok(Self {
 			id_hosts: state.get_widget_id("hosts_root")?,
 			id_content: state.get_widget_id("content")?,
+			id_virtual_panels: state.get_widget_id("virtual_panels")?,
 			id_settings: state.get_widget_id("settings")?,
 			state,
 			tasks: Tasks::new(),
@@ -321,6 +338,7 @@ impl<T> TabWivrn<T> {
 	fn rebuild(&mut self, layout: &mut Layout, globals: &WguiGlobals, wivrn: &WivrnState) -> anyhow::Result<()> {
 		layout.remove_children(self.id_hosts);
 		layout.remove_children(self.id_content);
+		layout.remove_children(self.id_virtual_panels);
 		self.cells.clear();
 
 		if wivrn.hosts.is_empty() {
@@ -460,7 +478,151 @@ impl<T> TabWivrn<T> {
 			}
 		}
 
+		self.virtual_panels(layout, globals, wivrn, host)?;
 		self.stream_settings(layout, globals, &host.cookie, &host.settings, wivrn.game_running(host))?;
+		Ok(())
+	}
+
+	fn virtual_panels(
+		&mut self,
+		layout: &mut Layout,
+		globals: &WguiGlobals,
+		wivrn: &WivrnState,
+		host: &Host,
+	) -> anyhow::Result<()> {
+		if !wivrn.connected_to(host) {
+			return Ok(());
+		}
+		let Some(source) = host.source else {
+			return Ok(());
+		};
+		let Some(caps) = host.virtual_state.get("capabilities").filter(|v| v.is_object()) else {
+			return Ok(());
+		};
+		let supported = flag(caps, "supported");
+		let max_panels = caps.get("max_panels").and_then(Value::as_u64).unwrap_or(0);
+		let panels = host
+			.virtual_state
+			.get("panels")
+			.and_then(Value::as_array)
+			.map_or(&[][..], Vec::as_slice);
+
+		let mut params = TemplateParams::new();
+		params.insert_str("count", panels.len().to_string());
+		params.insert_str("max_panels", max_panels.to_string());
+		if supported {
+			params.insert("show_status", "none");
+			params.insert("show_controls", "flex");
+			params.insert("status_text", "");
+		} else {
+			let reason = caps
+				.get("reason")
+				.and_then(Value::as_str)
+				.unwrap_or("Virtual panels currently require Hyprland.");
+			params.insert("show_status", "flex");
+			params.insert("show_controls", "none");
+			params.insert("status_text", reason);
+		}
+		let section = self.template(layout, globals, "VirtualPanelsSection", self.id_virtual_panels, params)?;
+		if !supported {
+			return Ok(());
+		}
+
+		self.button(section, "btn_virtual_refresh")?.on_click(
+			self.tasks
+				.get_button_click_callback(Task::Command(format!("virtual_refresh {source}"))),
+		);
+		let checkbox = self.cells[section].fetch_component_as::<ComponentCheckbox>("virtual_auto_sync")?;
+		checkbox.set_checked(&mut layout.common(), host.virtual_auto_sync);
+		let tasks = self.tasks.clone();
+		checkbox.on_toggle(Box::new(move |_, event| {
+			tasks.push(Task::Command(format!("virtual_auto_sync {}", u8::from(event.checked))));
+			Ok(())
+		}));
+
+		let active_parent = self.cells[section].get_widget_id("virtual_active")?;
+		for panel in panels {
+			let Some(surface) = panel.get("surface").and_then(Value::as_u64) else {
+				continue;
+			};
+			let output_name = text(panel, "output_name");
+			let title = text(panel, "title");
+			let width = panel.get("width").and_then(Value::as_u64).unwrap_or(0);
+			let height = panel.get("height").and_then(Value::as_u64).unwrap_or(0);
+			let pos = panel.get("logical_pos").and_then(Value::as_array);
+			let (px, py) = (
+				pos.and_then(|a| a.first()).and_then(Value::as_i64).unwrap_or(0),
+				pos.and_then(|a| a.get(1)).and_then(Value::as_i64).unwrap_or(0),
+			);
+			let mut row_params = TemplateParams::new();
+			row_params.insert("title", if title.is_empty() { &output_name } else { &title });
+			row_params.insert_str("detail", format!("{output_name} · {width}×{height} at {px}, {py}"));
+			let row = self.template(layout, globals, "VirtualActiveRow", active_parent, row_params)?;
+			self.button(row, "btn_close")?.on_click(
+				self.tasks
+					.get_button_click_callback(Task::Command(format!("virtual_close {source} {surface}"))),
+			);
+		}
+
+		let at_cap = panels.len() >= max_panels as usize;
+		for (btn_id, w, h) in [
+			("btn_blank_1080", 1920, 1080),
+			("btn_blank_1440", 2560, 1440),
+			("btn_blank_portrait", 1280, 1440),
+		] {
+			let btn = self.button(section, btn_id)?;
+			btn.set_enabled(&mut layout.common(), !at_cap);
+			btn.on_click(self.tasks.get_button_click_callback(Task::Command(format!(
+				"virtual_create_blank {source} {w} {h}"
+			))));
+		}
+
+		let windows_parent = self.cells[section].get_widget_id("virtual_windows")?;
+		if let Some(windows) = host.virtual_targets.get("windows").and_then(Value::as_array) {
+			for win in windows.iter().take(12) {
+				let address = text(win, "address");
+				if address.is_empty() {
+					continue;
+				}
+				let title = text(win, "title");
+				let app_id = text(win, "app_id");
+				let monitor = text(win, "monitor");
+				let raw = if title.is_empty() { app_id } else { title };
+				let short: String = raw.chars().take(48).collect();
+				let mut row_params = TemplateParams::new();
+				row_params.insert_str("label", format!("{short} [{monitor}]"));
+				row_params.insert("tooltip", &raw);
+				let row = self.template(layout, globals, "VirtualTargetRow", windows_parent, row_params)?;
+				let btn = self.button(row, "btn_add")?;
+				btn.set_enabled(&mut layout.common(), !at_cap);
+				btn.on_click(self.tasks.get_button_click_callback(Task::Command(format!(
+					"virtual_create_window {source} {address}"
+				))));
+			}
+		}
+
+		let workspaces_parent = self.cells[section].get_widget_id("virtual_workspaces")?;
+		if let Some(workspaces) = host.virtual_targets.get("workspaces").and_then(Value::as_array) {
+			for ws in workspaces.iter().take(10) {
+				let Some(id) = ws.get("id").and_then(Value::as_i64) else {
+					continue;
+				};
+				let name = text(ws, "name");
+				let monitor = text(ws, "monitor");
+				let win_count = ws.get("windows").and_then(Value::as_u64).unwrap_or(0);
+				let mut row_params = TemplateParams::new();
+				let label = format!("Workspace {name} ({win_count} win) [{monitor}]");
+				row_params.insert("label", &label);
+				row_params.insert("tooltip", &label);
+				let row = self.template(layout, globals, "VirtualTargetRow", workspaces_parent, row_params)?;
+				let btn = self.button(row, "btn_add")?;
+				btn.set_enabled(&mut layout.common(), !at_cap);
+				btn.on_click(self.tasks.get_button_click_callback(Task::Command(format!(
+					"virtual_create_workspace {source} {id}"
+				))));
+			}
+		}
+
 		Ok(())
 	}
 

@@ -156,9 +156,32 @@
     </Button>
   </template>
 
+  <blueprint name="menu_virtual_screen">
+    <context_menu>
+      <cell translation="BAR.TOGGLE_VISIBILITY" _press="::OverlayToggle ${name}" />
+      <cell translation="BAR.KEEP_VISIBLE_WHEN_HIDDEN" _press="::OverlayToggleKeepVisibleWhenHidden ${name}" />
+      <cell translation="BAR.RESET_POSITION" _press="::OverlayReset ${name}" />
+      <cell text="Close virtual panel" _press="::FrameShellVirtualClose ${source} ${surface}" _press2="::ContextMenuClose" />
+    </context_menu>
+  </blueprint>
+
+  <template name="VirtualScreen">
+    <Button macro="button_style" id="overlay_${idx}" tooltip_str="${title}" _context_name="${name}" _context_source="${source}" _context_surface="${surface}" _press_left="::OverlayToggle ${name}" _press_right="::ContextMenuOpen menu_virtual_screen">
+      <sprite width="38" height="38" src_builtin="@/edit/screen.svg" />
+      <div position="absolute" margin_top="-7" margin_left="-1">
+        <label text="${display}" size="~text_size" weight="bold" parent_color="background" />
+      </div>
+      <rectangle display="${keep_visible_display}" new_pass="1" position="absolute" width="20" height="20" margin_top="-26" margin_left="26"
+        align_items="center" justify_content="center" round="50%" color="primary" border="2" border_color="background">
+        <sprite width="12" height="12" color="background" parent_color="ignore" src_builtin="@/edit/pin.svg" />
+      </rectangle>
+    </Button>
+  </template>
+
   <!-- Frame shell: a PC's group, led by a button with the PC's actions; its screens and applications follow -->
   <blueprint name="menu_host">
     <context_menu>
+      <cell skip="${virtual_skip}" text="Add virtual panel…" _press="::FrameShellVirtualMenu ${source}" />
       <cell skip="${connected_skip}" text="Keep background on this PC" _press="::FrameShell pin_vr ${cookie}" _press2="::ContextMenuClose" />
       <cell text="Automatic background selection" _press="::FrameShell auto_vr" _press2="::ContextMenuClose" />
       <cell text="${action_label}" _press="${action}" _press2="::ContextMenuClose" />
@@ -169,7 +192,7 @@
     <!-- None for the first group while the headset has nothing in the row -->
     <rectangle width="2" height="100%" color="primary" display="${separator}" />
     <div id="host_${idx}" gap="6" align_items="center">
-      <Button macro="button_style" id="hostbtn_${idx}" tooltip_str="${name} · ${status}" _context_action="${action}" _context_action_label="${action_label}" _context_cookie="${cookie}" _context_connected_skip="${connected_skip}" _press_left="${action}" _press_right="::ContextMenuOpen menu_host">
+      <Button macro="button_style" id="hostbtn_${idx}" tooltip_str="${name} · ${status}" _context_action="${action}" _context_action_label="${action_label}" _context_cookie="${cookie}" _context_connected_skip="${connected_skip}" _context_source="${source}" _context_virtual_skip="${virtual_skip}" _press_left="${action}" _press_right="::ContextMenuOpen menu_host">
         <sprite width="38" height="38" src_builtin="@/keyboard/host.svg" />
         <rectangle display="${presenting_display}" new_pass="1" position="absolute" width="20" height="20" margin_top="-26" margin_left="26"
           align_items="center" justify_content="center" round="50%" color="primary" border="2" border_color="background">
@@ -270,6 +293,7 @@
       <cell translation="BAR.HANDSFREE.TITLE" _press="::ContextMenuOpen menu_handsfree" />
       <cell translation="BAR.ADD_MIRROR" _press="::NewMirror" skip="${not_wayland}" />
       <cell translation="BAR.ADD_PASSTHRU" _press="::NewPassthru" skip="${not_passthru}" />
+      <cell text="Add virtual panel…" _press="::FrameShellVirtualMenu" skip="${not_embedded}" />
       <cell translation="BAR.ADD_NEW_SET" _press="::AddSet" />
       <cell translation="BAR.DELETE_CURRENT_SET" _press="::DeleteSet" />
     </context_menu>

@@ -47,12 +47,14 @@ mod abi;
 mod desktops;
 mod floor;
 mod keys;
+mod layout_solver;
 mod pcs;
 mod top_row;
 pub use abi::*;
 pub use desktops::*;
 pub use floor::*;
 pub use keys::*;
+pub use layout_solver::*;
 pub use pcs::*;
 pub use top_row::*;
 
@@ -104,6 +106,8 @@ static REMOTE_LAYER_VISIBLE: AtomicBool = AtomicBool::new(false);
 static INPUT: Mutex<VecDeque<ShellInput>> = Mutex::new(VecDeque::new());
 /// PC monitors announced by the client, keyed by `surface_key`
 static SURFACES: Mutex<BTreeMap<u64, Surface>> = Mutex::new(BTreeMap::new());
+/// Overlay names of transient virtual panels removed by the host or on disconnect
+static RETIRED_VIRTUALS: Mutex<Vec<Arc<str>>> = Mutex::new(Vec::new());
 /// Counts `openxr_run`s, each of which starts with no desktop overlays
 static RUN: AtomicU64 = AtomicU64::new(0);
 /// Surface the PC pointer was last moved on
@@ -131,6 +135,10 @@ static START: std::sync::LazyLock<std::time::Instant> =
 /// Floor grid: pinned from the watch, or shown until this time (ms since START) after a playspace change
 /// When an overlay was last let go of (ms since START, 0 = saved), to save the layout shortly after
 static LAYOUT_CHANGED_MS: AtomicU64 = AtomicU64::new(0);
+/// Automatically sync VR virtual panel 3D arrangement back to the PC's 2D monitor layout
+static VIRTUAL_AUTO_SYNC: AtomicBool = AtomicBool::new(true);
+/// Debounce timer for 3D-to-2D virtual panel layout sync (ms since START, 0 = clean)
+static VIRTUAL_LAYOUT_DIRTY_MS: AtomicU64 = AtomicU64::new(0);
 static FLOOR_PINNED: AtomicBool = AtomicBool::new(false);
 static FLOOR_UNTIL_MS: AtomicU64 = AtomicU64::new(0);
 static FLOOR_SPAWNED: AtomicBool = AtomicBool::new(false);
@@ -180,11 +188,31 @@ pub fn send_host_message(source: u32, data: &[u8]) -> bool {
     false
 }
 
+pub const VIRTUAL_OVERLAY_PREFIX: &str = "pc-virtual-";
+
+pub fn virtual_overlay_name(source: u32, surface: u32, connector: &str) -> Arc<str> {
+    format!("{VIRTUAL_OVERLAY_PREFIX}{source}-{surface} {connector}")
+        .trim()
+        .into()
+}
+
+pub fn parse_virtual_overlay_name(name: &str) -> Option<(u32, u32, &str)> {
+    let rest = name.strip_prefix(VIRTUAL_OVERLAY_PREFIX)?;
+    let (ids, connector) = rest.split_once(' ').unwrap_or((rest, ""));
+    let (source, surface) = ids.split_once('-')?;
+    Some((source.parse().ok()?, surface.parse().ok()?, connector))
+}
+
+pub fn is_virtual_overlay_name(name: &str) -> bool {
+    parse_virtual_overlay_name(name).is_some()
+}
+
 struct Surface {
     visible: Option<bool>,
     name: Arc<str>,
     connector: String,
     registered: bool,
+    virtual_panel: bool,
     /// Latest decoded frame from the client's V4L2 decoder, with its own reference to the DMA-buf
     frame: Option<(DesktopFrame, OwnedFd)>,
     /// `RUN` the overlay was spawned in
@@ -246,6 +274,23 @@ pub fn toast(app: &mut AppState, text: String) {
 /// The shell is stopped without a chance to save on exit, so the layout is saved after every move
 pub fn layout_changed() {
     LAYOUT_CHANGED_MS.store(START.elapsed().as_millis().max(1) as u64, Ordering::Relaxed);
+    mark_virtual_layout_dirty();
+}
+
+pub fn mark_virtual_layout_dirty() {
+    VIRTUAL_LAYOUT_DIRTY_MS.store(START.elapsed().as_millis().max(1) as u64, Ordering::Relaxed);
+}
+
+pub fn virtual_auto_sync() -> bool {
+    VIRTUAL_AUTO_SYNC.load(Ordering::Relaxed)
+}
+
+pub fn set_virtual_auto_sync(enabled: bool) {
+    let was = VIRTUAL_AUTO_SYNC.swap(enabled, Ordering::Relaxed);
+    if enabled && !was {
+        mark_virtual_layout_dirty();
+    }
+    bump_lobby_state();
 }
 
 fn run_embedded() -> anyhow::Result<()> {

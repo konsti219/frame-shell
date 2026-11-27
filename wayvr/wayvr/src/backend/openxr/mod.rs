@@ -572,6 +572,7 @@ pub fn openxr_run(args: &Args, params: RunParams) -> Result<(), BackendError> {
         app.tick();
         crate::frame_shell::poll_surfaces(&mut app);
         crate::frame_shell::poll_desktop_visibility(&overlays);
+        crate::frame_shell::poll_virtual_layout(&overlays);
         app.tasks.retrieve_due(&mut due_tasks);
         while let Some(task) = due_tasks.pop_front() {
             match task {
