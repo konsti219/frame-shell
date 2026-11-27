@@ -65,6 +65,9 @@ struct configuration
 	std::string eye_osc = "127.0.0.1:9000";
 	bool hid_forwarding = true;
 	bool tcp_only = false;
+	bool multilink_fec = false;
+	bool multilink_shared_bottleneck = false;
+	uint64_t multilink_rate_limit = 0;
 	int port = wivrn::default_port;
 	std::string hostname = wivrn::hostname();
 	service_publication publication = service_publication::avahi;

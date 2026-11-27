@@ -1,12 +1,14 @@
 #include "wivrn_discover.h"
 
 #include "application.h"
+#include "link_probe.h"
 #include "mdns.h"
 #include "utils/named_thread.h"
 #include "utils/overloaded.h"
 #include <arpa/inet.h>
 #include <ifaddrs.h>
 #include <net/if.h>
+#include <netdb.h>
 #include <poll.h>
 #include <spdlog/spdlog.h>
 #include <string>
@@ -18,6 +20,16 @@ using namespace std::chrono;
 
 namespace
 {
+std::atomic<unsigned> manual_dns_jobs = 0;
+
+struct manual_resolution
+{
+	std::mutex mutex;
+	std::atomic<bool> cancelled = false;
+	bool ready = false;
+	std::vector<wivrn_discover::service> services;
+};
+
 std::string ip_address_to_string(const in_addr & address)
 {
 	char buffer[128];
@@ -209,7 +221,7 @@ private:
 
 		bool operator==(const cache_entry & other) const noexcept
 		{
-			return name == other.name && record == other.record;
+			return name == other.name && record == other.record && if_name == other.if_name;
 		}
 	};
 
@@ -542,11 +554,16 @@ void wivrn_discover::discover(std::string service_name)
 
 	milliseconds poll_timeout = poll_max_time;
 	std::vector<service> services_staging;
+	wivrn::link_probe probes;
+	std::vector<service> manual_resolved;
+	auto next_resolve = steady_clock::time_point{};
+	std::shared_ptr<manual_resolution> resolver;
+	std::vector<service> requested_manual;
 
 	while (!quit)
 	{
 		poll_timeout = std::clamp(poll_timeout, poll_min_time, poll_max_time);
-		cache->poll_response(poll_timeout);
+		cache->poll_response(std::min(poll_timeout, 100ms));
 
 		poll_timeout = poll_max_time;
 
@@ -559,7 +576,7 @@ void wivrn_discover::discover(std::string service_name)
 		}
 		poll_timeout = std::min(poll_timeout, duration_cast<milliseconds>(next_query - now));
 
-		for (auto [ptr, _, ttl]: cache->read<dnssd_cache::ptr>(service_name))
+		for (auto [ptr, ptr_interface, ttl]: cache->read<dnssd_cache::ptr>(service_name))
 		{
 			bool srv_found = false;
 			auto srv_min_ttl = milliseconds::max();
@@ -573,8 +590,10 @@ void wivrn_discover::discover(std::string service_name)
 
 			std::multimap<std::string, decltype(service::address::address)> addr_by_if_name;
 
-			for (auto [srv, _, ttl]: cache->read<dnssd_cache::srv>(ptr))
+			for (auto [srv, srv_interface, ttl]: cache->read<dnssd_cache::srv>(ptr))
 			{
+				if (srv_interface != ptr_interface)
+					continue;
 				srv_found = true;
 				srv_min_ttl = std::min(duration_cast<milliseconds>(ttl - now), srv_min_ttl);
 
@@ -593,6 +612,8 @@ void wivrn_discover::discover(std::string service_name)
 				auto address_min_ttl = milliseconds::max();
 				for (auto [a, if_name, ttl]: cache->read<dnssd_cache::a>(srv.hostname))
 				{
+					if (if_name != ptr_interface)
+						continue;
 					address_found = true;
 					address_min_ttl = std::min(duration_cast<milliseconds>(ttl - now), address_min_ttl);
 					a.sin_port = htons(srv.port);
@@ -601,6 +622,8 @@ void wivrn_discover::discover(std::string service_name)
 
 				for (auto [aaaa, if_name, ttl]: cache->read<dnssd_cache::aaaa>(srv.hostname))
 				{
+					if (if_name != ptr_interface)
+						continue;
 					address_found = true;
 					address_min_ttl = std::min(duration_cast<milliseconds>(ttl - now), address_min_ttl);
 					aaaa.sin6_port = htons(srv.port);
@@ -610,9 +633,10 @@ void wivrn_discover::discover(std::string service_name)
 				for (auto && [if_name, addr]: addr_by_if_name)
 					s.addresses.push_back({.interface = std::move(if_name), .address = addr});
 
-				for (auto [txt_record, _, ttl]: cache->read<dnssd_cache::txt>(ptr))
+				for (auto [txt_record, txt_interface, ttl]: cache->read<dnssd_cache::txt>(ptr))
 				{
-					s.txt[txt_record.key] = txt_record.value;
+					if (txt_interface == ptr_interface)
+						s.txt[txt_record.key] = txt_record.value;
 				}
 
 				if (!address_found || address_min_ttl < 5s)
@@ -637,10 +661,142 @@ void wivrn_discover::discover(std::string service_name)
 			}
 		}
 
+		std::vector<service> manual;
+		{
+			std::lock_guard lock(mutex);
+			manual = manual_services;
+		}
+		const auto same_request = [](const auto & a, const auto & b) {
+			return a.hostname == b.hostname and a.port == b.port and a.tcp_only == b.tcp_only and a.txt == b.txt;
+		};
+		if (not std::ranges::equal(manual, requested_manual, same_request))
+		{
+			if (resolver)
+				resolver->cancelled = true;
+			resolver.reset();
+			requested_manual = manual;
+			manual_resolved.clear();
+			next_resolve = {};
+		}
+		if (resolver)
+		{
+			bool ready;
+			{
+				std::lock_guard lock(resolver->mutex);
+				ready = resolver->ready;
+				if (ready)
+					manual_resolved = std::move(resolver->services);
+			}
+			if (ready)
+				resolver.reset();
+		}
+		if (not resolver and not manual.empty() and now >= next_resolve)
+		{
+			next_resolve = now + 5s;
+			if (manual_dns_jobs.fetch_add(1) >= 2)
+			{
+				--manual_dns_jobs;
+				next_resolve = now + 100ms;
+			}
+			else
+			{
+				resolver = std::make_shared<manual_resolution>();
+				try
+				{
+					// A system resolver timeout must not block discovery shutdown or rendering.
+					std::thread([state = resolver, requests = manual]() {
+						struct release_job
+						{
+							~release_job()
+							{
+								--manual_dns_jobs;
+							}
+						} release;
+						std::vector<service> result;
+						try
+						{
+							for (auto s: requests)
+							{
+								if (state->cancelled)
+									return;
+								s.manual = true;
+								s.addresses.clear();
+								addrinfo hint{.ai_family = AF_UNSPEC, .ai_socktype = SOCK_DGRAM};
+								addrinfo * raw = nullptr;
+								if (getaddrinfo(s.hostname.c_str(), nullptr, &hint, &raw) == 0)
+								{
+									std::unique_ptr<addrinfo, decltype(&freeaddrinfo)> resolved(raw, freeaddrinfo);
+									for (auto * address = raw; address; address = address->ai_next)
+									{
+										if (address->ai_family == AF_INET)
+										{
+											auto a = *reinterpret_cast<sockaddr_in *>(address->ai_addr);
+											a.sin_port = htons(s.port);
+											s.addresses.push_back({.address = a});
+										}
+										else if (address->ai_family == AF_INET6)
+										{
+											auto a = *reinterpret_cast<sockaddr_in6 *>(address->ai_addr);
+											a.sin6_port = htons(s.port);
+											s.addresses.push_back({.address = a});
+										}
+									}
+								}
+								result.push_back(std::move(s));
+							}
+						}
+						catch (const std::exception &)
+						{}
+						std::lock_guard lock(state->mutex);
+						state->services = std::move(result);
+						state->ready = true;
+					}).detach();
+				}
+				catch (const std::system_error &)
+				{
+					--manual_dns_jobs;
+					resolver.reset();
+				}
+			}
+		}
+
+		for (auto s: manual_resolved)
+		{
+			s.ttl = now + 10s;
+			services_staging.push_back(std::move(s));
+		}
+		const auto local = wivrn::local_endpoints(0, true);
+		for (auto & s: services_staging)
+		{
+			std::vector<service::address> paths;
+			for (const auto & address: s.addresses)
+			{
+				const auto remote = std::visit([](const auto & a) { return wivrn::describe_endpoint(reinterpret_cast<const sockaddr *>(&a)); }, address.address);
+				for (const auto & source: local)
+				{
+					const bool local_loopback = source.address.starts_with("127.") or source.address == "::1";
+					const bool remote_loopback = remote.address.starts_with("127.") or remote.address == "::1";
+					if (local_loopback != remote_loopback)
+						continue;
+					if (not address.interface.empty() and address.interface != source.interface)
+						continue;
+					if (wivrn::parse_endpoint(source).address.ss_family != wivrn::parse_endpoint(remote).address.ss_family)
+						continue;
+					auto path = address;
+					path.interface = source.interface;
+					if (not s.tcp_only)
+						path.latency_ms = probes.sample(source, remote);
+					paths.push_back(std::move(path));
+				}
+			}
+			s.addresses = std::move(paths);
+		}
 		std::unique_lock lock(mutex);
 		std::swap(services, services_staging);
 		services_staging.clear();
 	}
+	if (resolver)
+		resolver->cancelled = true;
 }
 
 wivrn_discover::wivrn_discover(std::string service_name) :
@@ -668,6 +824,12 @@ std::vector<wivrn_discover::service> wivrn_discover::get_services()
 	});
 
 	return services;
+}
+
+void wivrn_discover::set_manual_services(std::vector<service> services)
+{
+	std::lock_guard lock(mutex);
+	manual_services = std::move(services);
 }
 
 // g++ wivrn_discover.cpp -I .. -I ../external -g $(pkg-config spdlog --cflags --libs) -std=c++20 -DTEST && ./a.out

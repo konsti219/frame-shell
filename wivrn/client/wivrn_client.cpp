@@ -52,42 +52,9 @@ const char * handshake_error::what() const noexcept
 handshake_error::handshake_error(std::string_view message) :
         message(message) {}
 
-namespace
-{
-template <typename T>
-void init_stream(T & stream)
-{
-	stream.set_receive_buffer_size(1024 * 1024 * 5);
-	// Tracking, feedback and inputs as Wi-Fi voice: they win the medium against the incoming video, which halves
-	// their latency spikes on a busy link (only these small packets: the video keeps its own class)
-	try
-	{
-		stream.set_tos(IPTOS_DSCP_EF);
-	}
-	catch (std::exception & e)
-	{
-		spdlog::warn("Failed to set IP ToS to Expedited Forwarding: {}", e.what());
-	}
-}
-
-auto & port(sockaddr_in & sa)
-{
-	return sa.sin_port;
-}
-auto & port(sockaddr_in6 & sa)
-{
-	return sa.sin6_port;
-}
-} // namespace
-
 template <typename T>
 void wivrn_session::handshake(T address, bool tcp_only, crypto::key & headset_keypair, std::function<std::string(int fd)> pin_enter)
 {
-	// FIXME this comment
-	// Wait for handshake on control socket,
-	// then send ours on stream or control socket,
-	// finally wait for second server handshake
-
 	pollfd fds{};
 	fds.events = POLLIN;
 	fds.fd = control.get_fd();
@@ -126,6 +93,34 @@ void wivrn_session::handshake(T address, bool tcp_only, crypto::key & headset_ke
 
 	to_headset::crypto_handshake crypto_handshake = std::get<to_headset::crypto_handshake>(receive(10s));
 
+	auto setup_stream = [&](const to_headset::handshake & offer) {
+		server_id_ = offer.server_id;
+		if (offer.stream_port <= 0 or tcp_only)
+			return;
+		auto primary = describe_endpoint(reinterpret_cast<const sockaddr *>(&address));
+		auto local = local_endpoints(0, primary.address.starts_with("127.") or primary.address == "::1");
+		auto remote = offer.endpoints;
+		primary.port = offer.stream_port;
+		if (std::ranges::none_of(remote, [&](const auto & endpoint) { return endpoint.address == primary.address; }))
+			remote.push_back(primary);
+		if (not multilink_enabled_)
+		{
+			sockaddr_storage source{};
+			socklen_t size = sizeof(source);
+			if (getsockname(control.get_fd(), reinterpret_cast<sockaddr *>(&source), &size) != 0)
+				throw std::system_error(errno, std::generic_category(), "Reading connection address");
+			const auto selected = describe_endpoint(reinterpret_cast<const sockaddr *>(&source));
+			const auto endpoint = std::ranges::find_if(local, [&](const auto & candidate) {
+				return candidate.address == selected.address and (not selected.scope or candidate.scope == selected.scope);
+			});
+			if (endpoint == local.end())
+				throw std::runtime_error(_("The selected network interface is unavailable"));
+			local = {*endpoint};
+			remote = {primary};
+		}
+		stream = stream_socket_t(false, offer.multilink_key, std::move(local), std::move(remote), multilink_enabled_, multilink_enabled_);
+	};
+
 	std::string pin = "000000";
 	switch (crypto_handshake.state)
 	{
@@ -135,15 +130,7 @@ void wivrn_session::handshake(T address, bool tcp_only, crypto::key & headset_ke
 			send_control(from_headset::crypto_handshake{});
 
 			to_headset::handshake h{std::get<to_headset::handshake>(receive(10s))};
-			if (h.stream_port > 0 && !tcp_only)
-			{
-				stream = decltype(stream)();
-
-				port(address) = htons(h.stream_port);
-
-				stream.connect(address);
-				init_stream(stream);
-			}
+			setup_stream(h);
 			break;
 		}
 
@@ -187,15 +174,7 @@ void wivrn_session::handshake(T address, bool tcp_only, crypto::key & headset_ke
 			send_control(from_headset::crypto_handshake{});
 
 			to_headset::handshake h{std::get<to_headset::handshake>(receive(10s))};
-			if (h.stream_port > 0 && !tcp_only)
-			{
-				stream = decltype(stream)();
-
-				stream.set_aes_key_and_ivs(s.stream_key, s.stream_iv_header_to_headset, s.stream_iv_header_from_headset);
-				port(address) = htons(h.stream_port);
-				stream.connect(address);
-				init_stream(stream);
-			}
+			setup_stream(h);
 			break;
 		}
 
@@ -209,30 +188,17 @@ void wivrn_session::handshake(T address, bool tcp_only, crypto::key & headset_ke
 	}
 
 	// may be on control socket if forced TCP
-	send_stream(from_headset::handshake{});
+	if (stream)
+		stream.send_reliable(from_headset::handshake{});
+	else
+		control.send(from_headset::handshake{});
 
-	// Wait for second handshake
-	auto timeout = std::chrono::steady_clock::now() + 10s;
-	while (true)
-	{
-		if (poll([](const auto && packet) { return std::is_same_v<std::remove_cvref_t<decltype(packet)>, to_headset::handshake>; }, 100ms))
-		{
-			return;
-		}
-
-		if (std::chrono::steady_clock::now() >= timeout)
-			throw std::runtime_error(_("Timeout"));
-
-		// If using stream socket, the handshake might be lost
-		if (stream)
-		{
-			stream.send(from_headset::handshake{});
-		}
-	}
+	// Complete bootstrap on TCP. Subsequent control messages use the bonded channel.
+	(void)std::get<to_headset::handshake>(receive(10s));
 }
 
-wivrn_session::wivrn_session(sockaddr_in6 address, bool tcp_only, crypto::key & headset_keypair, std::function<std::string(int fd)> pin_enter) :
-        control(address), stream(-1), address(address.sin6_addr)
+wivrn_session::wivrn_session(sockaddr_in6 address, bool tcp_only, bool multilink_enabled, crypto::key & headset_keypair, std::function<std::string(int fd)> pin_enter) :
+        control(address), stream(), multilink_enabled_(multilink_enabled), address(address.sin6_addr)
 {
 	try
 	{
@@ -244,8 +210,8 @@ wivrn_session::wivrn_session(sockaddr_in6 address, bool tcp_only, crypto::key & 
 	}
 }
 
-wivrn_session::wivrn_session(sockaddr_in address, bool tcp_only, crypto::key & headset_keypair, std::function<std::string(int fd)> pin_enter) :
-        control(address), stream(-1), address(address.sin_addr)
+wivrn_session::wivrn_session(sockaddr_in address, bool tcp_only, bool multilink_enabled, crypto::key & headset_keypair, std::function<std::string(int fd)> pin_enter) :
+        control(address), stream(), multilink_enabled_(multilink_enabled), address(address.sin_addr)
 {
 	try
 	{

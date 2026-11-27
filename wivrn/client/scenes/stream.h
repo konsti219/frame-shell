@@ -90,6 +90,7 @@ private:
 	std::array<std::shared_ptr<wivrn::shard_accumulator::blit_handle>, decoder_count> common_frame(XrTime display_time);
 
 	std::unique_ptr<wivrn_session> network_session;
+	thread_safe<to_headset::network_report> network_report{};
 	std::thread network_thread;
 	thread_safe<to_headset::tracking_control> tracking_control{};
 	std::array<std::atomic<interaction_profile>, 3> interaction_profiles; // left hand, right hand, gamepad
@@ -276,6 +277,8 @@ public:
 	bool resolution_locked();
 	// Sends a changed stream setting ("setting" command key) to the PC
 	void setting_changed(std::string_view key);
+	// Which links the stream uses ("preferred", "all" or "fastest"); applied on the network thread
+	void set_link_mode(std::string_view mode);
 #endif
 
 	// Frame shell: present this PC's VR or put it on standby (other PCs connected)
@@ -314,6 +317,7 @@ public:
 	void operator()(to_headset::pin_check_2 &&) {};
 	void operator()(to_headset::pin_check_4 &&) {};
 	void operator()(to_headset::handshake &&) {};
+	void operator()(to_headset::network_report &&);
 	void operator()(to_headset::server_message &&);
 	void operator()(to_headset::video_shard &&);
 	void operator()(to_headset::haptics &&);
@@ -362,6 +366,16 @@ public:
 	// The last five seconds of the VR stream (render thread), for the WiVRn tab
 	std::mutex shell_vr_debug_mutex;
 	std::string shell_vr_debug = "null";
+	// The connection's links as JSON (refreshed once a second), for the WiVRn tab
+	std::string shell_links = "[]";
+	std::mutex shell_link_mutex;
+	std::optional<std::string> shell_link_request;
+	// Network thread: the mode in use, the interface the stream is pinned to, when it stopped working, and when it may be pinned again
+	std::string shell_link_mode;
+	std::string shell_link_pinned;
+	std::chrono::steady_clock::time_point shell_link_lost{};
+	std::chrono::steady_clock::time_point shell_link_retry{};
+	std::chrono::steady_clock::time_point shell_next_links{};
 	std::chrono::steady_clock::time_point shell_next_debug{};
 	std::chrono::steady_clock::time_point shell_next_state{};
 	uint16_t shell_encoded_width = 0, shell_encoded_height = 0;

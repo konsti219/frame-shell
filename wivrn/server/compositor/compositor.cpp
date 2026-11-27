@@ -31,6 +31,7 @@
 #include "util/u_time.h"
 #include "vk/vk_helpers.h"
 
+#include "adaptive_bitrate.h"
 #include "driver/wivrn_session.h"
 #include "encoder/video_encoder.h"
 #include "inplace_vector.hpp"
@@ -750,6 +751,8 @@ compositor::compositor(wivrn_session & session) :
 		encoders[i] = video_encoder::create(vk, settings, i);
 		encoders[i]->generation = stream_generation;
 	}
+	// Later sessions of this server get no set_bitrate while the headset's setting is unchanged
+	requested_bitrate = effective_bitrate = session.get_settings()->bitrate_bps;
 	send_video_stream_description();
 
 	u_var_add_root(this, "Compositor", false);
@@ -804,6 +807,31 @@ xrt_system_compositor_info compositor::sys_info() const
 void compositor::set_bitrate(uint32_t bitrate)
 {
 	std::lock_guard lock{encoders_mutex};
+	if (bitrate == requested_bitrate)
+		return;
+	requested_bitrate = bitrate;
+	// A higher request is reached through adapt_bitrate, as the link allows
+	apply_bitrate(effective_bitrate ? std::min(effective_bitrate, bitrate) : bitrate);
+}
+
+void compositor::adapt_bitrate(uint64_t capacity_bps)
+{
+	std::lock_guard lock{encoders_mutex};
+	if (not requested_bitrate)
+		return;
+	if (const auto target = adapted_video_bitrate(requested_bitrate, effective_bitrate, capacity_bps); target != effective_bitrate)
+		apply_bitrate(target);
+}
+
+uint32_t compositor::video_bitrate()
+{
+	std::lock_guard lock{encoders_mutex};
+	return effective_bitrate;
+}
+
+void compositor::apply_bitrate(uint32_t bitrate)
+{
+	effective_bitrate = bitrate;
 	for (auto & encoder: encoders)
 		encoder->set_bitrate(bitrate);
 }
@@ -877,6 +905,8 @@ void compositor::reconfigure() noexcept
 	for (auto [i, settings]: std::ranges::enumerate_view(settings)) {
 		encoders[i] = video_encoder::create(vk, settings, i);
 		encoders[i]->generation = stream_generation;
+		if (effective_bitrate)
+			encoders[i]->set_bitrate(effective_bitrate);
 	}
 	lock.unlock();
 	pacer.reset();

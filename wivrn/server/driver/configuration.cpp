@@ -221,6 +221,17 @@ configuration::configuration()
 		if (auto it = json.find("bit-depth"); it != json.end())
 			bit_depth = *it;
 
+		if (auto it = json.find("multilink-fec"); it != json.end())
+			multilink_fec = it->get<bool>();
+		if (auto it = json.find("multilink-shared-bottleneck"); it != json.end())
+			multilink_shared_bottleneck = it->get<bool>();
+		if (auto it = json.find("multilink-rate-limit"); it != json.end())
+		{
+			const auto rate = it->get<int64_t>();
+			if (rate < 0 or rate > 1'000'000'000)
+				throw std::runtime_error("multilink-rate-limit must be between zero and 1000000000 bits/s");
+			multilink_rate_limit = rate;
+		}
 		if (auto it = json.find("tcp-only"); it != json.end())
 			tcp_only = *it;
 

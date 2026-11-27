@@ -20,9 +20,10 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#include "network_interface.h"
 #include "stream.h"
-#include "wivrn_serialization.h"
 #include "utils/json_string.h"
+#include "wivrn_serialization.h"
 #if WIVRN_USE_V4L2
 #include "decoder/v4l2/v4l2_decoder.h"
 #endif
@@ -32,13 +33,16 @@
 #include "utils/named_thread.h"
 #include "utils/xdg_base_directory.h"
 
+#include <algorithm>
 #include <arpa/inet.h>
+#include <functional>
 #include <ifaddrs.h>
 #include <netinet/in.h>
 #include <random>
 #include <spdlog/spdlog.h>
 #include <system_error>
 #include <uni_algo/case.h>
+#include <utility>
 
 #ifndef __ANDROID__
 // The interface of the local address a connected socket uses, empty if unknown
@@ -328,7 +332,7 @@ void scenes::stream::operator()(to_headset::stream_tab_change && tab)
 
 void scenes::stream::operator()(to_headset::timesync_query && query)
 {
-	network_session->send_stream(from_headset::timesync_response{
+	network_session->send_stream_reply(from_headset::timesync_response{
 	        .query = query.query,
 	        .response = instance.now(),
 	});
@@ -459,6 +463,12 @@ void scenes::stream::setting_changed(std::string_view key)
 		});
 }
 
+void scenes::stream::set_link_mode(std::string_view mode)
+{
+	std::scoped_lock lock(shell_link_mutex);
+	shell_link_request = std::string(mode);
+}
+
 void scenes::stream::poll_shell()
 {
 	// Commands for this PC: "on <source> <command>", and unprefixed ones while it presents VR
@@ -527,6 +537,104 @@ void scenes::stream::poll_shell()
 		shell_eyes_debug = eye_tracker ? eye_tracker->statistics_json() : "null";
 	}
 #endif
+	if (now >= shell_next_links)
+	{
+		shell_next_links = now + std::chrono::seconds(1);
+		if (shell_link_mode.empty())
+			shell_link_mode = application::get_config().link_mode;
+		std::optional<std::string> request;
+		{
+			std::scoped_lock lock(shell_link_mutex);
+			request = std::exchange(shell_link_request, std::nullopt);
+		}
+		if (request)
+		{
+			// A new mode starts from every link; "preferred" pins once the preferred link is seen
+			shell_link_mode = *request;
+			shell_link_pinned.clear();
+			shell_link_lost = {};
+			shell_link_retry = {};
+			network_session->set_multilink_enabled(shell_link_mode != "fastest");
+		}
+		const auto paths = network_session->links();
+		const auto & preferred_interface = application::get_config().preferred_interface;
+		// Preferred first: stream over the preferred link while it works, and over every link while it does not
+		if (shell_link_mode == "preferred" and not preferred_interface.empty())
+		{
+			if (shell_link_pinned.empty())
+			{
+				const auto preferred = std::ranges::find_if(paths, [&](const auto & link) {
+					return link.local.interface == preferred_interface and link.active and link.rtt_ms > 0;
+				});
+				if (now >= shell_link_retry and preferred != paths.end() and network_session->set_single_interface(preferred->local.interface))
+				{
+					shell_link_pinned = preferred->local.interface;
+					spdlog::info("{}: streaming over {} only", apps.server(), shell_link_pinned);
+				}
+			}
+			else if (std::ranges::any_of(paths, [&](const auto & link) { return link.local.interface == shell_link_pinned and link.active; }))
+				shell_link_lost = {};
+			else if (shell_link_lost == std::chrono::steady_clock::time_point{})
+				shell_link_lost = now;
+			else if (now - shell_link_lost > std::chrono::seconds(3))
+			{
+				spdlog::warn("{}: {} stopped working, streaming over every link", apps.server(), shell_link_pinned);
+				shell_link_pinned.clear();
+				shell_link_lost = {};
+				shell_link_retry = now + std::chrono::seconds(10);
+				network_session->set_multilink_enabled(true);
+			}
+		}
+
+		// One entry per interface: the paths are its address pairs (IPv4 and IPv6, each PC address), and
+		// the ones never validated have no measurements
+		struct interface_link
+		{
+			std::string name;
+			double rtt_ms = 0;
+			double jitter_ms = 0;
+			double loss = 0;
+			double capacity_bps = 0;
+			double received_bps = 0;
+			double sent_bps = 0;
+			bool active = false;
+		};
+		std::vector<interface_link> interfaces;
+		for (const auto & link: paths)
+		{
+			if (not link.active and not link.ever_active and link.rtt_ms <= 0)
+				continue;
+			auto it = std::ranges::find(interfaces, link.local.interface, &interface_link::name);
+			if (it == interfaces.end())
+				it = interfaces.insert(interfaces.end(), interface_link{.name = link.local.interface});
+			if (link.rtt_ms > 0 and (it->rtt_ms <= 0 or link.rtt_ms < it->rtt_ms))
+			{
+				it->rtt_ms = link.rtt_ms;
+				it->jitter_ms = link.jitter_ms;
+				it->loss = link.loss;
+			}
+			it->capacity_bps = std::max(it->capacity_bps, double(link.capacity_bps));
+			it->received_bps += double(link.received_bps);
+			it->sent_bps += double(link.sent_bps);
+			it->active |= link.active;
+		}
+		std::ranges::stable_sort(interfaces, std::greater<>{}, &interface_link::active);
+		std::string links = "[";
+		for (const auto & link: interfaces)
+		{
+			links += fmt::format(R"({}{{"name":{},"rtt_ms":{:.1f},"jitter_ms":{:.1f},"loss_percent":{:.1f},"capacity_mbit":{:.0f},"rx_mbit":{:.1f},"tx_mbit":{:.1f},"active":{}}})",
+			                     links.size() > 1 ? "," : "",
+			                     json_string(wivrn::interface_display_name(link.name)),
+			                     link.rtt_ms,
+			                     link.jitter_ms,
+			                     link.loss * 100,
+			                     link.capacity_bps * 1e-6,
+			                     link.received_bps * 1e-6,
+			                     link.sent_bps * 1e-6,
+			                     link.active);
+		}
+		shell_links = links + "]";
+	}
 	std::string json = fmt::format(R"({{"server":{},"apps":[)", json_string(apps.server()));
 	bool first = true;
 	for (const auto & [id, name, icon]: apps.list())
@@ -546,6 +654,10 @@ void scenes::stream::poll_shell()
 		std::scoped_lock lock(shell_vr_debug_mutex);
 		json += R"(,"vr_debug":)" + shell_vr_debug;
 	}
+	json += fmt::format(R"(,"multilink":{{"mode":{},"pinned":{},"links":{}}})",
+	                    json_string(shell_link_mode),
+	                    shell_link_pinned.empty() ? "null" : json_string(wivrn::interface_display_name(shell_link_pinned)),
+	                    shell_links);
 	{
 		std::scoped_lock lock(network_status_mutex);
 		json += R"(,"network":)" + network_status + "}";
@@ -565,4 +677,9 @@ void scenes::stream::operator()(to_headset::shell_message && message)
 	if (frame_shell::enabled())
 		frame_shell::host_message(shell_source, message.payload);
 #endif
+}
+
+void scenes::stream::operator()(to_headset::network_report && report)
+{
+	*network_report.lock() = std::move(report);
 }

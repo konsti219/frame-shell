@@ -7,6 +7,7 @@
 #include <memory>
 #include <mutex>
 #include <netinet/in.h>
+#include <optional>
 #include <string>
 #include <thread>
 #include <variant>
@@ -23,11 +24,13 @@ public:
 		{
 			std::string interface;
 			std::variant<sockaddr_in, sockaddr_in6> address;
+			std::optional<float> latency_ms;
 		};
 		std::string name;
 		std::string hostname;
 		int port;
 		bool tcp_only = false;
+		bool manual = false;
 
 		std::vector<address> addresses;
 		std::map<std::string, std::string> txt;
@@ -43,10 +46,11 @@ private:
 	wifi_lock::multicast multicast;
 	std::unique_ptr<dnssd_cache> cache;
 
-	std::thread dnssd_thread;
 	std::mutex mutex;
 	std::vector<service> services;
+	std::vector<service> manual_services;
 	std::atomic<bool> quit = false;
+	std::thread dnssd_thread;
 
 	void discover(std::string service_name);
 
@@ -59,4 +63,5 @@ public:
 	~wivrn_discover();
 
 	std::vector<service> get_services();
+	void set_manual_services(std::vector<service> services);
 };

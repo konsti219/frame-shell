@@ -18,6 +18,8 @@
 
 #include "wivrn_trace.h"
 
+#include "multilink.h"
+
 #include "util/u_trace_marker.h"
 
 #ifdef WIVRN_USE_PERFETTO
@@ -343,6 +345,27 @@ void instant_feedback(const char * name, int64_t time_ns, uint64_t frame, uint8_
 	TRACE_EVENT_INSTANT("wivrn_feedback", perfetto::DynamicString(name), g_feedback_track, static_cast<uint64_t>(time_ns), "frame", frame, "stream", static_cast<uint32_t>(stream));
 }
 
+void video_queue_dropped(const video_queue_drop & drop, uint32_t stream, uint32_t generation, uint64_t frame, uint16_t shard)
+{
+	if (!initialized)
+		return;
+	const char * name = nullptr;
+	switch (drop.reason)
+	{
+		case video_queue_drop_reason::deadline:
+			name = "drop_video_deadline";
+			break;
+		case video_queue_drop_reason::arrival_impossible:
+			name = "drop_video_arrival_impossible";
+			break;
+		case video_queue_drop_reason::queue_full:
+			name = "drop_video_queue_full";
+			break;
+	}
+	const auto ns = [](auto time) { return std::chrono::duration_cast<std::chrono::nanoseconds>(time.time_since_epoch()).count(); };
+	TRACE_EVENT_INSTANT("wivrn_network", perfetto::DynamicString(name), g_feedback_track, static_cast<uint64_t>(ns(drop.dropped_at)), "frame", frame, "stream", stream, "generation", generation, "shard", shard, "enqueued_ns", ns(drop.enqueued_at), "deadline_ns", ns(drop.deadline), "target_deadline_ns", ns(drop.target_deadline), "fragment_cursor", drop.fragment_cursor, "queued_bytes", drop.queued_bytes);
+}
+
 void gpu_slice(gpu_track, const char * slice_name, int64_t begin_ns, int64_t end_ns, uint64_t frame, uint8_t stream)
 {
 	if (!initialized)
@@ -483,6 +506,7 @@ void set_calibration_source(::vk_bundle *) {}
 	return nullptr;
 }
 void instant_feedback(const char *, int64_t, uint64_t, uint8_t) {}
+void video_queue_dropped(const video_queue_drop &, uint32_t, uint32_t, uint64_t, uint16_t) {}
 void gpu_slice(gpu_track, const char *, int64_t, int64_t, uint64_t, uint8_t) {}
 scope::scope(cpu_track which, uint8_t stream, uint64_t frame, const char * name) :
         which(which), stream(stream), frame(frame), name(name), begin_ns(0), active(false) {}

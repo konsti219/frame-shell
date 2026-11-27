@@ -269,6 +269,7 @@ impl<T> Tab<T> for TabWivrn<T> {
 				.and_then(|state| state.hosts.iter().find(|host| self.selected.as_ref() == Some(&host.cookie)))
 				.filter(|host| !host.presenting)
 				.map(|host| host.stream.clone());
+			self.update_stream_links(&mut frontend.layout, selected.as_ref().unwrap_or(&stream))?;
 			self.update_stream_debug(&mut frontend.layout, selected.as_ref().unwrap_or(&stream))?;
 			if can_refresh {
 				self.version = Some(version);
@@ -498,6 +499,15 @@ impl<T> TabWivrn<T> {
 				self.id_settings,
 				params,
 			)?;
+			for (mode, ..) in LINK_MODES {
+				data
+					.fetch_component_as::<ComponentButton>(&format!("link_mode_{mode}"))?
+					.on_click(
+						self
+							.tasks
+							.get_button_click_callback(Task::Command(format!("linkmode {mode}"))),
+					);
+			}
 			self.settings = Some(Settings {
 				cookie: cookie.clone(),
 				limits: (max_bitrate, max_foveation),
@@ -578,6 +588,48 @@ impl<T> TabWivrn<T> {
 			let cookie = cookie.clone();
 			slider.on_value_changed(Box::new(move |_common, e| tasks.push(Task::Setting(cookie.clone(), key, e.value))));
 		}
+		Ok(())
+	}
+
+	/// The network links card at the top of the stream settings
+	fn update_stream_links(&self, layout: &mut Layout, stream: &Value) -> anyhow::Result<()> {
+		let Some(settings) = &self.settings else {
+			return Ok(());
+		};
+		let cell = &settings.data;
+		let set_label = |layout: &mut Layout, id: &str, text: String| -> anyhow::Result<()> {
+			let mut common = layout.common();
+			let widget = cell.get_widget_id(id)?;
+			common.alterables.set_widget_visible(widget, !text.is_empty());
+			let mut label = common.state.widgets.cast_as::<WidgetLabel>(widget)?;
+			label.set_text(&mut common, Translation::from_raw_text_string(text));
+			Ok(())
+		};
+		let multilink = links_view(stream.get("multilink").unwrap_or(&Value::Null));
+		layout
+			.alterables
+			.set_widget_visible(cell.get_widget_id("links_card")?, multilink.is_some());
+		let Some(multilink) = multilink else {
+			return Ok(());
+		};
+		for (mode, ..) in LINK_MODES {
+			cell
+				.fetch_component_as::<ComponentButton>(&format!("link_mode_{mode}"))?
+				.set_sticky_state_immediate(&mut layout.common(), mode == multilink.mode);
+		}
+		set_label(layout, "link_mode_help", multilink.help.to_owned())?;
+		for (index, row) in (1..=3).zip(multilink.rows.iter().map(Some).chain(std::iter::repeat(None))) {
+			layout
+				.alterables
+				.set_widget_visible(cell.get_widget_id(&format!("link_{index}"))?, row.is_some());
+			let (name, state, metrics) = row.map_or_else(Default::default, |row| {
+				(row.name.clone(), row.state.clone(), row.metrics.clone())
+			});
+			set_label(layout, &format!("link_{index}_name"), name)?;
+			set_label(layout, &format!("link_{index}_state"), state)?;
+			set_label(layout, &format!("link_{index}_metrics"), metrics)?;
+		}
+		set_label(layout, "link_more", multilink.more)?;
 		Ok(())
 	}
 
@@ -670,5 +722,122 @@ impl<T> TabWivrn<T> {
 			label.set_text(&mut common, Translation::from_raw_text_string(text));
 		}
 		Ok(())
+	}
+}
+
+/// A link's jitter or loss above these makes it unsteady for streaming
+const UNSTEADY_JITTER_MS: f64 = 5.0;
+const UNSTEADY_LOSS_PERCENT: f64 = 1.0;
+
+/// Link modes: the client's name, and what the mode does
+const LINK_MODES: [(&str, &str); 3] = [
+	(
+		"preferred",
+		"Streams over the preferred link while it works, and over every link when it does not or none is set.",
+	),
+	(
+		"all",
+		"Streams over every working link at once. A slow link can delay frames.",
+	),
+	(
+		"fastest",
+		"Streams over the one link that was fastest when you chose this. It does not switch if that link gets worse.",
+	),
+];
+
+struct LinkRow {
+	name: String,
+	state: String,
+	metrics: String,
+}
+
+struct Links {
+	mode: &'static str,
+	help: &'static str,
+	/// The first three links
+	rows: Vec<LinkRow>,
+	/// How many more there are, when there are more than three
+	more: String,
+}
+
+/// The link mode and the connection's links; none when the client reports no connection
+fn links_view(multilink: &Value) -> Option<Links> {
+	if !multilink.is_object() {
+		return None;
+	}
+	let links = multilink
+		.get("links")
+		.and_then(Value::as_array)
+		.map_or(&[][..], Vec::as_slice);
+	let number = |link: &Value, key: &str| link.get(key).and_then(Value::as_f64).unwrap_or(0.0);
+	let mode = multilink.get("mode").and_then(Value::as_str).unwrap_or("preferred");
+	let (mode, help) = LINK_MODES
+		.iter()
+		.find(|(name, _)| *name == mode)
+		.unwrap_or(&LINK_MODES[0]);
+	Some(Links {
+		mode,
+		help,
+		rows: links
+			.iter()
+			.take(3)
+			.map(|link| {
+				let unsteady =
+					number(link, "jitter_ms") >= UNSTEADY_JITTER_MS || number(link, "loss_percent") >= UNSTEADY_LOSS_PERCENT;
+				let active = link.get("active").and_then(Value::as_bool).unwrap_or(false);
+				LinkRow {
+					name: link
+						.get("name")
+						.and_then(Value::as_str)
+						.unwrap_or("Unknown link")
+						.to_owned(),
+					state: format!(
+						"{}{}",
+						if active { "in use" } else { "standby" },
+						if unsteady { " · unsteady" } else { "" }
+					),
+					metrics: format!(
+						"{:.0} ms delay · {:.1} ms jitter · {:.1}% loss · {:.0} Mbit/s",
+						number(link, "rtt_ms"),
+						number(link, "jitter_ms"),
+						number(link, "loss_percent"),
+						number(link, "rx_mbit"),
+					),
+				}
+			})
+			.collect(),
+		more: match links.len().saturating_sub(3) {
+			0 => String::new(),
+			more => format!("and {more} more"),
+		},
+	})
+}
+
+#[cfg(test)]
+mod link_tests {
+	use super::*;
+
+	#[test]
+	fn links_show_each_connection_its_jitter_and_the_mode() {
+		assert!(links_view(&Value::Null).is_none());
+		let links = links_view(&serde_json::json!({"mode": "all", "links": [
+			{"name": "wlan0 (Wi-Fi)", "rtt_ms": 6.2, "jitter_ms": 9.8, "loss_percent": 0.24, "rx_mbit": 85.4, "active": true},
+			{"name": "wlanap (Dongle)", "rtt_ms": 2.0, "jitter_ms": 0.6, "loss_percent": 0.0, "rx_mbit": 0.0, "active": false},
+			{"name": "a"}, {"name": "b"}, {"name": "c"}
+		]}))
+		.unwrap();
+		assert_eq!(links.mode, "all");
+		assert_eq!(links.help, LINK_MODES[1].1);
+		assert_eq!(links.rows.len(), 3);
+		assert_eq!(links.rows[0].name, "wlan0 (Wi-Fi)");
+		assert_eq!(links.rows[0].state, "in use · unsteady");
+		assert_eq!(
+			links.rows[0].metrics,
+			"6 ms delay · 9.8 ms jitter · 0.2% loss · 85 Mbit/s"
+		);
+		assert_eq!(links.rows[1].state, "standby");
+		assert_eq!(links.more, "and 2 more");
+		let default = links_view(&serde_json::json!({"links": []})).unwrap();
+		assert_eq!(default.mode, "preferred");
 	}
 }

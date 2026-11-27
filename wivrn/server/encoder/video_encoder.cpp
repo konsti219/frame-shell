@@ -349,14 +349,15 @@ void video_encoder::SendData(std::span<uint8_t> data, bool end_of_frame, bool co
 	for (auto span: (std::vector<std::span<uint8_t>> &)metadata)
 		bytes.insert(bytes.end(), span.begin(), span.end());
 	bytes.insert(bytes.end(), frame_data.begin(), frame_data.end());
+	cnx->get_frame_log().sent(stream_idx, frame_index, frame_info.timing_info, bytes.size());
 	for (auto & shard: recovery.frame(stream_idx, generation, frame_index, bytes, frame_control ? 0 : fec_percent))
 	{
 		try
 		{
-			if (frame_control)
-				cnx->send_control(std::move(shard));
-			else
-				cnx->send_stream(std::move(shard));
+			const auto deadline = clock and frame_info.view_info.display_time > 0
+			                              ? std::chrono::steady_clock::time_point(std::chrono::nanoseconds(clock.from_headset(frame_info.view_info.display_time)))
+			                              : std::chrono::steady_clock::now() + std::chrono::milliseconds(25);
+			cnx->send_stream(std::move(shard), deadline, frame_control);
 		}
 		catch (const std::system_error &)
 		{

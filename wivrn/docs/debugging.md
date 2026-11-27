@@ -16,6 +16,7 @@ This guide covers debugging techniques for WiVRn, including log collection, cras
   - [Server Crashes](#server-crashes)
   - [HMD Client Crashes](#hmd-client-crashes)
 - [Performance Profiling](#performance-profiling)
+- [Testing two network links](#testing-two-network-links)
 - [USB Tunneling](#usb-tunneling)
 - [Game Debugging](#game-debugging)
 - [Environment Variables Reference](#environment-variables-reference)
@@ -261,6 +262,71 @@ NVENC, and VAAPI encoder paths.
 
 ---
 
+## Testing two network links
+
+With `WIVRN_BUILD_TEST=ON`, build `test-multilink-live` on both Linux hosts.
+It uses the transport directly, without an XR runtime or decoder. Start the
+server first, then the client, using the same random key from `openssl rand -hex 32`:
+
+```text
+test-multilink-live server LOCAL1 IFACE1 LOCAL2 IFACE2 PEER1 PEER_IFACE1 PEER2 PEER_IFACE2 KEY_HEX
+test-multilink-live client LOCAL1 IFACE1 LOCAL2 IFACE2 PEER1 PEER_IFACE1 PEER2 PEER_IFACE2 KEY_HEX
+```
+
+Use each host's own addresses and interface names for `LOCAL` and `IFACE`, and
+the other host's for `PEER` and `PEER_IFACE`. UDP port 9757 must be available on
+the test server and reachable over both links. The server learns peer endpoints
+from the client. On Steam Frame, use `wlan0` and `wlanap` as the two local interfaces.
+
+The test requires both interfaces to remain active together for one second,
+then sends synthetic video payloads at a target of 32 Mbit/s in each direction
+for eight seconds. It checks payload integrity and requires at least 100 received
+video packets on each interface in at least five shared one-second windows.
+Probe traffic does not count. This tests concurrent transport delivery, not
+encoded video quality or decoder performance.
+
+For a matched comparison of complete frames, also build `benchmark-multilink-live`
+on both hosts. Run `python3 tools/benchmark_frame_links.py --help` for the host,
+binary and interface arguments. The runner compares Wi-Fi-only, direct-only and
+both-link modes in randomized order, with three trials per mode and bitrate.
+Both wireless associations remain connected; the mode selects transport endpoints.
+
+The default workload sends 720 measured frames at 90 Hz after two seconds of
+warmup, using fixed rates of 80 and 160 Mbit/s and a 20 ms completion deadline.
+Every shard must arrive for a frame to count. The logs retain clock-offset
+bounds measured before and after each run, and the results report a range for
+on-time frame counts when timing uncertainty crosses a deadline. The analysis
+assumes stable monotonic clock rates between those measurements. Sender scheduling
+delays count toward completion time. Automatic bitrate adaptation is disabled.
+
+Use `--omit-last-shard` to check the frame counter with an intentionally incomplete
+stream. No measured frame should complete. The runner also checks known missing,
+late and duplicate completion records. Traffic totals count transport UDP payloads
+in both directions, including warmup and control traffic, and exclude lower-layer
+headers. The benchmark does not measure encoding, decoding or headset presentation.
+
+### Streaming on real hardware
+
+To measure the real stream, set `WIVRN_FRAME_LOG` to a file path for the server.
+The server appends one JSON line for each VR or desktop frame it sends, each
+feedback packet from the headset and, once a second, the bitrate and the data
+sent over each link. Times are on the headset clock. Use a new file for each run, then:
+
+```bash
+python3 tools/frame_log_summary.py --skip-s 30 wifi-1.jsonl dongle-1.jsonl multi-1.jsonl
+```
+
+`--skip-s` leaves out the stream's start. For each run it reports, for the two eye streams:
+- frames sent but never displayed, split into frames that never arrived complete and frames that
+  arrived complete but were replaced by a newer frame before their display slot
+- repeated displays and freezes, where a gap between two new frames on the display exceeds 50 ms
+- latency from encode start to the predicted display time, and transfer time from send start to the last packet, at p50, p95 and p99
+- the mean bitrate, the seconds each link carried video and how often the set of links in use changed
+
+Frames sent in the last second of a log are not counted, as their feedback may
+still be in flight. Feedback travels over UDP, so a displayed frame whose display
+feedback was lost counts as not shown, and widens one display gap by a frame period.
+
 ## USB Tunneling
 
 For debugging network issues or testing with a wired connection, you can tunnel WiVRn over USB.
@@ -327,6 +393,10 @@ The log is located at `$XDG_STATE_HOME/xrizer/xrizer.txt`, or `$HOME/.local/stat
 | Variable | Description |
 |----------|-------------|
 | `WIVRN_DUMP_VIDEO` | Path to dump video frames (e.g., `/tmp/video-dump`) |
+| `WIVRN_MULTILINK_INTERFACES` | Comma separated interface names that multi-link may use (e.g., `wlp9s0`); unset uses every interface |
+| `WIVRN_TEST_NETWORK_PROFILE` | Host-only test hook: absolute path of a CSV file whose first line is an absolute PC monotonic start time in nanoseconds, followed by rows of `offset_ms,duration_ms,delay_ms,jitter_ms,loss_per_mille,rate_bps`. It delays and drops encrypted multi-link UDP datagrams, including probes and acknowledgments; SSH and control TCP are unaffected. A zero rate adds no bandwidth ceiling. Disabled when unset |
+| `WIVRN_TEST_NETWORK_LOG` | Directory for the impairment hook's log |
+| `WIVRN_FRAME_LOG` | Server: file to append per-frame records to, for [streaming tests on real hardware](#streaming-on-real-hardware) |
 | `WIVRN_LOGLEVEL` | Log level for the native client |
 | `WIVRN_AUTOCONNECT` | Auto-connect to the first discovered server |
 | `WIVRN_TRACING` | Enable WiVRn Perfetto tracing: `system` / `inprocess`. Requires `WIVRN_USE_PERFETTO=ON` at build time. See [docs/profiling.md](profiling.md). |
