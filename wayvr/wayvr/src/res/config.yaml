@@ -215,3 +215,19 @@
 ## allowing for moving both pointers off the screens to the keyboard, while keeping the cursor position
 ## unchanged, for when the desktop is configured to move the focus with the mouse cursor
 #focus_follows_mouse_mode: false
+
+## Gamepad mode (Steam Frame controllers): hold both thumbstick clicks to turn the controllers into a
+## virtual DualSense (with gyro and rumble) for flat games, and again to turn it off.
+## In gamepad mode only the grips still act on the shell (grab and move windows); the pointer lines are hidden
+## except while a grip is held.
+## Needs write access to /dev/uhid (the headset installer adds a udev rule for it).
+#gamepad_mode_enabled: true
+## How long both stick clicks must be held to switch, in milliseconds
+## (a short L3+R3 press still reaches the game; dropouts under 0.15 s don't end the hold)
+#gamepad_mode_hold_ms: 600
+## Take the gyro from the left controller instead of the right one
+#gamepad_mode_gyro_left_hand: false
+## Flip the gyro's up/down if aiming moves the wrong way
+#gamepad_mode_gyro_invert_pitch: false
+## Pass the game's rumble to the controllers
+#gamepad_mode_rumble: true

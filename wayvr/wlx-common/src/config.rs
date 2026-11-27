@@ -255,6 +255,10 @@ const fn def_click_freeze_time_ms() -> i32 {
 	300
 }
 
+const fn def_gamepad_mode_hold_ms() -> u32 {
+	600
+}
+
 const fn def_true() -> bool {
 	true
 }
@@ -566,6 +570,23 @@ pub struct GeneralConfig {
 
 	#[serde(default = "def_point15")]
 	pub default_curvature: f32,
+
+	/// Steam Frame controllers: hold both stick clicks to turn them into a virtual DualSense
+	#[serde(default = "def_true")]
+	pub gamepad_mode_enabled: bool,
+
+	#[serde(default = "def_gamepad_mode_hold_ms")]
+	pub gamepad_mode_hold_ms: u32,
+
+	/// Gyro from the left controller instead of the right one
+	#[serde(default)]
+	pub gamepad_mode_gyro_left_hand: bool,
+
+	#[serde(default)]
+	pub gamepad_mode_gyro_invert_pitch: bool,
+
+	#[serde(default = "def_true")]
+	pub gamepad_mode_rumble: bool,
 
 	#[serde(default)]
 	pub middle_grabs_single: bool,

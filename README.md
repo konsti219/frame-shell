@@ -8,6 +8,7 @@ Features:
 - dashboard, keyboard and watch
 - native Wayland and X11 windows, and a nested Plasma desktop
 - Steam and its games: native, Proton/FEX, and Android through Lepton
+- gamepad mode for flat games: hold both stick clicks and the controllers become a DualSense, with gyro and rumble
 - PC VR streaming over Wi-Fi, with error correction, retransmission and foveation from the eye gaze
 - the PCs' monitors as windows, with laser and keyboard input
 - several PCs at once: one presents VR, the others' overlays on top, audio from all of them

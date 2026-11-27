@@ -39,6 +39,7 @@ use crate::{
 };
 
 mod blocker;
+mod gamepad;
 mod helpers;
 mod input;
 mod lines;

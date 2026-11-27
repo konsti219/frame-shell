@@ -48,6 +48,15 @@ integrate() {
         sudo install -Dm644 "$prefix/session/zz-frame-monado-sddm.conf" /etc/sddm.conf.d/zz-frame-monado.conf
         sudo install -Dm644 "$prefix/session/frame-monado-keep.conf" /etc/atomic-update.conf.d/frame-monado.conf
     fi
+    # Gamepad mode's virtual DualSense needs /dev/uhid
+    if ! cmp -s "$prefix/share/70-frame-shell-uhid.rules" /etc/udev/rules.d/70-frame-shell-uhid.rules ||
+        ! cmp -s "$prefix/share/frame-shell-keep.conf" /etc/atomic-update.conf.d/frame-shell.conf; then
+        echo "Installing the gamepad mode udev rule in /etc (sudo):"
+        sudo install -Dm644 "$prefix/share/70-frame-shell-uhid.rules" /etc/udev/rules.d/70-frame-shell-uhid.rules
+        sudo install -Dm644 "$prefix/share/frame-shell-keep.conf" /etc/atomic-update.conf.d/frame-shell.conf
+        sudo udevadm control --reload-rules
+        sudo udevadm trigger --action=change --subsystem-match=misc --sysname-match=uhid
+    fi
     if "$manager_changed"; then systemctl --user restart steamos-manager.service; fi
     local session
     session=$(steamosctl get-default-desktop-session)
@@ -73,6 +82,11 @@ unintegrate() {
         [ -e /etc/atomic-update.conf.d/frame-monado.conf ]; then
         echo "Removing the Monado session entry from /etc (sudo):"
         sudo rm -rf /etc/frame-monado /etc/sddm.conf.d/zz-frame-monado.conf /etc/atomic-update.conf.d/frame-monado.conf
+    fi
+    if [ -e /etc/udev/rules.d/70-frame-shell-uhid.rules ] || [ -e /etc/atomic-update.conf.d/frame-shell.conf ]; then
+        echo "Removing the gamepad mode udev rule from /etc (sudo):"
+        sudo rm -f /etc/udev/rules.d/70-frame-shell-uhid.rules /etc/atomic-update.conf.d/frame-shell.conf
+        sudo udevadm control --reload-rules
     fi
 }
 

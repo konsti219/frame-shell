@@ -160,6 +160,8 @@ pub struct WvrServerState {
     process_overlays: HashMap<process::ProcessHandle, Vec<OverlayID>>,
     input_capture: Option<InputCapture>,
     input_capture_init_attempted: bool,
+    /// Surface whose keyboard focus [`Self::bounce_keyboard_focus`] took away
+    bounced_focus: Option<WlSurface>,
     has_input_focus: bool,
     grab_toast_sent: bool,
 }
@@ -330,6 +332,7 @@ impl WvrServerState {
             process_overlays: HashMap::new(),
             input_capture: None,
             input_capture_init_attempted: false,
+            bounced_focus: None,
             has_input_focus: false,
             grab_toast_sent: false,
         })
@@ -1096,6 +1099,23 @@ impl WvrServerState {
         self.has_input_focus = has_focus;
         if !has_focus {
             self.wm.mouse = None;
+        }
+    }
+
+    /// Takes keyboard focus away from the focused surface (`restore == false`) or gives the remembered surface
+    /// back (`restore == true`). Steam picks a controller's layout by the focused game window, and a controller
+    /// that appears while a game has focus gets the desktop layout until focus changes; this lets it re-check.
+    pub fn bounce_keyboard_focus(&mut self, restore: bool) {
+        let keyboard = self.manager.seat_keyboard.clone();
+        if restore {
+            if let Some(target) = self.bounced_focus.take() {
+                let serial = self.manager.serial_counter.next_serial();
+                keyboard.set_focus(&mut self.manager.state, Some(target), serial);
+            }
+        } else if let Some(target) = keyboard.current_focus() {
+            self.bounced_focus = Some(target);
+            let serial = self.manager.serial_counter.next_serial();
+            keyboard.set_focus(&mut self.manager.state, None, serial);
         }
     }
 
