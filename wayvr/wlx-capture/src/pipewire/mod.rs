@@ -31,6 +31,7 @@ mod dbus_screencast;
 #[derive(Debug, Clone)]
 pub struct PipewireStream {
     pub node_id: u32,
+    pub mapping_id: Option<String>,
     pub position: Option<(i32, i32)>,
     pub size: Option<(i32, i32)>,
 }
@@ -739,11 +740,15 @@ fn parse_streams(results: &arg::PropMap) -> Result<Vec<PipewireStream>, ScreenCa
             .next()
             .ok_or(ScreenCastError::InvalidResponse("stream properties"))?;
 
+        let mapping_id = dict_get(props, "mapping_id")
+            .and_then(RefArg::as_str)
+            .map(str::to_owned);
         let position = dict_get(props, "position").and_then(tuple_i32);
         let size = dict_get(props, "size").and_then(tuple_i32);
 
         out.push(PipewireStream {
             node_id,
+            mapping_id,
             position,
             size,
         });

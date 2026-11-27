@@ -217,13 +217,18 @@ fn capture(output: &Output, shared: &Shared) -> Result<()> {
                 }
                 continue;
             };
-            // The user may pick another monitor than asked for; the stream's position says which one it is
+            // The user may pick another monitor than asked for. Match the connector name first,
+            // since Hyprland reports the same position for every monitor.
             let Some(index) = selected
-                .position
-                .and_then(|position| {
-                    monitors
-                        .iter()
-                        .position(|monitor| monitor.position == position)
+                .mapping_id
+                .as_deref()
+                .and_then(|name| monitors.iter().position(|monitor| monitor.name == name))
+                .or_else(|| {
+                    selected.position.and_then(|position| {
+                        monitors
+                            .iter()
+                            .position(|monitor| monitor.position == position)
+                    })
                 })
                 .or(expected)
             else {
@@ -233,18 +238,26 @@ fn capture(output: &Output, shared: &Shared) -> Result<()> {
                 );
                 continue;
             };
+            if streaming[index] {
+                eprintln!("{} is already selected", monitors[index].name);
+                if let Some(expected) = expected {
+                    let reason = format!("{} was already selected", monitors[index].name);
+                    shared.monitor(
+                        output,
+                        &monitors[expected].name,
+                        MonitorStatus::Failed(reason),
+                    );
+                }
+                continue;
+            }
             if let Some(token) = response.restore_token {
                 tokens.set(&monitors[index].name, token)?;
             }
-            // Picked another monitor than asked for: ask for the wanted one again
             if let Some(expected) = expected.filter(|&expected| expected != index) {
                 tried[expected] = false;
                 shared.monitor(output, &monitors[expected].name, MonitorStatus::Queued);
             }
-            if std::mem::replace(&mut streaming[index], true) {
-                eprintln!("{} is already streaming", monitors[index].name);
-                continue;
-            }
+            streaming[index] = true;
             shared.monitor(output, &monitors[index].name, MonitorStatus::Streaming);
             let (monitor, node, remote) =
                 (&monitors[index], selected.node_id, response.remote.clone());
