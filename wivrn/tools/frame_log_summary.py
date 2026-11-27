@@ -90,7 +90,7 @@ def summarize(rows, skip_ns=0):
     link_seconds = {}
     link_sets = []
     for row in network:
-        used = tuple(sorted(link["local"] for link in row["links"] if link["sent_bps"] > 0))
+        used = tuple(sorted({link["local"] for link in row["links"] if link["sent_bps"] > 0}))
         for name in used:
             link_seconds[name] = link_seconds.get(name, 0) + 1
         if not link_sets or link_sets[-1] != used:
