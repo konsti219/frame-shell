@@ -1476,6 +1476,11 @@ struct multilink::implementation
 		// most likely arrived and is neither repaired nor counted lost.
 		std::vector<uint64_t> repairs;
 		const auto heard = hearing_since(now);
+		// A return path that queues (the Steam Frame's access point sends about 2000 packets/s) delays
+		// acknowledgements without pausing them: a packet times out only once later ones were acknowledged
+		clock::time_point acknowledged_until{};
+		for (const auto & p: paths)
+			acknowledged_until = std::max(acknowledged_until, p.latest_acked_send);
 		for (auto & [nonce, sent]: transmissions)
 		{
 			const auto & path = paths[sent.path_index];
@@ -1491,7 +1496,7 @@ struct multilink::implementation
 			const bool expired = now - sent.time >= std::chrono::duration<double, std::milli>(std::max(50.0, 2 * path.stats.rtt_ms + 10));
 			if (sent.missing)
 				return expired;
-			if (sent.time >= heard and expired)
+			if (sent.time >= heard and sent.time < acknowledged_until and expired)
 			{
 				++path.lost;
 				++group_lost;
