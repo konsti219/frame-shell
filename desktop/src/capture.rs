@@ -217,7 +217,8 @@ fn capture(output: &Output, shared: &Shared) -> Result<()> {
                 }
                 continue;
             };
-            // Hyprland reports (0, 0) for each stream and identifies monitors by connector name.
+            // The user may pick another monitor than asked for. Match the connector name first,
+            // since Hyprland reports the same position for every monitor.
             let Some(index) = selected
                 .mapping_id
                 .as_deref()
