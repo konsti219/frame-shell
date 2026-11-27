@@ -29,6 +29,8 @@ public:
 	std::atomic<unsigned> drop_server_count = 0;
 	std::atomic<bool> drop_from_server = false;
 	std::atomic<unsigned> delay_ms = 0;
+	// Added to delay_ms for packets from the server: a return path that queues
+	std::atomic<unsigned> delay_from_server_ms = 0;
 	std::atomic<unsigned> jitter_ms = 0;
 	std::atomic<uint64_t> rate_bps = 0;
 	std::atomic<uint64_t> forwarded = 0;
@@ -132,7 +134,7 @@ public:
 					budget->next = scheduled + std::chrono::nanoseconds(uint64_t(count + 28) * 8'000'000'000ULL / budget->rate_bps);
 					scheduled = budget->next;
 				}
-				const auto due = scheduled + std::chrono::milliseconds(delay_ms + (jitter_ms and received % 17 == 0 ? jitter_ms.load() : 0));
+				const auto due = scheduled + std::chrono::milliseconds(delay_ms + (source == target ? delay_from_server_ms.load() : 0) + (jitter_ms and received % 17 == 0 ? jitter_ms.load() : 0));
 				const auto position = std::upper_bound(queue.begin(), queue.end(), due, [](const auto & time, const auto & item) { return time < item.due; });
 				queue.insert(position, {std::vector<uint8_t>(bytes.begin(), bytes.begin() + count), destination, due});
 			}

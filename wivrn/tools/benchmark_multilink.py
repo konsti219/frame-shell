@@ -32,7 +32,7 @@ def main():
     args.output.mkdir(parents=True, exist_ok=False)
     binaries = {"baseline": args.baseline.resolve(), "candidate": args.candidate.resolve()}
     hashes = {name: hashlib.sha256(file.read_bytes()).hexdigest() for name, file in binaries.items()}
-    cases = [("control-burst", "multi"), ("bulk-burst", "multi"), ("clean", "multi"), ("clean", "single-safe"), ("clean", "multi-safe"), ("loss", "multi"), ("burst-loss", "multi"), ("decode", "multi"), ("jitter", "multi"), ("shared", "multi"), ("one-way", "multi"), ("backlog", "multi"), ("backlog", "video")]
+    cases = [("control-burst", "multi"), ("bulk-burst", "multi"), ("clean", "multi"), ("clean", "single-safe"), ("clean", "multi-safe"), ("loss", "multi"), ("burst-loss", "multi"), ("decode", "multi"), ("jitter", "multi"), ("shared", "multi"), ("one-way", "multi"), ("backlog", "multi"), ("backlog", "video"), ("late-acks", "single")]
     experiments = [(name, scenario, mode) for scenario, mode in cases for name in binaries]
     experiments += [("candidate", scenario, mode) for scenario, mode in [("loss", "loss-relaxed"), ("loss", "fec"), ("loss", "fec-budget"), ("burst-loss", "fec-budget"), ("decode", "fixed-decode"), ("decode", "arrival-off"), ("jitter", "arrival-off"), ("shared", "coupled")]]
     results = []

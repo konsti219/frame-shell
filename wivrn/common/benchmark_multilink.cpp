@@ -122,6 +122,9 @@ int main(int argc, char ** argv)
 		}
 		if (scenario == "one-way" and now - start > 2s)
 			second.drop_from_server = true;
+		// Acknowledgements held 70 ms for a quarter of every second, as behind the Steam Frame's access point
+		if (scenario == "late-acks")
+			first.delay_from_server_ms = now - start > 1s and (now - start) % 1s < 250ms ? 70 : 0;
 		if (burst)
 		{
 			bytes.resize(scenario == "bulk-burst" ? 1024 * 1024 : 1400);
